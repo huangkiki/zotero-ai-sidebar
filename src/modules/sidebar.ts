@@ -13,23 +13,7 @@ function renderInto(body: HTMLElement, itemID: number | null) {
     root = createRoot(mount);
     roots.set(mount, root);
   }
-  root.render(
-    React.createElement(App, {
-      itemID,
-      openPreferences: () => {
-        // Zotero.openPreferences opens the prefs window scrolled to the given pane.
-        Zotero.openMainWindow();
-        try {
-          // Best-effort: open prefs to our pane id. Zotero 7's API is `Zotero.PreferencePanes`
-          (Zotero as unknown as { Utilities: { Internal: { openPreferences: (pane: string) => void } } })
-            .Utilities.Internal.openPreferences('zotero-ai-sidebar-prefs');
-        } catch {
-          // fall back to plain prefs window
-          Zotero.openInViewer('chrome://zotero/content/preferences/preferences.xhtml');
-        }
-      },
-    }),
-  );
+  root.render(React.createElement(App, { itemID }));
 }
 
 const BODY_XHTML =

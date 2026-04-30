@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { ChatView } from './ChatView';
 import { PresetSwitcher } from './PresetSwitcher';
 import { ContextCard } from './ContextCard';
+import { PreferencesPane } from './PreferencesPane';
 import { loadPresets, zoteroPrefs } from '../settings/storage';
 import { getProvider } from '../providers/factory';
 import { buildContext, type ItemMetadata } from '../context/builder';
@@ -10,18 +11,25 @@ import type { ModelPreset } from '../settings/types';
 
 interface Props {
   itemID: number | null;
-  openPreferences: () => void;
 }
 
-export function App({ itemID, openPreferences }: Props) {
+export function App({ itemID }: Props) {
   const [presets, setPresets] = useState<ModelPreset[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [item, setItem] = useState<ItemMetadata | null>(null);
+  const [showPrefs, setShowPrefs] = useState(false);
 
-  useEffect(() => {
+  const reloadPresets = useCallback(() => {
     const p = loadPresets(zoteroPrefs());
     setPresets(p);
     if (p.length && !selectedId) setSelectedId(p[0].id);
+    if (selectedId && !p.find((x) => x.id === selectedId)) {
+      setSelectedId(p[0]?.id ?? null);
+    }
+  }, [selectedId]);
+
+  useEffect(() => {
+    reloadPresets();
   }, []);
 
   useEffect(() => {
@@ -39,13 +47,26 @@ export function App({ itemID, openPreferences }: Props) {
     return buildContext(zoteroContextSource, itemID, 100_000);
   }, [itemID]);
 
+  if (showPrefs) {
+    return (
+      <div className="zai-app">
+        <PreferencesPane
+          onDone={() => {
+            setShowPrefs(false);
+            reloadPresets();
+          }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="zai-app" key={itemID ?? 'no-item'}>
       <PresetSwitcher
         presets={presets}
         selectedId={selectedId}
         onSelect={setSelectedId}
-        onOpenSettings={openPreferences}
+        onOpenSettings={() => setShowPrefs(true)}
       />
       <ContextCard item={item} />
       {provider && preset ? (
