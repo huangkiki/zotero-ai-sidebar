@@ -12,13 +12,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/local/zotero-ai-sidebar.git"
+    "url": "git+https://github.com/xuhan-rgb/zotero-ai-sidebar.git"
   },
   "author": "qwer",
   "bugs": {
-    "url": "https://github.com/local/zotero-ai-sidebar/issues"
+    "url": "https://github.com/xuhan-rgb/zotero-ai-sidebar/issues"
   },
-  "homepage": "https://github.com/local/zotero-ai-sidebar#readme",
+  "homepage": "https://github.com/xuhan-rgb/zotero-ai-sidebar#readme",
   "license": "AGPL-3.0-or-later",
   "scripts": {
     "start": "zotero-plugin serve",
@@ -29,7 +29,8 @@
     "test": "vitest run",
     "test:zotero": "zotero-plugin test",
     "test:watch": "vitest",
-    "update-deps": "npm update --save"
+    "update-deps": "npm update --save",
+    "release:tag": "bash scripts/release-tag.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.91.1",
