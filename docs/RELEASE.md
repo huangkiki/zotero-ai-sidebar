@@ -20,28 +20,41 @@ git push -u origin master
 
 ## Normal release
 
-1. Bump the package version and commit local changes:
+First update and commit the version, for example via `/auto-commit`. Then run one
+command:
 
 ```bash
-npm version patch --no-git-tag-version
-git add package.json package-lock.json
-git commit -m "chore: release v0.1.2"
+npm run release:xpi
 ```
 
-For a feature or fix commit before a release, use the normal commit flow:
+The script reads `package.json` version and releases `v<version>`. You can also
+pass the expected tag explicitly:
 
 ```bash
-git add -A
-git commit -m "feat: describe change"
+npm run release:xpi -- v0.1.2
 ```
 
-2. Push the branch and create/push the matching tag with the helper script:
+The script verifies the working tree is clean, runs tests, builds the XPI locally,
+creates the annotated tag if needed, pushes the current branch, pushes the tag,
+waits for GitHub Actions, and prints the final release asset URL.
+
+## Republish an existing tag
+
+If the GitHub Release was deleted but the tag still exists, recreate the release without moving the tag:
+
+```bash
+npm run release:xpi -- v0.1.2 --republish
+```
+
+## Lower-level tag-only command
+
+If you already bumped and committed the version manually, use:
 
 ```bash
 npm run release:tag -- v0.1.2
 ```
 
-The script checks that the working tree is clean, verifies the tag matches `package.json` version, creates an annotated tag if needed, pushes the current branch, and pushes the tag.
+This lower-level script checks that the working tree is clean, verifies the tag matches `package.json` version, creates an annotated tag if needed, pushes the current branch, and pushes the tag.
 
 When the tag reaches GitHub, `.github/workflows/release.yml` automatically runs:
 

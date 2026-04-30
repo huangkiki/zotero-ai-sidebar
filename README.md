@@ -58,28 +58,43 @@ The build output is written to `.scaffold/build/`. Local `.xpi` files are ignore
 
 ## Release Flow
 
-The release flow is tag-driven:
-
-1. Commit code changes.
-2. Bump `package.json` and `package-lock.json` version.
-3. Push a matching `vX.Y.Z` tag.
-4. GitHub Actions builds, tests, and uploads only `.scaffold/build/*.xpi` to the tag release.
-
-Example:
+After `/auto-commit` has updated the version and committed the repository, the
+release flow is one command:
 
 ```bash
-npm version patch --no-git-tag-version
-git add package.json package-lock.json
-git commit -m "chore: release v0.1.2"
+npm run release:xpi
+```
+
+The script reads `package.json` version and releases `v<version>`. You can also
+pass the expected tag explicitly:
+
+```bash
+npm run release:xpi -- v0.1.2
+```
+
+The script verifies the working tree is clean, runs tests, builds locally, creates
+the annotated tag if needed, pushes `master`, pushes the tag, waits for GitHub
+Actions, and prints the final Release/XPI URL.
+
+To recreate a deleted GitHub Release for an existing tag without moving the tag:
+
+```bash
+npm run release:xpi -- v0.1.2 --republish
+```
+
+The lower-level tag-only command is still available when needed:
+
+```bash
 npm run release:tag -- v0.1.2
 ```
 
-The helper script checks that:
+The release scripts check that:
 
 - the working tree is clean
 - the tag starts with `v`
 - the tag matches `package.json` version
 - the Git remote exists
+- GitHub Actions uploads only `.scaffold/build/*.xpi`
 
 More details are in `docs/RELEASE.md`.
 

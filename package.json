@@ -30,7 +30,8 @@
     "test:zotero": "zotero-plugin test",
     "test:watch": "vitest",
     "update-deps": "npm update --save",
-    "release:tag": "bash scripts/release-tag.sh"
+    "release:tag": "bash scripts/release-tag.sh",
+    "release:xpi": "bash scripts/release-xpi.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.91.1",
