@@ -1,6 +1,6 @@
 # Zotero AI Sidebar
 
-Zotero AI Sidebar is a Zotero 7 plugin that adds an AI chat panel to the Zotero item pane / PDF reading workflow. It is designed as a lightweight research agent: the model decides when to inspect the current Zotero item, annotations, PDF snippets, full PDF text, screenshots, or write annotations through exposed Zotero tools.
+Zotero AI Sidebar is a Zotero 7/8/9 plugin that adds an AI chat panel to the Zotero item pane / PDF reading workflow. It is designed as a lightweight research agent: the model decides when to inspect the current Zotero item, annotations, PDF snippets, full PDF text, screenshots, or write annotations through exposed Zotero tools.
 
 ## Features
 
@@ -15,7 +15,7 @@ Zotero AI Sidebar is a Zotero 7 plugin that adds an AI chat panel to the Zotero 
 ## Install
 
 1. Download the latest `zotero-ai-sidebar.xpi` from GitHub Releases.
-2. Open Zotero 7.
+2. Open Zotero 7, 8, or 9.
 3. Go to `Tools` -> `Plugins`.
 4. Click the gear icon and choose `Install Plugin From File...`.
 5. Select the downloaded `.xpi` file and restart Zotero if prompted.

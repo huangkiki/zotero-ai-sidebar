@@ -1,5 +1,5 @@
 import { defineConfig } from "zotero-plugin-scaffold";
-import { readFile, unlink, writeFile } from "node:fs/promises";
+import { unlink } from "node:fs/promises";
 import pkg from "./package.json";
 
 export default defineConfig({
@@ -23,13 +23,6 @@ export default defineConfig({
       prefix: pkg.config.prefsPrefix,
     },
     hooks: {
-      "build:bundle": async (ctx) => {
-        const manifestPath = `${ctx.dist}/addon/manifest.json`;
-        const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-        // The scaffold injects update_url by default; this project ships XPI-only releases.
-        delete manifest.applications?.zotero?.update_url;
-        await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-      },
       "build:makeUpdateJSON": async (ctx) => {
         await Promise.allSettled([
           unlink(`${ctx.dist}/update.json`),
