@@ -1,4 +1,4 @@
-import type { Message } from '../providers/types';
+import type { AssistantAnnotationDraft, Message } from '../providers/types';
 
 interface StoredThread {
   itemID: number | null;
@@ -82,6 +82,7 @@ function normalizeMessages(value: unknown): Message[] {
     if (m.role !== 'user' && m.role !== 'assistant') return [];
     if (typeof m.content !== 'string') return [];
     const images = normalizeImages(m.images);
+    const annotationDraft = normalizeAnnotationDraft(m.annotationDraft);
     return [{
       role: m.role,
       content: m.content,
@@ -90,8 +91,39 @@ function normalizeMessages(value: unknown): Message[] {
         : {}),
       ...(images.length ? { images } : {}),
       ...(isRecord(m.context) ? { context: m.context as Message['context'] } : {}),
+      ...(annotationDraft ? { annotationDraft } : {}),
     }];
   });
+}
+
+function normalizeAnnotationDraft(value: unknown): AssistantAnnotationDraft | null {
+  if (!isRecord(value)) return null;
+  const comment = typeof value.comment === 'string' ? value.comment : '';
+  if (!comment) return null;
+  const snapshot = isRecord(value.snapshot) ? value.snapshot : null;
+  if (!snapshot) return null;
+  const text = typeof snapshot.text === 'string' ? snapshot.text : '';
+  const attachmentID = typeof snapshot.attachmentID === 'number' ? snapshot.attachmentID : null;
+  const annotation = isRecord(snapshot.annotation) ? snapshot.annotation : null;
+  if (!text || attachmentID == null || !annotation) return null;
+  const state = normalizeAnnotationDraftState(value.state);
+  return {
+    comment,
+    snapshot: { text, attachmentID, annotation },
+    state,
+  };
+}
+
+function normalizeAnnotationDraftState(value: unknown): AssistantAnnotationDraft['state'] {
+  if (!isRecord(value)) return { kind: 'idle' };
+  if (value.kind === 'saved' && typeof value.annotationID === 'number') {
+    const savedAt = typeof value.savedAt === 'number' ? value.savedAt : Date.now();
+    return { kind: 'saved', annotationID: value.annotationID, savedAt };
+  }
+  if (value.kind === 'failed' && typeof value.error === 'string') {
+    return { kind: 'failed', error: value.error };
+  }
+  return { kind: 'idle' };
 }
 
 function normalizeImages(value: unknown): NonNullable<Message['images']> {
@@ -109,6 +141,7 @@ function normalizeImages(value: unknown): NonNullable<Message['images']> {
     }
     return [{
       id: image.id,
+      ...(typeof image.marker === 'string' ? { marker: image.marker } : {}),
       name: image.name,
       mediaType: image.mediaType,
       dataUrl: image.dataUrl,

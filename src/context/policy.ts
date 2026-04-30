@@ -14,6 +14,9 @@ export interface ContextPolicy {
   fullTextCacheReadCharLimit: number;
   maxToolIterations: number;
   maxAnnotationCommentChars: number;
+  maxFullTextHighlights: number;
+  maxFullTextHighlightCommentChars: number;
+  minLocateConfidence: number;
 }
 
 export const DEFAULT_CONTEXT_POLICY: ContextPolicy = {
@@ -32,4 +35,7 @@ export const DEFAULT_CONTEXT_POLICY: ContextPolicy = {
   fullTextCacheReadCharLimit: 400_000,
   maxToolIterations: 100,
   maxAnnotationCommentChars: 4000,
+  maxFullTextHighlights: 10,
+  maxFullTextHighlightCommentChars: 80,
+  minLocateConfidence: 0.85,
 };

@@ -1,18 +1,19 @@
 export type ContextMode =
-  | 'none'
-  | 'metadata_only'
-  | 'annotations'
-  | 'search_pdf'
-  | 'pdf_range'
-  | 'selected_text'
-  | 'full_pdf';
+  | "none"
+  | "metadata_only"
+  | "annotations"
+  | "search_pdf"
+  | "pdf_range"
+  | "selected_text"
+  | "full_pdf"
+  | "annotation_write";
 
-export type ContextPlanSource = 'selected' | 'model' | 'fallback';
-export type ContextSelectionSource = 'model' | 'fallback';
+export type ContextPlanSource = "selected" | "model" | "fallback";
+export type ContextSelectionSource = "model" | "fallback";
 
 export interface ToolTrace {
   name: string;
-  status: 'started' | 'completed' | 'error';
+  status: "started" | "completed" | "error";
   summary?: string;
 }
 
@@ -57,6 +58,8 @@ export interface MessageContext {
   passageSelectorSource?: ContextSelectionSource;
   retrievedPassages?: RetrievedPassage[];
   fullTextChars?: number;
+  fullTextTotalChars?: number;
+  fullTextTruncated?: boolean;
   retainedContextCount?: number;
   retainedContextChars?: number;
   toolCalls?: ToolTrace[];

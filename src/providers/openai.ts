@@ -324,12 +324,22 @@ export function toOpenAIInput(messages: Message[]): unknown[] {
         text: message.content,
       });
     }
-    for (const image of message.images) {
+    message.images.forEach((image, index) => {
+      const label = image.marker ?? `[Image #${index + 1}]`;
+      content.push({
+        type: 'input_text',
+        text: `<image name=${label}>`,
+      });
       content.push({
         type: 'input_image',
         image_url: image.dataUrl,
+        detail: 'high',
       });
-    }
+      content.push({
+        type: 'input_text',
+        text: '</image>',
+      });
+    });
     return { role: message.role, content };
   });
 }

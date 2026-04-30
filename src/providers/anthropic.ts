@@ -85,7 +85,9 @@ export function toAnthropicMessages(
     if (message.content) {
       content.push({ type: 'text', text: message.content });
     }
-    for (const image of message.images) {
+    message.images.forEach((image, index) => {
+      const label = image.marker ?? `[Image #${index + 1}]`;
+      content.push({ type: 'text', text: `<image name=${label}>` });
       content.push({
         type: 'image',
         source: {
@@ -94,7 +96,8 @@ export function toAnthropicMessages(
           data: dataUrlPayload(image.dataUrl),
         },
       });
-    }
+      content.push({ type: 'text', text: '</image>' });
+    });
     return { role: message.role, content };
   });
 }

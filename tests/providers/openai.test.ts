@@ -213,6 +213,7 @@ describe('OpenAIProvider', () => {
         images: [
           {
             id: 'img-1',
+            marker: '[Image #1]',
             name: 'shot.png',
             mediaType: 'image/png',
             dataUrl: 'data:image/png;base64,abc',
@@ -225,7 +226,9 @@ describe('OpenAIProvider', () => {
         role: 'user',
         content: [
           { type: 'input_text', text: '分析这张图' },
-          { type: 'input_image', image_url: 'data:image/png;base64,abc' },
+          { type: 'input_text', text: '<image name=[Image #1]>' },
+          { type: 'input_image', image_url: 'data:image/png;base64,abc', detail: 'high' },
+          { type: 'input_text', text: '</image>' },
         ],
       },
     ]);

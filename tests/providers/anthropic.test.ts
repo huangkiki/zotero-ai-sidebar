@@ -55,6 +55,7 @@ describe('AnthropicProvider', () => {
         images: [
           {
             id: 'img-1',
+            marker: '[Image #1]',
             name: 'shot.png',
             mediaType: 'image/png',
             dataUrl: 'data:image/png;base64,abc',
@@ -67,6 +68,7 @@ describe('AnthropicProvider', () => {
         role: 'user',
         content: [
           { type: 'text', text: '分析这张图' },
+          { type: 'text', text: '<image name=[Image #1]>' },
           {
             type: 'image',
             source: {
@@ -75,6 +77,7 @@ describe('AnthropicProvider', () => {
               data: 'abc',
             },
           },
+          { type: 'text', text: '</image>' },
         ],
       },
     ]);

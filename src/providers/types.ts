@@ -9,10 +9,26 @@ export interface Message {
   thinking?: string;
   images?: MessageImage[];
   context?: MessageContext;
+  annotationDraft?: AssistantAnnotationDraft;
+}
+
+export interface AssistantAnnotationDraft {
+  comment: string;
+  snapshot: {
+    text: string;
+    attachmentID: number;
+    annotation: Record<string, unknown>;
+  };
+  state:
+    | { kind: 'idle' }
+    | { kind: 'saving' }
+    | { kind: 'saved'; annotationID: number; savedAt: number }
+    | { kind: 'failed'; error: string };
 }
 
 export interface MessageImage {
   id: string;
+  marker?: string;
   name: string;
   mediaType: string;
   dataUrl: string;
