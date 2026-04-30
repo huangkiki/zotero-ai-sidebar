@@ -1,4 +1,5 @@
 import { defineConfig } from "zotero-plugin-scaffold";
+import { readFile, unlink, writeFile } from "node:fs/promises";
 import pkg from "./package.json";
 
 export default defineConfig({
@@ -7,11 +8,6 @@ export default defineConfig({
   name: pkg.config.addonName,
   id: pkg.config.addonID,
   namespace: pkg.config.addonRef,
-  updateURL: `https://github.com/{{owner}}/{{repo}}/releases/download/release/${
-    pkg.version.includes("-") ? "update-beta.json" : "update.json"
-  }`,
-  xpiDownloadLink:
-    "https://github.com/{{owner}}/{{repo}}/releases/download/v{{version}}/{{xpiName}}.xpi",
 
   build: {
     assets: ["addon/**/*.*"],
@@ -25,6 +21,21 @@ export default defineConfig({
     },
     prefs: {
       prefix: pkg.config.prefsPrefix,
+    },
+    hooks: {
+      "build:bundle": async (ctx) => {
+        const manifestPath = `${ctx.dist}/addon/manifest.json`;
+        const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+        // The scaffold injects update_url by default; this project ships XPI-only releases.
+        delete manifest.applications?.zotero?.update_url;
+        await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      },
+      "build:makeUpdateJSON": async (ctx) => {
+        await Promise.allSettled([
+          unlink(`${ctx.dist}/update.json`),
+          unlink(`${ctx.dist}/update-beta.json`),
+        ]);
+      },
     },
     esbuildOptions: [
       {

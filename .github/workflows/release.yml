@@ -80,9 +80,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: zotero-ai-sidebar-${{ env.RELEASE_TAG }}
-          path: |
-            .scaffold/build/*.xpi
-            .scaffold/build/update*.json
+          path: .scaffold/build/*.xpi
           if-no-files-found: error
 
       - name: Publish version release
@@ -91,12 +89,11 @@ jobs:
           IS_PRERELEASE: ${{ github.event.inputs.prerelease || 'false' }}
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" .scaffold/build/*.xpi .scaffold/build/update*.json --clobber
+            gh release upload "$RELEASE_TAG" .scaffold/build/*.xpi --clobber
           else
             args=(
               release create "$RELEASE_TAG"
               .scaffold/build/*.xpi
-              .scaffold/build/update*.json
               --title "Zotero AI Sidebar $RELEASE_TAG"
               --generate-notes
             )
@@ -104,24 +101,4 @@ jobs:
               args+=(--prerelease)
             fi
             gh "${args[@]}"
-          fi
-
-      - name: Publish rolling update manifests
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if ! git ls-remote --exit-code --tags origin refs/tags/release >/dev/null 2>&1; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a release -m "Rolling Zotero update manifests"
-            git push origin refs/tags/release
-          fi
-
-          if gh release view release >/dev/null 2>&1; then
-            gh release upload release .scaffold/build/update*.json --clobber
-          else
-            gh release create release .scaffold/build/update*.json \
-              --title "Zotero AI Sidebar update manifests" \
-              --notes "Rolling update manifests used by Zotero automatic updates." \
-              --latest=false
           fi
