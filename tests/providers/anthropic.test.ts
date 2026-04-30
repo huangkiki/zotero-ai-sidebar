@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { AnthropicProvider } from '../../src/providers/anthropic';
+import { AnthropicProvider, toAnthropicMessages } from '../../src/providers/anthropic';
 import type { ModelPreset } from '../../src/settings/types';
 import type { StreamChunk } from '../../src/providers/types';
 
@@ -44,6 +44,39 @@ describe('AnthropicProvider', () => {
       { type: 'text_delta', text: 'Hello' },
       { type: 'text_delta', text: ' world' },
       { type: 'usage', input: 10, output: 2, cacheRead: 5 },
+    ]);
+  });
+
+  it('converts screenshot attachments into Anthropic image blocks', () => {
+    expect(toAnthropicMessages([
+      {
+        role: 'user',
+        content: '分析这张图',
+        images: [
+          {
+            id: 'img-1',
+            name: 'shot.png',
+            mediaType: 'image/png',
+            dataUrl: 'data:image/png;base64,abc',
+            size: 3,
+          },
+        ],
+      },
+    ])).toEqual([
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: '分析这张图' },
+          {
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: 'image/png',
+              data: 'abc',
+            },
+          },
+        ],
+      },
     ]);
   });
 });

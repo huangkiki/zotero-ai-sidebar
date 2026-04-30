@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import type { Provider, Message, StreamChunk } from './types';
+import type { Provider, Message, ProviderStreamOptions, StreamChunk } from './types';
 import type { ModelPreset } from '../settings/types';
 
 export class AnthropicProvider implements Provider {
@@ -8,10 +8,11 @@ export class AnthropicProvider implements Provider {
     systemPrompt: string,
     preset: ModelPreset,
     signal: AbortSignal,
+    _options: ProviderStreamOptions = {},
   ): AsyncIterable<StreamChunk> {
     const client = new Anthropic({
       apiKey: preset.apiKey,
-      baseURL: preset.baseUrl,
+      ...(preset.baseUrl ? { baseURL: preset.baseUrl } : {}),
       dangerouslyAllowBrowser: true,
     });
 
@@ -24,7 +25,7 @@ export class AnthropicProvider implements Provider {
           system: [
             { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } },
           ],
-          messages: messages.map((m) => ({ role: m.role, content: m.content })),
+          messages: toAnthropicMessages(messages),
         },
         { signal },
       )) as AsyncIterable<unknown>;
@@ -59,6 +60,62 @@ export class AnthropicProvider implements Provider {
       yield { type: 'error', message: errMsg(err) };
     }
   }
+}
+
+type AnthropicContentBlock =
+  | { type: 'text'; text: string }
+  | {
+      type: 'image';
+      source: {
+        type: 'base64';
+        media_type: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
+        data: string;
+      };
+    };
+
+export function toAnthropicMessages(
+  messages: Message[],
+): Array<{ role: Message['role']; content: string | AnthropicContentBlock[] }> {
+  return messages.map((message) => {
+    if (!message.images?.length) {
+      return { role: message.role, content: message.content };
+    }
+
+    const content: AnthropicContentBlock[] = [];
+    if (message.content) {
+      content.push({ type: 'text', text: message.content });
+    }
+    for (const image of message.images) {
+      content.push({
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: anthropicImageMediaType(image.mediaType),
+          data: dataUrlPayload(image.dataUrl),
+        },
+      });
+    }
+    return { role: message.role, content };
+  });
+}
+
+function anthropicImageMediaType(
+  mediaType: string,
+): 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' {
+  switch (mediaType) {
+    case 'image/jpeg':
+    case 'image/png':
+    case 'image/gif':
+    case 'image/webp':
+      return mediaType;
+    default:
+      return 'image/png';
+  }
+}
+
+function dataUrlPayload(dataUrl: string): string {
+  const comma = dataUrl.indexOf(',');
+  return comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
 }
 
 function errMsg(err: unknown): string {

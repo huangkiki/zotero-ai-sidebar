@@ -1,6 +1,11 @@
 import { initLocale } from './utils/locale';
 import { createZToolkit } from './utils/ztoolkit';
-import { registerSidebar, unregisterSidebar } from './modules/sidebar';
+import {
+  registerSidebar,
+  registerSidebarForWindow,
+  unregisterSidebar,
+  unregisterSidebarForWindow,
+} from './modules/sidebar';
 
 async function onStartup() {
   await Promise.all([
@@ -11,9 +16,9 @@ async function onStartup() {
 
   initLocale();
 
-  registerSidebar();
-
   await Promise.all(Zotero.getMainWindows().map((win) => onMainWindowLoad(win)));
+
+  registerSidebar();
 
   addon.data.initialized = true;
 }
@@ -21,10 +26,13 @@ async function onStartup() {
 async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
   addon.data.ztoolkit = createZToolkit();
 
+  win.MozXULElement.insertFTLIfNeeded(`${addon.data.config.addonRef}-addon.ftl`);
   win.MozXULElement.insertFTLIfNeeded(`${addon.data.config.addonRef}-mainWindow.ftl`);
+  registerSidebarForWindow(win);
 }
 
-async function onMainWindowUnload(_win: Window): Promise<void> {
+async function onMainWindowUnload(win: Window): Promise<void> {
+  unregisterSidebarForWindow(win);
   ztoolkit.unregisterAll();
 }
 

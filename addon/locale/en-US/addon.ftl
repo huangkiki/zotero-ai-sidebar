@@ -1,2 +1,4 @@
-sidebar-header = AI Chat
-sidebar-sidenav = AI
+sidebar-header =
+    .label = AI Chat
+sidebar-sidenav =
+    .tooltiptext = AI Chat

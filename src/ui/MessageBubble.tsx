@@ -1,6 +1,4 @@
 import React from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import type { Message } from '../providers/types';
 import type { InProgress } from './store';
 
@@ -14,9 +12,7 @@ export function MessageBubble({ message, streaming = false }: Props) {
   return (
     <div className={`bubble bubble-${role}${streaming ? ' bubble-streaming' : ''}`}>
       <div className="bubble-role">{role === 'user' ? 'You' : 'AI'}</div>
-      <div className="bubble-body">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
-      </div>
+      <div className="bubble-body">{message.content}</div>
     </div>
   );
 }

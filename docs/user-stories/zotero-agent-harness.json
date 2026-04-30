@@ -1,0 +1,51 @@
+{
+  "id": "zotero-agent-harness",
+  "title": "Codex-style Zotero research agent harness",
+  "maxIterations": 6,
+  "stories": [
+    {
+      "id": "ledger-current-context",
+      "asA": "researcher chatting about a paper PDF",
+      "iWant": "previous PDF context recorded without being replayed every turn",
+      "soThat": "the model can request missing local context without wasting tokens",
+      "acceptanceCriteria": [
+        "Old selected text and retrieved passages are not injected into later API messages.",
+        "A ledger records prior context type, sizes, and ranges without source text.",
+        "The system prompt says the ledger is not currently attached source text."
+      ]
+    },
+    {
+      "id": "zotero-tools",
+      "asA": "researcher with Zotero annotations",
+      "iWant": "the agent to use Zotero annotations as a context tool",
+      "soThat": "my highlights and comments can guide paper discussion",
+      "acceptanceCriteria": [
+        "The model can call an annotations context tool.",
+        "The Zotero source can read annotation text, comments, page labels, colors, and order.",
+        "Annotation context is attached only for the current turn."
+      ]
+    },
+    {
+      "id": "range-tool",
+      "asA": "researcher asking about a known PDF range",
+      "iWant": "the agent to read that exact local PDF range instead of the full PDF",
+      "soThat": "follow-up questions stay precise and token efficient",
+      "acceptanceCriteria": [
+        "Range requests call pdf_range only when the model provides rangeStart and rangeEnd.",
+        "The local tool extracts only that exact range with a policy cap.",
+        "If range validation fails, the harness does not guess a replacement range or search query."
+      ]
+    },
+    {
+      "id": "harness-policy",
+      "asA": "maintainer",
+      "iWant": "context budgets and limits centralized",
+      "soThat": "future harness tools do not scatter magic numbers through UI code",
+      "acceptanceCriteria": [
+        "Context limits live in a ContextPolicy module.",
+        "Retrieval and sidebar context execution use the policy object.",
+        "Harness behavior is documented in docs/HARNESS_ENGINEERING.md."
+      ]
+    }
+  ]
+}

@@ -1,3 +1,5 @@
+import type { ItemAnnotation } from './types';
+
 export interface ItemMetadata {
   title: string;
   authors: string[];
@@ -9,6 +11,7 @@ export interface ItemMetadata {
 export interface ContextSource {
   getItem(itemID: number): Promise<ItemMetadata | null>;
   getFullText(itemID: number): Promise<string>;
+  getAnnotations?(itemID: number): Promise<ItemAnnotation[]>;
 }
 
 export interface BuiltContext {
@@ -31,7 +34,7 @@ export async function buildContext(
   if (!item) return { systemPrompt: SYSTEM_BASE, pdfText: null };
 
   const meta = formatMetadata(item);
-  const pdfText = await source.getFullText(itemID);
+  const pdfText = pdfTokenBudget > 0 ? await source.getFullText(itemID) : '';
   const truncated = truncate(pdfText, pdfTokenBudget);
 
   return {
