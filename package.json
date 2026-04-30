@@ -1,7 +1,7 @@
 {
   "name": "zotero-ai-sidebar",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Chat sidebar for Zotero with Claude and GPT support and configurable model presets.",
   "config": {
     "addonName": "Zotero AI Sidebar",
@@ -50,6 +50,7 @@
     "@vitest/ui": "^4.1.5",
     "@zotero-plugin/eslint-config": "^0.6.7",
     "chai": "^6.2.1",
+    "esbuild": "^0.28.0",
     "eslint": "^9.39.2",
     "happy-dom": "^20.9.0",
     "mocha": "^11.7.5",
