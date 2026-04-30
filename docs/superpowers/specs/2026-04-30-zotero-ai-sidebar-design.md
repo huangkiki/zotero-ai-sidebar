@@ -130,6 +130,16 @@ type ModelPreset = {
 
 The preset list is the only model registry. There is no separate "supported models" enum anywhere in code.
 
+**Per-preset `baseUrl` is a first-class feature, not a debug knob.** It enables, without code changes:
+
+- **Proxies / relays** for users in regions where direct API access is unstable (e.g., Anthropic relay endpoints in mainland China).
+- **OpenRouter, Together, DeepInfra, Fireworks** and other OpenAI-compatible aggregators — set provider to `openai`, point `baseUrl` at the aggregator, type any model id they expose.
+- **Azure OpenAI** — same `openai` SDK, different endpoint shape; the SDK supports it natively.
+- **Self-hosted vLLM / LiteLLM gateways** that expose an OpenAI-compatible surface.
+- **Local Ollama** via its OpenAI-compatible mode (covers most "I want local models" use cases without us building a separate provider).
+
+The user can keep multiple presets pointing at different endpoints simultaneously and switch from the sidebar dropdown.
+
 ### 4.2 API Key Storage
 
 Stored in plaintext in Zotero preferences. Rationale:
