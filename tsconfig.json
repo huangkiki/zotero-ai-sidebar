@@ -1,5 +1,10 @@
 {
   "extends": "zotero-types/entries/sandbox/",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true
+  },
   "include": ["src", "typings"],
   "exclude": ["build", "addon"]
 }

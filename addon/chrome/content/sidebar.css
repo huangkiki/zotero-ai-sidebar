@@ -1,0 +1,158 @@
+.chat-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  font-family: system-ui, sans-serif;
+  font-size: 13px;
+}
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+.bubble {
+  margin: 6px 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+.bubble-user {
+  background: #e8f0fe;
+}
+.bubble-assistant {
+  background: #f4f4f4;
+}
+.bubble-streaming {
+  opacity: 0.85;
+}
+.bubble-role {
+  font-size: 10px;
+  color: #666;
+  margin-bottom: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.bubble-body p {
+  margin: 4px 0;
+}
+.bubble-body pre {
+  background: #2b2b2b;
+  color: #e6e6e6;
+  padding: 6px;
+  border-radius: 4px;
+  overflow-x: auto;
+}
+.input-row {
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  border-top: 1px solid #ddd;
+}
+.input-row textarea {
+  flex: 1;
+  resize: vertical;
+  font-family: inherit;
+}
+.error {
+  color: #c00;
+  padding: 6px;
+  background: #fee;
+  border-radius: 4px;
+  margin: 6px 0;
+}
+.preset-switcher,
+.preset-empty {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  align-items: center;
+  border-bottom: 1px solid #ddd;
+}
+.preset-switcher select {
+  flex: 1;
+}
+.ctx-card {
+  padding: 6px 8px;
+  background: #fafafa;
+  border-bottom: 1px solid #eee;
+}
+.ctx-empty {
+  color: #999;
+  font-style: italic;
+}
+.ctx-title {
+  font-weight: 600;
+  font-size: 12px;
+}
+.ctx-meta {
+  font-size: 11px;
+  color: #666;
+}
+.zai-app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.empty-state {
+  padding: 16px;
+  text-align: center;
+  color: #888;
+}
+.prefs-pane h3 {
+  margin-top: 0;
+}
+.add-buttons {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.preset-row {
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  margin-bottom: 6px;
+}
+.preset-summary {
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  align-items: center;
+  cursor: pointer;
+}
+.preset-label {
+  font-weight: 600;
+}
+.preset-provider {
+  color: #666;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+.preset-model {
+  flex: 1;
+  color: #333;
+  font-family: monospace;
+  font-size: 12px;
+}
+.preset-edit {
+  padding: 8px;
+  border-top: 1px solid #eee;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.prefs-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.prefs-field span {
+  width: 100px;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+.prefs-field input {
+  flex: 1;
+}
+.empty {
+  color: #999;
+  padding: 12px;
+  text-align: center;
+}
