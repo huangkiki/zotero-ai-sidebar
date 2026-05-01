@@ -45,6 +45,13 @@ const contextPolicy = DEFAULT_CONTEXT_POLICY;
 const IMAGE_PROMPT_MAX_DIMENSION = 2048;
 const SELECTION_CONTEXT_RADIUS_CHARS = 2500;
 const SELECTION_CONTEXT_QUERY_CHARS = 500;
+const OPENAI_QUICK_MODELS = [
+  "gpt-5.5",
+  "gpt-5.4",
+  "gpt-5.4-mini",
+  "gpt-5.3-codex",
+  "gpt-5.2",
+];
 // "Annotate this paper" preset prompt.
 //
 // This is the user-facing instruction injected when the user clicks the
@@ -203,8 +210,10 @@ type AssistantProgressStage =
 //   - itemID changed (or first render): allocate fresh PanelState and
 //     kick off async history load. Old state is DROPPED — switching items
 //     means switching threads.
-//   - same itemID: reload presets (user may have edited them in the
-//     editor overlay) and reuse existing messages/draft/scroll state.
+//   - same itemID: reload presets only when NOT editing, then reuse existing
+//     messages/draft/scroll state. While editing, `state.presets` may contain
+//     unsaved form changes; reloading prefs would resurrect the last saved
+//     model list during background sidebar refreshes.
 function renderMount(mount: HTMLElement, itemID: number | null) {
   let state = states.get(mount);
   if (!state || state.itemID !== itemID) {
@@ -231,7 +240,9 @@ function renderMount(mount: HTMLElement, itemID: number | null) {
     states.set(mount, state);
     void loadPersistedMessages(mount, state);
   } else {
-    state.presets = loadPresets(zoteroPrefs());
+    if (!state.editing) {
+      state.presets = loadPresets(zoteroPrefs());
+    }
     if (
       state.selectedId &&
       !state.presets.find((p) => p.id === state!.selectedId)
@@ -359,16 +370,16 @@ function renderToolbar(doc: Document, mount: HTMLElement, state: PanelState) {
   }
 
   const select = doc.createElement("select");
-  select.value = selectedForToolbar?.id ?? "";
   for (const preset of toolbarPresets) {
     const option = doc.createElement("option");
     option.value = preset.id;
-    option.textContent = `${preset.label} (${preset.provider} · ${preset.model || "no model"})`;
+    option.textContent = presetSelectLabel(preset);
     select.append(option);
   }
+  // Set after options exist; otherwise the browser falls back to the first item.
+  select.value = selectedForToolbar?.id ?? "";
   select.addEventListener("change", () => {
     state.selectedId = select.value;
-    state.editing = false;
     state.agentPermissionMode = agentPermissionMode(
       selectedChatPreset(state) ?? selectedPreset(state),
     );
@@ -413,9 +424,9 @@ function renderPresetEditor(
   mount: HTMLElement,
   state: PanelState,
 ) {
-  let current = selectedPreset(state);
-  if (!current) {
-    current = makePreset("openai");
+  const existing = selectedPreset(state);
+  let current: ModelPreset = existing ?? makePreset("openai");
+  if (!existing) {
     state.presets = [...state.presets, current];
     state.selectedId = current.id;
   }
@@ -452,7 +463,9 @@ function renderPresetEditor(
   // blow out the row.
   const sizeModelInput = (input: HTMLInputElement) => {
     const text = input.value || input.placeholder;
-    input.size = Math.max(8, Math.min(28, text.length || 8));
+    const width = Math.max(8, Math.min(28, text.length || 8));
+    input.size = width;
+    input.style.width = `${width}ch`;
   };
   const addModelChip = (initialValue: string): HTMLInputElement => {
     const chip = el(doc, "span", "preset-models-chip");
@@ -482,15 +495,35 @@ function renderPresetEditor(
   addBtn.addEventListener("click", () => {
     const input = addModelChip("");
     input.focus();
-    syncDraft();
+    updateSaveState();
   });
   modelsField.append(addBtn);
   for (const id of initialModels) addModelChip(id);
+  const replaceModelChips = (ids: string[]) => {
+    Array.from(modelsField.querySelectorAll(".preset-models-chip")).forEach(
+      (chip) => (chip as HTMLElement).remove(),
+    );
+    for (const id of ids) addModelChip(id);
+  };
 
   const collectModelInputs = (): HTMLInputElement[] =>
     Array.from(
       modelsField.querySelectorAll(".preset-models-input"),
     ) as HTMLInputElement[];
+
+  const refreshModelShortcutState = () => {
+    const activeModels = new Set(
+      collectModelInputs().map((input) => input.value.trim()),
+    );
+    modelShortcuts
+      .querySelectorAll("[data-model-id]")
+      .forEach((node: Element) =>
+        (node as HTMLElement).classList.toggle(
+          "is-active",
+          activeModels.has((node as HTMLElement).dataset.modelId ?? ""),
+        ),
+      );
+  };
 
   const readModelsField = (): { model: string; models: string[] } => {
     const lines = collectModelInputs()
@@ -516,6 +549,55 @@ function renderPresetEditor(
   reasoningSummary.value =
     draft.extras?.reasoningSummary ?? DEFAULT_REASONING_SUMMARY;
   reasoningSummary.disabled = draft.provider !== "openai";
+  const modelShortcuts = el(doc, "div", "preset-model-shortcuts");
+  const shortcutLabel = el(
+    doc,
+    "b",
+    "preset-model-shortcuts-label",
+    "OpenAI 常用",
+  );
+  modelShortcuts.append(shortcutLabel);
+  const setModels = (ids: string[]) => {
+    const nextModels = ids.filter((id) => id.trim().length > 0);
+    if (nextModels.length === 0) return;
+    replaceModelChips(nextModels);
+    current = { ...current, model: nextModels[0], models: nextModels };
+    refreshModelShortcutState();
+    syncDraft();
+  };
+  const toggleModel = (id: string) => {
+    const currentModels = collectModelInputs()
+      .map((input) => input.value.trim())
+      .filter((value) => value.length > 0);
+    const nextModels = currentModels.includes(id)
+      ? currentModels.filter((model) => model !== id)
+      : [...currentModels, id];
+    setModels(nextModels.length ? nextModels : [id]);
+  };
+  const allModels = buttonEl(doc, "填入全部");
+  allModels.title = "填入 Codex 常用的 OpenAI 模型列表";
+  allModels.addEventListener("click", () => setModels(OPENAI_QUICK_MODELS));
+  modelShortcuts.append(allModels);
+  for (const id of OPENAI_QUICK_MODELS) {
+    const pick = buttonEl(doc, id);
+    pick.dataset.modelId = id;
+    pick.title = `加入/移除 ${id}`;
+    pick.addEventListener("click", () => toggleModel(id));
+    modelShortcuts.append(pick);
+  }
+  refreshModelShortcutState();
+  modelShortcuts.hidden = draft.provider !== "openai";
+  const modelsControl = el(doc, "div", "preset-models-control");
+  modelsControl.append(
+    modelsField,
+    modelShortcuts,
+    el(
+      doc,
+      "div",
+      "preset-help",
+      "模型 ID 仍可手动编辑；保存时会自动测试连接并探测是否需要发送 Max tokens。",
+    ),
+  );
 
   const readDraft = (): ModelPreset => {
     const providerKind = provider.value as ProviderKind;
@@ -533,6 +615,7 @@ function renderPresetEditor(
       extras:
         providerKind === "openai"
           ? {
+              ...current.extras,
               reasoningEffort: reasoningEffort.value as ReasoningEffort,
               reasoningSummary: reasoningSummary.value as ReasoningSummary,
               agentPermissionMode: agentPermissionMode(current),
@@ -543,13 +626,17 @@ function renderPresetEditor(
     };
   };
 
+  let updateSaveState = () => undefined;
   const syncDraft = () => {
     const next = readDraft();
+    current = next;
     upsertPreset(state, next);
     state.selectedId = next.id;
-    persist(state);
     updateToolbarOption(mount, next);
     updateSendControls(mount, state);
+    refreshModelShortcutState();
+    updateSaveState();
+    return next;
   };
 
   provider.addEventListener("change", () => {
@@ -583,6 +670,7 @@ function renderPresetEditor(
     });
     reasoningEffort.disabled = nextProvider !== "openai";
     reasoningSummary.disabled = nextProvider !== "openai";
+    modelShortcuts.hidden = nextProvider !== "openai";
     if (nextProvider === "openai" && !reasoningEffort.value) {
       reasoningEffort.value = DEFAULT_REASONING_EFFORT;
     }
@@ -603,18 +691,60 @@ function renderPresetEditor(
     field(doc, "名称", label),
     field(doc, "API Key", apiKey),
     field(doc, "Base URL", baseUrl),
-    field(doc, "Models", modelsField),
+    field(doc, "Models", modelsControl),
     field(doc, "Max tokens", maxTokens),
     field(doc, "Reasoning", reasoningEffort),
     field(doc, "Reasoning Summary", reasoningSummary),
   );
 
+  const testStatus = el(doc, "div", "preset-test-status");
+  testStatus.setAttribute("role", "status");
+  const setTestStatus = (
+    kind: "idle" | "running" | "ok" | "error",
+    text: string,
+  ) => {
+    testStatus.className = `preset-test-status preset-test-${kind}`;
+    testStatus.textContent = text;
+  };
   const buttons = el(doc, "div", "add-buttons");
   const save = buttonEl(doc, "保存预设");
+  let savedSignature = presetSignature(draft);
+  const isDirty = () => presetSignature(readDraft()) !== savedSignature;
+  updateSaveState = () => {
+    save.disabled = !isDirty();
+    save.title = save.disabled ? "当前配置没有未保存改动" : "";
+  };
+
   save.addEventListener("click", () => {
-    syncDraft();
-    state.editing = false;
-    renderPanel(mount, state);
+    const preset = syncDraft();
+    if (!isDirty()) {
+      updateSaveState();
+      return;
+    }
+    save.disabled = true;
+    setTestStatus("running", "正在测试连接；通过后会自动保存...");
+    void (async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
+      try {
+        const result = await testPresetConnectivity(preset, controller.signal);
+        current = result.preset;
+        upsertPreset(state, result.preset);
+        persist(state);
+        savedSignature = presetSignature(result.preset);
+        updateToolbarOption(mount, result.preset);
+        updateSendControls(mount, state);
+        setTestStatus("ok", `${result.message}。已保存。`);
+      } catch (err) {
+        setTestStatus(
+          "error",
+          `${sanitizedTestError(err, preset.apiKey)}。未保存，请修正后重试。`,
+        );
+      } finally {
+        clearTimeout(timeout);
+        updateSaveState();
+      }
+    })();
   });
   buttons.append(save);
 
@@ -630,18 +760,17 @@ function renderPresetEditor(
     buttons.append(add);
   }
 
-  if (current) {
-    const remove = buttonEl(doc, "删除当前");
-    remove.addEventListener("click", () => {
-      state.presets = state.presets.filter((p) => p.id !== current.id);
-      state.selectedId = state.presets[0]?.id ?? null;
-      state.editing = state.presets.length === 0;
-      persist(state);
-      renderPanel(mount, state);
-    });
-    buttons.append(remove);
-  }
-  box.append(buttons);
+  const remove = buttonEl(doc, "删除当前");
+  remove.addEventListener("click", () => {
+    state.presets = state.presets.filter((p) => p.id !== current.id);
+    state.selectedId = state.presets[0]?.id ?? null;
+    state.editing = state.presets.length === 0;
+    persist(state);
+    renderPanel(mount, state);
+  });
+  buttons.append(remove);
+  updateSaveState();
+  box.append(buttons, testStatus);
   return box;
 }
 
@@ -3641,6 +3770,10 @@ function upsertPreset(state: PanelState, next: ModelPreset) {
       : [...state.presets, next];
 }
 
+function presetSelectLabel(preset: ModelPreset): string {
+  return `${preset.label} (${preset.provider})`;
+}
+
 function updateToolbarOption(mount: HTMLElement, preset: ModelPreset) {
   const option = Array.from(
     mount.querySelectorAll(".preset-switcher option"),
@@ -3648,8 +3781,179 @@ function updateToolbarOption(mount: HTMLElement, preset: ModelPreset) {
     | HTMLOptionElement
     | undefined;
   if (option) {
-    option.textContent = `${preset.label} (${preset.provider} · ${preset.model || "no model"})`;
+    option.textContent = presetSelectLabel(preset);
   }
+}
+
+async function testPresetConnectivity(
+  preset: ModelPreset,
+  signal: AbortSignal,
+): Promise<{ message: string; preset: ModelPreset }> {
+  if (!preset.apiKey.trim()) throw new Error("API Key 为空");
+  if (!preset.model.trim()) throw new Error("Model 为空");
+  if (preset.provider === "openai") {
+    return testOpenAIConnectivity(preset, signal);
+  }
+
+  const testPreset = {
+    ...preset,
+    maxTokens: Math.min(Math.max(preset.maxTokens || 256, 256), 512),
+  };
+  const messages: Message[] = [{ role: "user", content: "Reply OK." }];
+  const provider = getProvider(testPreset);
+  let sawAnyChunk = false;
+
+  for await (const chunk of provider.stream(
+    messages,
+    "Connectivity test. Reply with OK only.",
+    testPreset,
+    signal,
+  )) {
+    if (chunk.type === "error") throw new Error(chunk.message);
+    sawAnyChunk = true;
+    if (chunk.type === "text_delta" || chunk.type === "usage") break;
+  }
+
+  return {
+    preset,
+    message: sawAnyChunk
+      ? `连接成功：${preset.provider} / ${preset.model}`
+      : `连接完成：${preset.provider} / ${preset.model}`,
+  };
+}
+
+async function testOpenAIConnectivity(
+  preset: ModelPreset,
+  signal: AbortSignal,
+): Promise<{ message: string; preset: ModelPreset }> {
+  const withMaxTokens = await requestOpenAIConnectivity(preset, signal, true);
+  if (withMaxTokens.ok) {
+    return {
+      preset: withOmitMaxOutputTokens(preset, false),
+      message: `连接成功：${preset.provider} / ${preset.model}（支持 Max tokens）`,
+    };
+  }
+
+  if (!isUnsupportedMaxOutputTokens(withMaxTokens.body)) {
+    throw new Error(openAITestErrorMessage(withMaxTokens));
+  }
+
+  const withoutMaxTokens = await requestOpenAIConnectivity(
+    preset,
+    signal,
+    false,
+  );
+  if (!withoutMaxTokens.ok) {
+    throw new Error(openAITestErrorMessage(withoutMaxTokens));
+  }
+
+  return {
+    preset: withOmitMaxOutputTokens(preset, true),
+    message:
+      `连接成功：${preset.provider} / ${preset.model}` +
+      "（服务不支持 Max tokens，已保存为不发送）",
+  };
+}
+
+type OpenAITestResult =
+  | { ok: true }
+  | { ok: false; status: number; body: string };
+
+async function requestOpenAIConnectivity(
+  preset: ModelPreset,
+  signal: AbortSignal,
+  includeMaxOutputTokens: boolean,
+): Promise<OpenAITestResult> {
+  const body = {
+    model: preset.model,
+    instructions: "Connectivity test. Reply OK only.",
+    input: [{ role: "user", content: "Reply OK." }],
+    ...(includeMaxOutputTokens ? { max_output_tokens: 256 } : {}),
+    reasoning:
+      preset.provider === "openai"
+        ? {
+            effort: preset.extras?.reasoningEffort ?? DEFAULT_REASONING_EFFORT,
+            ...(preset.extras?.reasoningSummary === "none"
+              ? {}
+              : {
+                  summary:
+                    preset.extras?.reasoningSummary ??
+                    DEFAULT_REASONING_SUMMARY,
+                }),
+          }
+        : undefined,
+    stream: true,
+    store: false,
+  };
+  const response = await fetch(openAIResponsesUrl(preset.baseUrl), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${preset.apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+    signal,
+  });
+
+  if (response.ok) {
+    await response.body?.cancel();
+    return { ok: true };
+  }
+  return {
+    ok: false,
+    status: response.status,
+    body: await response.text(),
+  };
+}
+
+function openAIResponsesUrl(baseUrl: string): string {
+  const root = baseUrl.trim() || "https://api.openai.com/v1";
+  return `${root.replace(/\/+$/, "")}/responses`;
+}
+
+function isUnsupportedMaxOutputTokens(body: string): boolean {
+  return /unsupported parameter:\s*max_output_tokens|max_output_tokens.*unsupported/i.test(
+    body,
+  );
+}
+
+function openAITestErrorMessage(
+  result: Exclude<OpenAITestResult, { ok: true }>,
+) {
+  return `HTTP ${result.status}: ${result.body || "no body"}`;
+}
+
+function withOmitMaxOutputTokens(
+  preset: ModelPreset,
+  omit: boolean,
+): ModelPreset {
+  const extras = { ...preset.extras };
+  if (omit) extras.omitMaxOutputTokens = true;
+  else delete extras.omitMaxOutputTokens;
+  return { ...preset, extras };
+}
+
+function presetSignature(preset: ModelPreset): string {
+  return JSON.stringify({
+    id: preset.id,
+    provider: preset.provider,
+    label: preset.label,
+    apiKey: preset.apiKey,
+    baseUrl: preset.baseUrl,
+    model: preset.model,
+    models: preset.models ?? [],
+    maxTokens: preset.maxTokens,
+    extras: preset.extras ?? {},
+  });
+}
+
+function sanitizedTestError(err: unknown, apiKey: string): string {
+  let message = err instanceof Error ? err.message : String(err);
+  if (apiKey) message = message.split(apiKey).join("[API_KEY]");
+  if (message.toLowerCase().includes("abort")) {
+    return "连接超时或已取消";
+  }
+  return `连接失败：${message}`;
 }
 
 function updateSendControls(mount: HTMLElement, state: PanelState) {

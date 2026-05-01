@@ -983,6 +983,65 @@ button:disabled,
   outline: none;
 }
 
+.preset-models-control {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.preset-model-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+
+.preset-model-shortcuts-label {
+  color: var(--zai-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.preset-model-shortcuts button {
+  border: 1px solid var(--zai-border);
+  border-radius: 999px;
+  background: var(--zai-panel-strong);
+  color: var(--zai-text);
+  padding: 2px 8px;
+  font: 11px/18px var(--zai-mono);
+  cursor: pointer;
+}
+
+.preset-model-shortcuts button:hover,
+.preset-model-shortcuts button:focus {
+  border-color: var(--zai-border-strong);
+  background: #fffaf2;
+  color: var(--zai-text);
+  outline: none;
+}
+
+.preset-model-shortcuts button.is-active {
+  border-color: #e49b6f;
+  background: #fff0e7;
+  color: var(--zai-accent-strong);
+  box-shadow: inset 0 0 0 1px rgba(192, 103, 61, 0.18);
+}
+
+.preset-model-shortcuts button.is-active:hover,
+.preset-model-shortcuts button.is-active:focus {
+  border-color: var(--zai-accent);
+  background: #fff0e7;
+  color: var(--zai-accent-strong);
+}
+
+.preset-help {
+  color: var(--zai-faint);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .model-switcher {
   display: inline-flex;
   align-items: center;
@@ -1157,6 +1216,24 @@ button:disabled,
   margin-bottom: 12px;
 }
 
+.preset-test-status {
+  min-height: 18px;
+  margin-top: -6px;
+  color: var(--zai-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.preset-test-ok {
+  color: var(--zai-green);
+}
+
+.preset-test-error {
+  color: var(--zai-red);
+}
+
 .preset-row {
   border: 1px solid var(--zai-border);
   border-radius: 8px;
@@ -1192,9 +1269,23 @@ button:disabled,
   display: flex;
   flex-direction: column;
   gap: 7px;
-  padding: 10px;
-  border-bottom: 1px solid var(--zai-border);
-  background: rgba(255, 253, 248, 0.84);
+  margin: 10px;
+  padding: 12px;
+  border: 1px solid var(--zai-border-strong);
+  border-radius: 14px;
+  background:
+    linear-gradient(
+      180deg,
+      rgba(255, 253, 248, 0.97),
+      rgba(255, 247, 238, 0.88)
+    ),
+    var(--zai-panel);
+  box-shadow: 0 8px 22px rgba(88, 59, 31, 0.1);
+}
+
+.preset-edit + .ctx-card {
+  border-top: 2px solid var(--zai-border-strong);
+  background: rgba(255, 253, 248, 0.92);
 }
 
 .prefs-field {

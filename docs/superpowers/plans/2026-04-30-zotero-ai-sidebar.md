@@ -75,6 +75,7 @@ zotero-plugin.config.ts     # template's build config
 ## Task 1: Project Bootstrap
 
 **Files:**
+
 - Create: entire `package.json`, `tsconfig.json`, `addon/manifest.json`, `zotero-plugin.config.ts`, `src/index.ts`, `src/hooks.ts` from template
 - Modify: `addon/manifest.json` (plugin id, name, version, target Zotero version)
 
@@ -93,6 +94,7 @@ Expected: `package.json`, `addon/`, `src/`, `zotero-plugin.config.ts` now exist 
 - [ ] **Step 2: Customize plugin identity in `addon/manifest.json`**
 
 Set:
+
 ```json
 {
   "manifest_version": 2,
@@ -116,13 +118,14 @@ Set:
 - [ ] **Step 3: Update `zotero-plugin.config.ts` so addon ref + name match the manifest**
 
 Edit the existing template config:
+
 ```typescript
 export default defineConfig({
-  source: ['src', 'addon'],
-  dist: '.scaffold/build',
-  name: 'Zotero AI Sidebar',
-  id: 'zotero-ai-sidebar@local',
-  namespace: 'zotero-ai-sidebar',
+  source: ["src", "addon"],
+  dist: ".scaffold/build",
+  name: "Zotero AI Sidebar",
+  id: "zotero-ai-sidebar@local",
+  namespace: "zotero-ai-sidebar",
   // keep the rest of the template's defaults
 });
 ```
@@ -141,19 +144,21 @@ Expected: `node_modules/` populated, no peer-dep errors that block builds.
 - [ ] **Step 5: Add a Vitest config**
 
 Create `vitest.config.ts`:
+
 ```typescript
-import { defineConfig } from 'vitest/config';
+import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    environment: 'happy-dom',
+    environment: "happy-dom",
     globals: false,
-    include: ['tests/**/*.test.ts', 'tests/**/*.test.tsx'],
+    include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
   },
 });
 ```
 
 Add npm script in `package.json`:
+
 ```json
 "scripts": {
   "test": "vitest run",
@@ -186,14 +191,16 @@ git commit -m "chore: bootstrap plugin from zotero-plugin-template"
 ## Task 2: Settings — `ModelPreset` types & storage (TDD)
 
 **Files:**
+
 - Create: `src/settings/types.ts`, `src/settings/storage.ts`
 - Create: `tests/settings/storage.test.ts`
 
 - [ ] **Step 1: Define types**
 
 Create `src/settings/types.ts`:
+
 ```typescript
-export type ProviderKind = 'anthropic' | 'openai';
+export type ProviderKind = "anthropic" | "openai";
 
 export interface ModelPreset {
   id: string;
@@ -207,18 +214,18 @@ export interface ModelPreset {
 }
 
 export const DEFAULT_BASE_URLS: Record<ProviderKind, string> = {
-  anthropic: 'https://api.anthropic.com',
-  openai: 'https://api.openai.com/v1',
+  anthropic: "https://api.anthropic.com",
+  openai: "https://api.openai.com/v1",
 };
 
 export function newPreset(provider: ProviderKind): ModelPreset {
   return {
     id: crypto.randomUUID(),
-    label: provider === 'anthropic' ? 'Claude' : 'GPT',
+    label: provider === "anthropic" ? "Claude" : "GPT",
     provider,
-    apiKey: '',
+    apiKey: "",
     baseUrl: DEFAULT_BASE_URLS[provider],
-    model: '',
+    model: "",
     maxTokens: 8192,
   };
 }
@@ -227,39 +234,50 @@ export function newPreset(provider: ProviderKind): ModelPreset {
 - [ ] **Step 2: Write the failing test**
 
 Create `tests/settings/storage.test.ts`:
+
 ```typescript
-import { describe, it, expect } from 'vitest';
-import { loadPresets, savePresets, type PrefsStore } from '../../src/settings/storage';
-import type { ModelPreset } from '../../src/settings/types';
+import { describe, it, expect } from "vitest";
+import {
+  loadPresets,
+  savePresets,
+  type PrefsStore,
+} from "../../src/settings/storage";
+import type { ModelPreset } from "../../src/settings/types";
 
 function memPrefs(): PrefsStore {
   const m = new Map<string, string>();
   return {
-    get: k => m.get(k),
-    set: (k, v) => { m.set(k, v); },
+    get: (k) => m.get(k),
+    set: (k, v) => {
+      m.set(k, v);
+    },
   };
 }
 
 const p1: ModelPreset = {
-  id: 'a', label: 'Opus', provider: 'anthropic',
-  apiKey: 'sk-x', baseUrl: 'https://api.anthropic.com',
-  model: 'claude-opus-4-7-20251101', maxTokens: 8192,
+  id: "a",
+  label: "Opus",
+  provider: "anthropic",
+  apiKey: "sk-x",
+  baseUrl: "https://api.anthropic.com",
+  model: "claude-opus-4-7-20251101",
+  maxTokens: 8192,
 };
 
-describe('preset storage', () => {
-  it('returns empty list when nothing saved', () => {
+describe("preset storage", () => {
+  it("returns empty list when nothing saved", () => {
     expect(loadPresets(memPrefs())).toEqual([]);
   });
 
-  it('round-trips presets through JSON', () => {
+  it("round-trips presets through JSON", () => {
     const prefs = memPrefs();
     savePresets(prefs, [p1]);
     expect(loadPresets(prefs)).toEqual([p1]);
   });
 
-  it('returns empty list when stored value is corrupt JSON', () => {
+  it("returns empty list when stored value is corrupt JSON", () => {
     const prefs = memPrefs();
-    prefs.set('extensions.zotero-ai-sidebar.presets', '{not json');
+    prefs.set("extensions.zotero-ai-sidebar.presets", "{not json");
     expect(loadPresets(prefs)).toEqual([]);
   });
 });
@@ -276,15 +294,16 @@ Expected: FAIL — `Cannot find module '../../src/settings/storage'`.
 - [ ] **Step 4: Implement storage**
 
 Create `src/settings/storage.ts`:
+
 ```typescript
-import type { ModelPreset } from './types';
+import type { ModelPreset } from "./types";
 
 export interface PrefsStore {
   get(key: string): string | undefined;
   set(key: string, value: string): void;
 }
 
-const KEY = 'extensions.zotero-ai-sidebar.presets';
+const KEY = "extensions.zotero-ai-sidebar.presets";
 
 export function loadPresets(prefs: PrefsStore): ModelPreset[] {
   const raw = prefs.get(KEY);
@@ -306,9 +325,11 @@ export function zoteroPrefs(): PrefsStore {
   return {
     get: (k) => {
       const v = (Zotero as any).Prefs.get(k, true);
-      return typeof v === 'string' ? v : undefined;
+      return typeof v === "string" ? v : undefined;
     },
-    set: (k, v) => { (Zotero as any).Prefs.set(k, v, true); },
+    set: (k, v) => {
+      (Zotero as any).Prefs.set(k, v, true);
+    },
   };
 }
 ```
@@ -333,16 +354,18 @@ git commit -m "feat(settings): ModelPreset types + JSON storage with injectable 
 ## Task 3: Provider interface + factory (TDD on factory)
 
 **Files:**
+
 - Create: `src/providers/types.ts`, `src/providers/factory.ts`
 - Create: `tests/providers/factory.test.ts`
 
 - [ ] **Step 1: Define provider types**
 
 Create `src/providers/types.ts`:
-```typescript
-import type { ModelPreset } from '../settings/types';
 
-export type MessageRole = 'user' | 'assistant';
+```typescript
+import type { ModelPreset } from "../settings/types";
+
+export type MessageRole = "user" | "assistant";
 
 export interface Message {
   role: MessageRole;
@@ -350,10 +373,10 @@ export interface Message {
 }
 
 export type StreamChunk =
-  | { type: 'text_delta'; text: string }
-  | { type: 'thinking_delta'; text: string }
-  | { type: 'usage'; input: number; output: number; cacheRead?: number }
-  | { type: 'error'; message: string };
+  | { type: "text_delta"; text: string }
+  | { type: "thinking_delta"; text: string }
+  | { type: "usage"; input: number; output: number; cacheRead?: number }
+  | { type: "error"; message: string };
 
 export interface Provider {
   stream(
@@ -370,26 +393,34 @@ export type ProviderFactory = (preset: ModelPreset) => Provider;
 - [ ] **Step 2: Write the failing factory test**
 
 Create `tests/providers/factory.test.ts`:
-```typescript
-import { describe, it, expect } from 'vitest';
-import { getProvider } from '../../src/providers/factory';
-import { AnthropicProvider } from '../../src/providers/anthropic';
-import { OpenAIProvider } from '../../src/providers/openai';
-import type { ModelPreset } from '../../src/settings/types';
 
-const base: Omit<ModelPreset, 'provider'> = {
-  id: 'x', label: 'x', apiKey: 'k', baseUrl: 'https://x', model: 'm', maxTokens: 1,
+```typescript
+import { describe, it, expect } from "vitest";
+import { getProvider } from "../../src/providers/factory";
+import { AnthropicProvider } from "../../src/providers/anthropic";
+import { OpenAIProvider } from "../../src/providers/openai";
+import type { ModelPreset } from "../../src/settings/types";
+
+const base: Omit<ModelPreset, "provider"> = {
+  id: "x",
+  label: "x",
+  apiKey: "k",
+  baseUrl: "https://x",
+  model: "m",
+  maxTokens: 1,
 };
 
-describe('getProvider', () => {
-  it('returns AnthropicProvider for anthropic preset', () => {
-    expect(getProvider({ ...base, provider: 'anthropic' }))
-      .toBeInstanceOf(AnthropicProvider);
+describe("getProvider", () => {
+  it("returns AnthropicProvider for anthropic preset", () => {
+    expect(getProvider({ ...base, provider: "anthropic" })).toBeInstanceOf(
+      AnthropicProvider,
+    );
   });
 
-  it('returns OpenAIProvider for openai preset', () => {
-    expect(getProvider({ ...base, provider: 'openai' }))
-      .toBeInstanceOf(OpenAIProvider);
+  it("returns OpenAIProvider for openai preset", () => {
+    expect(getProvider({ ...base, provider: "openai" })).toBeInstanceOf(
+      OpenAIProvider,
+    );
   });
 });
 ```
@@ -405,9 +436,10 @@ Expected: FAIL — modules not found.
 - [ ] **Step 4: Stub the two provider classes**
 
 Create `src/providers/anthropic.ts`:
+
 ```typescript
-import type { Provider, Message, StreamChunk } from './types';
-import type { ModelPreset } from '../settings/types';
+import type { Provider, Message, StreamChunk } from "./types";
+import type { ModelPreset } from "../settings/types";
 
 export class AnthropicProvider implements Provider {
   async *stream(
@@ -416,15 +448,16 @@ export class AnthropicProvider implements Provider {
     _preset: ModelPreset,
     _signal: AbortSignal,
   ): AsyncIterable<StreamChunk> {
-    throw new Error('not yet implemented');
+    throw new Error("not yet implemented");
   }
 }
 ```
 
 Create `src/providers/openai.ts`:
+
 ```typescript
-import type { Provider, Message, StreamChunk } from './types';
-import type { ModelPreset } from '../settings/types';
+import type { Provider, Message, StreamChunk } from "./types";
+import type { ModelPreset } from "../settings/types";
 
 export class OpenAIProvider implements Provider {
   async *stream(
@@ -433,22 +466,25 @@ export class OpenAIProvider implements Provider {
     _preset: ModelPreset,
     _signal: AbortSignal,
   ): AsyncIterable<StreamChunk> {
-    throw new Error('not yet implemented');
+    throw new Error("not yet implemented");
   }
 }
 ```
 
 Create `src/providers/factory.ts`:
+
 ```typescript
-import type { Provider } from './types';
-import type { ModelPreset } from '../settings/types';
-import { AnthropicProvider } from './anthropic';
-import { OpenAIProvider } from './openai';
+import type { Provider } from "./types";
+import type { ModelPreset } from "../settings/types";
+import { AnthropicProvider } from "./anthropic";
+import { OpenAIProvider } from "./openai";
 
 export function getProvider(preset: ModelPreset): Provider {
   switch (preset.provider) {
-    case 'anthropic': return new AnthropicProvider();
-    case 'openai':    return new OpenAIProvider();
+    case "anthropic":
+      return new AnthropicProvider();
+    case "openai":
+      return new OpenAIProvider();
   }
 }
 ```
@@ -473,24 +509,32 @@ git commit -m "feat(providers): types, factory, and provider class stubs"
 ## Task 4: AnthropicProvider implementation (TDD with mocked SDK)
 
 **Files:**
+
 - Modify: `src/providers/anthropic.ts`
 - Create: `tests/providers/anthropic.test.ts`
 
 - [ ] **Step 1: Write the failing test**
 
 Create `tests/providers/anthropic.test.ts`:
-```typescript
-import { describe, it, expect, vi } from 'vitest';
-import { AnthropicProvider } from '../../src/providers/anthropic';
-import type { ModelPreset } from '../../src/settings/types';
-import type { StreamChunk } from '../../src/providers/types';
 
-vi.mock('@anthropic-ai/sdk', () => {
+```typescript
+import { describe, it, expect, vi } from "vitest";
+import { AnthropicProvider } from "../../src/providers/anthropic";
+import type { ModelPreset } from "../../src/settings/types";
+import type { StreamChunk } from "../../src/providers/types";
+
+vi.mock("@anthropic-ai/sdk", () => {
   const fakeStream = async function* () {
-    yield { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hello' } };
-    yield { type: 'content_block_delta', delta: { type: 'text_delta', text: ' world' } };
     yield {
-      type: 'message_delta',
+      type: "content_block_delta",
+      delta: { type: "text_delta", text: "Hello" },
+    };
+    yield {
+      type: "content_block_delta",
+      delta: { type: "text_delta", text: " world" },
+    };
+    yield {
+      type: "message_delta",
       usage: { input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 5 },
     };
   };
@@ -501,27 +545,31 @@ vi.mock('@anthropic-ai/sdk', () => {
 });
 
 const preset: ModelPreset = {
-  id: 'a', label: 'Opus', provider: 'anthropic',
-  apiKey: 'sk', baseUrl: 'https://api.anthropic.com',
-  model: 'claude-opus-4-7-20251101', maxTokens: 1000,
+  id: "a",
+  label: "Opus",
+  provider: "anthropic",
+  apiKey: "sk",
+  baseUrl: "https://api.anthropic.com",
+  model: "claude-opus-4-7-20251101",
+  maxTokens: 1000,
 };
 
-describe('AnthropicProvider', () => {
-  it('emits text_delta then usage from a streamed response', async () => {
+describe("AnthropicProvider", () => {
+  it("emits text_delta then usage from a streamed response", async () => {
     const p = new AnthropicProvider();
     const got: StreamChunk[] = [];
     for await (const c of p.stream(
-      [{ role: 'user', content: 'hi' }],
-      'be helpful',
+      [{ role: "user", content: "hi" }],
+      "be helpful",
       preset,
       new AbortController().signal,
     )) {
       got.push(c);
     }
     expect(got).toEqual([
-      { type: 'text_delta', text: 'Hello' },
-      { type: 'text_delta', text: ' world' },
-      { type: 'usage', input: 10, output: 2, cacheRead: 5 },
+      { type: "text_delta", text: "Hello" },
+      { type: "text_delta", text: " world" },
+      { type: "usage", input: 10, output: 2, cacheRead: 5 },
     ]);
   });
 });
@@ -538,10 +586,11 @@ Expected: FAIL with "not yet implemented".
 - [ ] **Step 3: Implement the provider**
 
 Replace `src/providers/anthropic.ts` body:
+
 ```typescript
-import Anthropic from '@anthropic-ai/sdk';
-import type { Provider, Message, StreamChunk } from './types';
-import type { ModelPreset } from '../settings/types';
+import Anthropic from "@anthropic-ai/sdk";
+import type { Provider, Message, StreamChunk } from "./types";
+import type { ModelPreset } from "../settings/types";
 
 export class AnthropicProvider implements Provider {
   async *stream(
@@ -563,28 +612,32 @@ export class AnthropicProvider implements Provider {
           model: preset.model,
           max_tokens: preset.maxTokens,
           system: [
-            { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } },
+            {
+              type: "text",
+              text: systemPrompt,
+              cache_control: { type: "ephemeral" },
+            },
           ],
-          messages: messages.map(m => ({ role: m.role, content: m.content })),
+          messages: messages.map((m) => ({ role: m.role, content: m.content })),
         },
         { signal },
       );
     } catch (err) {
-      yield { type: 'error', message: errMsg(err) };
+      yield { type: "error", message: errMsg(err) };
       return;
     }
 
     try {
       for await (const event of stream as AsyncIterable<any>) {
-        if (event.type === 'content_block_delta') {
-          if (event.delta?.type === 'text_delta') {
-            yield { type: 'text_delta', text: event.delta.text };
-          } else if (event.delta?.type === 'thinking_delta') {
-            yield { type: 'thinking_delta', text: event.delta.thinking };
+        if (event.type === "content_block_delta") {
+          if (event.delta?.type === "text_delta") {
+            yield { type: "text_delta", text: event.delta.text };
+          } else if (event.delta?.type === "thinking_delta") {
+            yield { type: "thinking_delta", text: event.delta.thinking };
           }
-        } else if (event.type === 'message_delta' && event.usage) {
+        } else if (event.type === "message_delta" && event.usage) {
           yield {
-            type: 'usage',
+            type: "usage",
             input: event.usage.input_tokens ?? 0,
             output: event.usage.output_tokens ?? 0,
             cacheRead: event.usage.cache_read_input_tokens,
@@ -592,7 +645,7 @@ export class AnthropicProvider implements Provider {
         }
       }
     } catch (err) {
-      yield { type: 'error', message: errMsg(err) };
+      yield { type: "error", message: errMsg(err) };
     }
   }
 }
@@ -622,23 +675,28 @@ git commit -m "feat(providers): implement AnthropicProvider with prompt caching"
 ## Task 5: OpenAIProvider implementation (TDD with mocked SDK)
 
 **Files:**
+
 - Modify: `src/providers/openai.ts`
 - Create: `tests/providers/openai.test.ts`
 
 - [ ] **Step 1: Write the failing test**
 
 Create `tests/providers/openai.test.ts`:
-```typescript
-import { describe, it, expect, vi } from 'vitest';
-import { OpenAIProvider } from '../../src/providers/openai';
-import type { ModelPreset } from '../../src/settings/types';
-import type { StreamChunk } from '../../src/providers/types';
 
-vi.mock('openai', () => {
+```typescript
+import { describe, it, expect, vi } from "vitest";
+import { OpenAIProvider } from "../../src/providers/openai";
+import type { ModelPreset } from "../../src/settings/types";
+import type { StreamChunk } from "../../src/providers/types";
+
+vi.mock("openai", () => {
   const fakeStream = async function* () {
-    yield { choices: [{ delta: { content: 'Hi' } }] };
-    yield { choices: [{ delta: { content: ' there' } }] };
-    yield { choices: [{ delta: {} }], usage: { prompt_tokens: 7, completion_tokens: 2 } };
+    yield { choices: [{ delta: { content: "Hi" } }] };
+    yield { choices: [{ delta: { content: " there" } }] };
+    yield {
+      choices: [{ delta: {} }],
+      usage: { prompt_tokens: 7, completion_tokens: 2 },
+    };
   };
   const OpenAI = vi.fn().mockImplementation(() => ({
     chat: { completions: { create: vi.fn().mockResolvedValue(fakeStream()) } },
@@ -647,27 +705,31 @@ vi.mock('openai', () => {
 });
 
 const preset: ModelPreset = {
-  id: 'o', label: 'GPT', provider: 'openai',
-  apiKey: 'sk', baseUrl: 'https://api.openai.com/v1',
-  model: 'gpt-5.2', maxTokens: 1000,
+  id: "o",
+  label: "GPT",
+  provider: "openai",
+  apiKey: "sk",
+  baseUrl: "https://api.openai.com/v1",
+  model: "gpt-5.2",
+  maxTokens: 1000,
 };
 
-describe('OpenAIProvider', () => {
-  it('emits text deltas then usage', async () => {
+describe("OpenAIProvider", () => {
+  it("emits text deltas then usage", async () => {
     const p = new OpenAIProvider();
     const got: StreamChunk[] = [];
     for await (const c of p.stream(
-      [{ role: 'user', content: 'hi' }],
-      'be helpful',
+      [{ role: "user", content: "hi" }],
+      "be helpful",
       preset,
       new AbortController().signal,
     )) {
       got.push(c);
     }
     expect(got).toEqual([
-      { type: 'text_delta', text: 'Hi' },
-      { type: 'text_delta', text: ' there' },
-      { type: 'usage', input: 7, output: 2 },
+      { type: "text_delta", text: "Hi" },
+      { type: "text_delta", text: " there" },
+      { type: "usage", input: 7, output: 2 },
     ]);
   });
 });
@@ -684,10 +746,11 @@ Expected: FAIL with "not yet implemented".
 - [ ] **Step 3: Implement the provider**
 
 Replace `src/providers/openai.ts`:
+
 ```typescript
-import OpenAI from 'openai';
-import type { Provider, Message, StreamChunk } from './types';
-import type { ModelPreset } from '../settings/types';
+import OpenAI from "openai";
+import type { Provider, Message, StreamChunk } from "./types";
+import type { ModelPreset } from "../settings/types";
 
 export class OpenAIProvider implements Provider {
   async *stream(
@@ -704,38 +767,38 @@ export class OpenAIProvider implements Provider {
 
     let stream: AsyncIterable<any>;
     try {
-      stream = await client.chat.completions.create(
+      stream = (await client.chat.completions.create(
         {
           model: preset.model,
           max_tokens: preset.maxTokens,
           stream: true,
           stream_options: { include_usage: true },
           messages: [
-            { role: 'system', content: systemPrompt },
-            ...messages.map(m => ({ role: m.role, content: m.content })),
+            { role: "system", content: systemPrompt },
+            ...messages.map((m) => ({ role: m.role, content: m.content })),
           ],
         },
         { signal },
-      ) as any;
+      )) as any;
     } catch (err) {
-      yield { type: 'error', message: errMsg(err) };
+      yield { type: "error", message: errMsg(err) };
       return;
     }
 
     try {
       for await (const event of stream as AsyncIterable<any>) {
         const text = event.choices?.[0]?.delta?.content;
-        if (text) yield { type: 'text_delta', text };
+        if (text) yield { type: "text_delta", text };
         if (event.usage) {
           yield {
-            type: 'usage',
+            type: "usage",
             input: event.usage.prompt_tokens ?? 0,
             output: event.usage.completion_tokens ?? 0,
           };
         }
       }
     } catch (err) {
-      yield { type: 'error', message: errMsg(err) };
+      yield { type: "error", message: errMsg(err) };
     }
   }
 }
@@ -765,53 +828,59 @@ git commit -m "feat(providers): implement OpenAIProvider over chat.completions"
 ## Task 6: Context Builder (TDD with mocked Zotero source)
 
 **Files:**
+
 - Create: `src/context/builder.ts`, `src/context/zotero-source.ts`
 - Create: `tests/context/builder.test.ts`
 
 - [ ] **Step 1: Write the failing test**
 
 Create `tests/context/builder.test.ts`:
+
 ```typescript
-import { describe, it, expect } from 'vitest';
-import { buildContext, type ContextSource } from '../../src/context/builder';
+import { describe, it, expect } from "vitest";
+import { buildContext, type ContextSource } from "../../src/context/builder";
 
 const fakeSource: ContextSource = {
   async getItem(id) {
     if (id !== 1) return null;
     return {
-      title: 'Attention Is All You Need',
-      authors: ['Vaswani', 'Shazeer'],
+      title: "Attention Is All You Need",
+      authors: ["Vaswani", "Shazeer"],
       year: 2017,
-      tags: ['transformer'],
-      abstract: 'We propose a new architecture.',
+      tags: ["transformer"],
+      abstract: "We propose a new architecture.",
     };
   },
-  async getFullText(_id) { return 'A'.repeat(10_000); },
+  async getFullText(_id) {
+    return "A".repeat(10_000);
+  },
 };
 
-describe('buildContext', () => {
-  it('returns base prompt only when no item id', async () => {
+describe("buildContext", () => {
+  it("returns base prompt only when no item id", async () => {
     const ctx = await buildContext(fakeSource, null, 100);
     expect(ctx.systemPrompt).toMatch(/research assistant/);
     expect(ctx.pdfText).toBeNull();
   });
 
-  it('returns base prompt only when item not found', async () => {
+  it("returns base prompt only when item not found", async () => {
     const ctx = await buildContext(fakeSource, 999, 100);
     expect(ctx.systemPrompt).toMatch(/research assistant/);
     expect(ctx.pdfText).toBeNull();
   });
 
-  it('includes metadata block in system prompt when item present', async () => {
+  it("includes metadata block in system prompt when item present", async () => {
     const ctx = await buildContext(fakeSource, 1, 1000);
-    expect(ctx.systemPrompt).toContain('Title: Attention Is All You Need');
-    expect(ctx.systemPrompt).toContain('Authors: Vaswani, Shazeer');
-    expect(ctx.systemPrompt).toContain('Year: 2017');
-    expect(ctx.systemPrompt).toContain('Tags: transformer');
-    expect(ctx.systemPrompt).toContain('Abstract: We propose a new architecture.');
+    expect(ctx.systemPrompt).toContain("Title: Attention Is All You Need");
+    expect(ctx.systemPrompt).toContain("Authors: Vaswani, Shazeer");
+    expect(ctx.systemPrompt).toContain("Year: 2017");
+    expect(ctx.systemPrompt).toContain("Tags: transformer");
+    expect(ctx.systemPrompt).toContain(
+      "Abstract: We propose a new architecture.",
+    );
   });
 
-  it('truncates pdf text to ~4 chars per token budget', async () => {
+  it("truncates pdf text to ~4 chars per token budget", async () => {
     const ctx = await buildContext(fakeSource, 1, 100); // 100 tokens → 400 chars
     expect(ctx.pdfText?.length).toBe(400);
   });
@@ -829,6 +898,7 @@ Expected: FAIL — module not found.
 - [ ] **Step 3: Implement the builder**
 
 Create `src/context/builder.ts`:
+
 ```typescript
 export interface ItemMetadata {
   title: string;
@@ -849,8 +919,8 @@ export interface BuiltContext {
 }
 
 const SYSTEM_BASE =
-  'You are a research assistant helping the user understand academic papers. ' +
-  'Cite the paper when answering questions about its content. Be precise and concise.';
+  "You are a research assistant helping the user understand academic papers. " +
+  "Cite the paper when answering questions about its content. Be precise and concise.";
 
 export async function buildContext(
   source: ContextSource,
@@ -874,11 +944,11 @@ export async function buildContext(
 
 function formatMetadata(item: ItemMetadata): string {
   const lines: string[] = [`Title: ${item.title}`];
-  if (item.authors.length) lines.push(`Authors: ${item.authors.join(', ')}`);
+  if (item.authors.length) lines.push(`Authors: ${item.authors.join(", ")}`);
   if (item.year) lines.push(`Year: ${item.year}`);
-  if (item.tags.length) lines.push(`Tags: ${item.tags.join(', ')}`);
+  if (item.tags.length) lines.push(`Tags: ${item.tags.join(", ")}`);
   if (item.abstract) lines.push(`Abstract: ${item.abstract}`);
-  return lines.join('\n');
+  return lines.join("\n");
 }
 
 function truncate(text: string, tokenBudget: number): string {
@@ -889,8 +959,9 @@ function truncate(text: string, tokenBudget: number): string {
 ```
 
 Create `src/context/zotero-source.ts` (production adapter; not unit-tested — touched only at runtime):
+
 ```typescript
-import type { ContextSource, ItemMetadata } from './builder';
+import type { ContextSource, ItemMetadata } from "./builder";
 
 export const zoteroContextSource: ContextSource = {
   async getItem(itemID) {
@@ -898,11 +969,12 @@ export const zoteroContextSource: ContextSource = {
     const item = await Z.Items.getAsync(itemID);
     if (!item) return null;
     const meta: ItemMetadata = {
-      title: item.getField('title') || '',
-      authors: item.getCreators().map((c: any) =>
-        [c.firstName, c.lastName].filter(Boolean).join(' ')),
-      year: parseYear(item.getField('date')),
-      abstract: item.getField('abstractNote') || undefined,
+      title: item.getField("title") || "",
+      authors: item
+        .getCreators()
+        .map((c: any) => [c.firstName, c.lastName].filter(Boolean).join(" ")),
+      year: parseYear(item.getField("date")),
+      abstract: item.getField("abstractNote") || undefined,
       tags: item.getTags().map((t: any) => t.tag),
     };
     return meta;
@@ -910,15 +982,16 @@ export const zoteroContextSource: ContextSource = {
   async getFullText(itemID) {
     const Z = (globalThis as any).Zotero;
     const attachments = await Z.Items.getAsync(itemID).then((it: any) =>
-      it.getAttachments().map((id: number) => Z.Items.getAsync(id)));
+      it.getAttachments().map((id: number) => Z.Items.getAsync(id)),
+    );
     const items = await Promise.all(attachments);
     for (const att of items) {
-      if (att.attachmentContentType === 'application/pdf') {
+      if (att.attachmentContentType === "application/pdf") {
         const content = await Z.Fulltext.getItemContent(att.id);
         if (content?.content) return content.content as string;
       }
     }
-    return '';
+    return "";
   },
 };
 
@@ -948,48 +1021,50 @@ git commit -m "feat(context): builder + Zotero source adapter"
 ## Task 7: UI state reducer (TDD)
 
 **Files:**
+
 - Create: `src/ui/store.ts`
 - Create: `tests/ui/store.test.ts`
 
 - [ ] **Step 1: Write the failing test**
 
 Create `tests/ui/store.test.ts`:
-```typescript
-import { describe, it, expect } from 'vitest';
-import { reducer, initialState } from '../../src/ui/store';
 
-describe('chat reducer', () => {
-  it('appends user message on user_send', () => {
-    const s = reducer(initialState, { type: 'user_send', content: 'hi' });
-    expect(s.messages).toEqual([{ role: 'user', content: 'hi' }]);
+```typescript
+import { describe, it, expect } from "vitest";
+import { reducer, initialState } from "../../src/ui/store";
+
+describe("chat reducer", () => {
+  it("appends user message on user_send", () => {
+    const s = reducer(initialState, { type: "user_send", content: "hi" });
+    expect(s.messages).toEqual([{ role: "user", content: "hi" }]);
     expect(s.error).toBeNull();
   });
 
-  it('starts an in-progress assistant on assistant_start', () => {
-    const s = reducer(initialState, { type: 'assistant_start' });
-    expect(s.inProgress).toEqual({ role: 'assistant', content: '' });
+  it("starts an in-progress assistant on assistant_start", () => {
+    const s = reducer(initialState, { type: "assistant_start" });
+    expect(s.inProgress).toEqual({ role: "assistant", content: "" });
   });
 
-  it('appends streamed text to in-progress assistant', () => {
-    let s = reducer(initialState, { type: 'assistant_start' });
-    s = reducer(s, { type: 'assistant_text', text: 'Hel' });
-    s = reducer(s, { type: 'assistant_text', text: 'lo' });
-    expect(s.inProgress?.content).toBe('Hello');
+  it("appends streamed text to in-progress assistant", () => {
+    let s = reducer(initialState, { type: "assistant_start" });
+    s = reducer(s, { type: "assistant_text", text: "Hel" });
+    s = reducer(s, { type: "assistant_text", text: "lo" });
+    expect(s.inProgress?.content).toBe("Hello");
   });
 
-  it('finalizes on assistant_done', () => {
-    let s = reducer(initialState, { type: 'assistant_start' });
-    s = reducer(s, { type: 'assistant_text', text: 'ok' });
-    s = reducer(s, { type: 'assistant_done' });
-    expect(s.messages).toEqual([{ role: 'assistant', content: 'ok' }]);
+  it("finalizes on assistant_done", () => {
+    let s = reducer(initialState, { type: "assistant_start" });
+    s = reducer(s, { type: "assistant_text", text: "ok" });
+    s = reducer(s, { type: "assistant_done" });
+    expect(s.messages).toEqual([{ role: "assistant", content: "ok" }]);
     expect(s.inProgress).toBeNull();
   });
 
-  it('clears in-progress on assistant_error and records message', () => {
-    let s = reducer(initialState, { type: 'assistant_start' });
-    s = reducer(s, { type: 'assistant_error', message: 'boom' });
+  it("clears in-progress on assistant_error and records message", () => {
+    let s = reducer(initialState, { type: "assistant_start" });
+    s = reducer(s, { type: "assistant_error", message: "boom" });
     expect(s.inProgress).toBeNull();
-    expect(s.error).toBe('boom');
+    expect(s.error).toBe("boom");
   });
 });
 ```
@@ -1005,11 +1080,12 @@ Expected: FAIL — module not found.
 - [ ] **Step 3: Implement the reducer**
 
 Create `src/ui/store.ts`:
+
 ```typescript
-import type { Message } from '../providers/types';
+import type { Message } from "../providers/types";
 
 export interface InProgress {
-  role: 'assistant';
+  role: "assistant";
   content: string;
   thinking?: string;
 }
@@ -1021,13 +1097,13 @@ export interface ChatState {
 }
 
 export type ChatAction =
-  | { type: 'user_send'; content: string }
-  | { type: 'assistant_start' }
-  | { type: 'assistant_text'; text: string }
-  | { type: 'assistant_thinking'; text: string }
-  | { type: 'assistant_done' }
-  | { type: 'assistant_error'; message: string }
-  | { type: 'reset' };
+  | { type: "user_send"; content: string }
+  | { type: "assistant_start" }
+  | { type: "assistant_text"; text: string }
+  | { type: "assistant_thinking"; text: string }
+  | { type: "assistant_done" }
+  | { type: "assistant_error"; message: string }
+  | { type: "reset" };
 
 export const initialState: ChatState = {
   messages: [],
@@ -1037,33 +1113,42 @@ export const initialState: ChatState = {
 
 export function reducer(s: ChatState, a: ChatAction): ChatState {
   switch (a.type) {
-    case 'user_send':
+    case "user_send":
       return {
         ...s,
-        messages: [...s.messages, { role: 'user', content: a.content }],
+        messages: [...s.messages, { role: "user", content: a.content }],
         error: null,
       };
-    case 'assistant_start':
-      return { ...s, inProgress: { role: 'assistant', content: '' } };
-    case 'assistant_text':
-      if (!s.inProgress) return s;
-      return { ...s, inProgress: { ...s.inProgress, content: s.inProgress.content + a.text } };
-    case 'assistant_thinking':
+    case "assistant_start":
+      return { ...s, inProgress: { role: "assistant", content: "" } };
+    case "assistant_text":
       if (!s.inProgress) return s;
       return {
         ...s,
-        inProgress: { ...s.inProgress, thinking: (s.inProgress.thinking ?? '') + a.text },
+        inProgress: { ...s.inProgress, content: s.inProgress.content + a.text },
       };
-    case 'assistant_done':
+    case "assistant_thinking":
       if (!s.inProgress) return s;
       return {
         ...s,
-        messages: [...s.messages, { role: 'assistant', content: s.inProgress.content }],
+        inProgress: {
+          ...s.inProgress,
+          thinking: (s.inProgress.thinking ?? "") + a.text,
+        },
+      };
+    case "assistant_done":
+      if (!s.inProgress) return s;
+      return {
+        ...s,
+        messages: [
+          ...s.messages,
+          { role: "assistant", content: s.inProgress.content },
+        ],
         inProgress: null,
       };
-    case 'assistant_error':
+    case "assistant_error":
       return { ...s, inProgress: null, error: a.message };
-    case 'reset':
+    case "reset":
       return initialState;
   }
 }
@@ -1089,17 +1174,19 @@ git commit -m "feat(ui): chat state reducer with streaming + error states"
 ## Task 8: ChatView + MessageBubble (manual verify in dev mode)
 
 **Files:**
+
 - Create: `src/ui/MessageBubble.tsx`, `src/ui/ChatView.tsx`
 
 - [ ] **Step 1: Implement MessageBubble**
 
 Create `src/ui/MessageBubble.tsx`:
+
 ```tsx
-import React from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import type { Message } from '../providers/types';
-import type { InProgress } from './store';
+import React from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import type { Message } from "../providers/types";
+import type { InProgress } from "./store";
 
 interface Props {
   message: Message | InProgress;
@@ -1109,10 +1196,14 @@ interface Props {
 export function MessageBubble({ message, streaming = false }: Props) {
   const role = message.role;
   return (
-    <div className={`bubble bubble-${role}${streaming ? ' bubble-streaming' : ''}`}>
-      <div className="bubble-role">{role === 'user' ? 'You' : 'AI'}</div>
+    <div
+      className={`bubble bubble-${role}${streaming ? " bubble-streaming" : ""}`}
+    >
+      <div className="bubble-role">{role === "user" ? "You" : "AI"}</div>
       <div className="bubble-body">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          {message.content}
+        </ReactMarkdown>
       </div>
     </div>
   );
@@ -1122,12 +1213,13 @@ export function MessageBubble({ message, streaming = false }: Props) {
 - [ ] **Step 2: Implement ChatView**
 
 Create `src/ui/ChatView.tsx`:
+
 ```tsx
-import React, { useReducer, useState, useRef, useEffect } from 'react';
-import { reducer, initialState } from './store';
-import { MessageBubble } from './MessageBubble';
-import type { Provider, Message } from '../providers/types';
-import type { ModelPreset } from '../settings/types';
+import React, { useReducer, useState, useRef, useEffect } from "react";
+import { reducer, initialState } from "./store";
+import { MessageBubble } from "./MessageBubble";
+import type { Provider, Message } from "../providers/types";
+import type { ModelPreset } from "../settings/types";
 
 interface Props {
   provider: Provider;
@@ -1137,48 +1229,56 @@ interface Props {
 
 export function ChatView({ provider, preset, buildContext }: Props) {
   const [state, dispatch] = useReducer(reducer, initialState);
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth' });
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [state.messages, state.inProgress]);
 
   const onSend = async () => {
     if (!input.trim() || state.inProgress) return;
     const text = input;
-    setInput('');
-    dispatch({ type: 'user_send', content: text });
+    setInput("");
+    dispatch({ type: "user_send", content: text });
 
     const ctx = await buildContext();
     let messagesForApi: Message[] = [
       ...state.messages,
-      { role: 'user', content: text },
+      { role: "user", content: text },
     ];
     if (ctx.pdfText && state.messages.length === 0) {
       messagesForApi = [
-        { role: 'user', content: `[Paper full text]\n${ctx.pdfText}` },
-        { role: 'assistant', content: 'Got it. Ask me anything about this paper.' },
+        { role: "user", content: `[Paper full text]\n${ctx.pdfText}` },
+        {
+          role: "assistant",
+          content: "Got it. Ask me anything about this paper.",
+        },
         ...messagesForApi,
       ];
     }
 
     const controller = new AbortController();
     abortRef.current = controller;
-    dispatch({ type: 'assistant_start' });
+    dispatch({ type: "assistant_start" });
     try {
       for await (const chunk of provider.stream(
-        messagesForApi, ctx.systemPrompt, preset, controller.signal,
+        messagesForApi,
+        ctx.systemPrompt,
+        preset,
+        controller.signal,
       )) {
-        if (chunk.type === 'text_delta') dispatch({ type: 'assistant_text', text: chunk.text });
-        else if (chunk.type === 'thinking_delta') dispatch({ type: 'assistant_thinking', text: chunk.text });
-        else if (chunk.type === 'error') {
-          dispatch({ type: 'assistant_error', message: chunk.message });
+        if (chunk.type === "text_delta")
+          dispatch({ type: "assistant_text", text: chunk.text });
+        else if (chunk.type === "thinking_delta")
+          dispatch({ type: "assistant_thinking", text: chunk.text });
+        else if (chunk.type === "error") {
+          dispatch({ type: "assistant_error", message: chunk.message });
           return;
         }
       }
-      dispatch({ type: 'assistant_done' });
+      dispatch({ type: "assistant_done" });
     } finally {
       abortRef.current = null;
     }
@@ -1189,17 +1289,21 @@ export function ChatView({ provider, preset, buildContext }: Props) {
   return (
     <div className="chat-view">
       <div className="messages">
-        {state.messages.map((m, i) => <MessageBubble key={i} message={m} />)}
-        {state.inProgress && <MessageBubble message={state.inProgress} streaming />}
+        {state.messages.map((m, i) => (
+          <MessageBubble key={i} message={m} />
+        ))}
+        {state.inProgress && (
+          <MessageBubble message={state.inProgress} streaming />
+        )}
         {state.error && <div className="error">{state.error}</div>}
         <div ref={endRef} />
       </div>
       <div className="input-row">
         <textarea
           value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={e => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
               onSend();
             }
@@ -1207,9 +1311,13 @@ export function ChatView({ provider, preset, buildContext }: Props) {
           placeholder="问点什么... (Ctrl+Enter 发送)"
           rows={3}
         />
-        {state.inProgress
-          ? <button onClick={onStop}>停止</button>
-          : <button onClick={onSend} disabled={!input.trim()}>发送</button>}
+        {state.inProgress ? (
+          <button onClick={onStop}>停止</button>
+        ) : (
+          <button onClick={onSend} disabled={!input.trim()}>
+            发送
+          </button>
+        )}
       </div>
     </div>
   );
@@ -1219,19 +1327,69 @@ export function ChatView({ provider, preset, buildContext }: Props) {
 - [ ] **Step 3: Add a minimal CSS file**
 
 Create `addon/chrome/content/sidebar.css`:
+
 ```css
-.chat-view { display: flex; flex-direction: column; height: 100%; font-family: system-ui, sans-serif; font-size: 13px; }
-.messages { flex: 1; overflow-y: auto; padding: 8px; }
-.bubble { margin: 6px 0; padding: 6px 8px; border-radius: 6px; }
-.bubble-user { background: #e8f0fe; }
-.bubble-assistant { background: #f4f4f4; }
-.bubble-streaming { opacity: 0.85; }
-.bubble-role { font-size: 10px; color: #666; margin-bottom: 2px; text-transform: uppercase; letter-spacing: 0.05em; }
-.bubble-body p { margin: 4px 0; }
-.bubble-body pre { background: #2b2b2b; color: #e6e6e6; padding: 6px; border-radius: 4px; overflow-x: auto; }
-.input-row { display: flex; gap: 6px; padding: 8px; border-top: 1px solid #ddd; }
-.input-row textarea { flex: 1; resize: vertical; font-family: inherit; }
-.error { color: #c00; padding: 6px; background: #fee; border-radius: 4px; margin: 6px 0; }
+.chat-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  font-family: system-ui, sans-serif;
+  font-size: 13px;
+}
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+.bubble {
+  margin: 6px 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+.bubble-user {
+  background: #e8f0fe;
+}
+.bubble-assistant {
+  background: #f4f4f4;
+}
+.bubble-streaming {
+  opacity: 0.85;
+}
+.bubble-role {
+  font-size: 10px;
+  color: #666;
+  margin-bottom: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.bubble-body p {
+  margin: 4px 0;
+}
+.bubble-body pre {
+  background: #2b2b2b;
+  color: #e6e6e6;
+  padding: 6px;
+  border-radius: 4px;
+  overflow-x: auto;
+}
+.input-row {
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  border-top: 1px solid #ddd;
+}
+.input-row textarea {
+  flex: 1;
+  resize: vertical;
+  font-family: inherit;
+}
+.error {
+  color: #c00;
+  padding: 6px;
+  background: #fee;
+  border-radius: 4px;
+  margin: 6px 0;
+}
 ```
 
 - [ ] **Step 4: Commit**
@@ -1246,14 +1404,16 @@ git commit -m "feat(ui): ChatView + MessageBubble with streaming markdown"
 ## Task 9: PresetSwitcher + ContextCard
 
 **Files:**
+
 - Create: `src/ui/PresetSwitcher.tsx`, `src/ui/ContextCard.tsx`
 
 - [ ] **Step 1: Implement PresetSwitcher**
 
 Create `src/ui/PresetSwitcher.tsx`:
+
 ```tsx
-import React from 'react';
-import type { ModelPreset } from '../settings/types';
+import React from "react";
+import type { ModelPreset } from "../settings/types";
 
 interface Props {
   presets: ModelPreset[];
@@ -1262,7 +1422,12 @@ interface Props {
   onOpenSettings: () => void;
 }
 
-export function PresetSwitcher({ presets, selectedId, onSelect, onOpenSettings }: Props) {
+export function PresetSwitcher({
+  presets,
+  selectedId,
+  onSelect,
+  onOpenSettings,
+}: Props) {
   if (presets.length === 0) {
     return (
       <div className="preset-empty">
@@ -1274,16 +1439,18 @@ export function PresetSwitcher({ presets, selectedId, onSelect, onOpenSettings }
   return (
     <div className="preset-switcher">
       <select
-        value={selectedId ?? ''}
-        onChange={e => onSelect(e.target.value)}
+        value={selectedId ?? ""}
+        onChange={(e) => onSelect(e.target.value)}
       >
-        {presets.map(p => (
+        {presets.map((p) => (
           <option key={p.id} value={p.id}>
-            {p.label} ({p.provider} · {p.model || 'no model'})
+            {p.label} ({p.provider} · {p.model || "no model"})
           </option>
         ))}
       </select>
-      <button onClick={onOpenSettings} title="设置">⚙</button>
+      <button onClick={onOpenSettings} title="设置">
+        ⚙
+      </button>
     </div>
   );
 }
@@ -1292,9 +1459,10 @@ export function PresetSwitcher({ presets, selectedId, onSelect, onOpenSettings }
 - [ ] **Step 2: Implement ContextCard**
 
 Create `src/ui/ContextCard.tsx`:
+
 ```tsx
-import React from 'react';
-import type { ItemMetadata } from '../context/builder';
+import React from "react";
+import type { ItemMetadata } from "../context/builder";
 
 interface Props {
   item: ItemMetadata | null;
@@ -1308,9 +1476,9 @@ export function ContextCard({ item }: Props) {
     <div className="ctx-card">
       <div className="ctx-title">{item.title}</div>
       <div className="ctx-meta">
-        {item.authors.slice(0, 3).join(', ')}
-        {item.authors.length > 3 ? ' et al.' : ''}
-        {item.year ? ` · ${item.year}` : ''}
+        {item.authors.slice(0, 3).join(", ")}
+        {item.authors.length > 3 ? " et al." : ""}
+        {item.year ? ` · ${item.year}` : ""}
       </div>
     </div>
   );
@@ -1320,13 +1488,36 @@ export function ContextCard({ item }: Props) {
 - [ ] **Step 3: Append styles to `addon/chrome/content/sidebar.css`**
 
 Append:
+
 ```css
-.preset-switcher, .preset-empty { display: flex; gap: 4px; padding: 6px 8px; align-items: center; border-bottom: 1px solid #ddd; }
-.preset-switcher select { flex: 1; }
-.ctx-card { padding: 6px 8px; background: #fafafa; border-bottom: 1px solid #eee; }
-.ctx-empty { color: #999; font-style: italic; }
-.ctx-title { font-weight: 600; font-size: 12px; }
-.ctx-meta { font-size: 11px; color: #666; }
+.preset-switcher,
+.preset-empty {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  align-items: center;
+  border-bottom: 1px solid #ddd;
+}
+.preset-switcher select {
+  flex: 1;
+}
+.ctx-card {
+  padding: 6px 8px;
+  background: #fafafa;
+  border-bottom: 1px solid #eee;
+}
+.ctx-empty {
+  color: #999;
+  font-style: italic;
+}
+.ctx-title {
+  font-weight: 600;
+  font-size: 12px;
+}
+.ctx-meta {
+  font-size: 11px;
+  color: #666;
+}
 ```
 
 - [ ] **Step 4: Commit**
@@ -1341,22 +1532,24 @@ git commit -m "feat(ui): preset switcher + context card components"
 ## Task 10: Sidebar mount in Zotero ItemPane
 
 **Files:**
+
 - Create: `src/ui/App.tsx`, `src/modules/sidebar.ts`
 - Modify: `src/hooks.ts` (call `registerSidebar` on startup, unregister on shutdown)
 
 - [ ] **Step 1: Implement App**
 
 Create `src/ui/App.tsx`:
+
 ```tsx
-import React, { useEffect, useState, useCallback } from 'react';
-import { ChatView } from './ChatView';
-import { PresetSwitcher } from './PresetSwitcher';
-import { ContextCard } from './ContextCard';
-import { loadPresets, zoteroPrefs } from '../settings/storage';
-import { getProvider } from '../providers/factory';
-import { buildContext, type ItemMetadata } from '../context/builder';
-import { zoteroContextSource } from '../context/zotero-source';
-import type { ModelPreset } from '../settings/types';
+import React, { useEffect, useState, useCallback } from "react";
+import { ChatView } from "./ChatView";
+import { PresetSwitcher } from "./PresetSwitcher";
+import { ContextCard } from "./ContextCard";
+import { loadPresets, zoteroPrefs } from "../settings/storage";
+import { getProvider } from "../providers/factory";
+import { buildContext, type ItemMetadata } from "../context/builder";
+import { zoteroContextSource } from "../context/zotero-source";
+import type { ModelPreset } from "../settings/types";
 
 interface Props {
   itemID: number | null;
@@ -1375,11 +1568,14 @@ export function App({ itemID, openPreferences }: Props) {
   }, []);
 
   useEffect(() => {
-    if (itemID == null) { setItem(null); return; }
+    if (itemID == null) {
+      setItem(null);
+      return;
+    }
     zoteroContextSource.getItem(itemID).then(setItem);
   }, [itemID]);
 
-  const preset = presets.find(p => p.id === selectedId) ?? null;
+  const preset = presets.find((p) => p.id === selectedId) ?? null;
   const provider = preset ? getProvider(preset) : null;
 
   const buildCtx = useCallback(async () => {
@@ -1387,7 +1583,7 @@ export function App({ itemID, openPreferences }: Props) {
   }, [itemID]);
 
   return (
-    <div className="zai-app" key={itemID ?? 'no-item'}>
+    <div className="zai-app" key={itemID ?? "no-item"}>
       <PresetSwitcher
         presets={presets}
         selectedId={selectedId}
@@ -1395,9 +1591,11 @@ export function App({ itemID, openPreferences }: Props) {
         onOpenSettings={openPreferences}
       />
       <ContextCard item={item} />
-      {provider && preset
-        ? <ChatView provider={provider} preset={preset} buildContext={buildCtx} />
-        : <div className="empty-state">先到设置里添加一个模型预设。</div>}
+      {provider && preset ? (
+        <ChatView provider={provider} preset={preset} buildContext={buildCtx} />
+      ) : (
+        <div className="empty-state">先到设置里添加一个模型预设。</div>
+      )}
     </div>
   );
 }
@@ -1408,10 +1606,11 @@ The `key={itemID ?? 'no-item'}` is deliberate: switching items remounts the chat
 - [ ] **Step 2: Implement sidebar registration**
 
 Create `src/modules/sidebar.ts`:
+
 ```typescript
-import React from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { App } from '../ui/App';
+import React from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { App } from "../ui/App";
 
 let registeredId: string | null = null;
 const roots = new WeakMap<Element, Root>();
@@ -1419,13 +1618,20 @@ const roots = new WeakMap<Element, Root>();
 export function registerSidebar() {
   const Z = (globalThis as any).Zotero;
   registeredId = Z.ItemPaneManager.registerSection({
-    paneID: 'zotero-ai-sidebar',
-    pluginID: 'zotero-ai-sidebar@local',
-    header: { l10nID: 'zai-sidebar-header', icon: 'chrome://zotero-ai-sidebar/content/icons/icon32.png' },
-    sidenav: { l10nID: 'zai-sidebar-sidenav', icon: 'chrome://zotero-ai-sidebar/content/icons/icon32.png' },
-    bodyXHTML: '<html:div id="zai-root" style="height:100%;display:flex;flex-direction:column"></html:div>',
+    paneID: "zotero-ai-sidebar",
+    pluginID: "zotero-ai-sidebar@local",
+    header: {
+      l10nID: "zai-sidebar-header",
+      icon: "chrome://zotero-ai-sidebar/content/icons/icon32.png",
+    },
+    sidenav: {
+      l10nID: "zai-sidebar-sidenav",
+      icon: "chrome://zotero-ai-sidebar/content/icons/icon32.png",
+    },
+    bodyXHTML:
+      '<html:div id="zai-root" style="height:100%;display:flex;flex-direction:column"></html:div>',
     onRender: ({ body, item }: any) => {
-      const mount = body.querySelector('#zai-root') as HTMLElement;
+      const mount = body.querySelector("#zai-root") as HTMLElement;
       if (!mount) return;
       let root = roots.get(mount);
       if (!root) {
@@ -1433,19 +1639,25 @@ export function registerSidebar() {
         roots.set(mount, root);
       }
       const itemID = item ? (item.id as number) : null;
-      root.render(React.createElement(App, {
-        itemID,
-        openPreferences: () => Z.PreferencePanes.openWith({ id: 'zotero-ai-sidebar-prefs' }),
-      }));
+      root.render(
+        React.createElement(App, {
+          itemID,
+          openPreferences: () =>
+            Z.PreferencePanes.openWith({ id: "zotero-ai-sidebar-prefs" }),
+        }),
+      );
     },
     onItemChange: ({ body, item }: any) => {
-      const mount = body.querySelector('#zai-root') as HTMLElement;
+      const mount = body.querySelector("#zai-root") as HTMLElement;
       const root = roots.get(mount);
       if (!root) return;
-      root.render(React.createElement(App, {
-        itemID: item ? (item.id as number) : null,
-        openPreferences: () => Z.PreferencePanes.openWith({ id: 'zotero-ai-sidebar-prefs' }),
-      }));
+      root.render(
+        React.createElement(App, {
+          itemID: item ? (item.id as number) : null,
+          openPreferences: () =>
+            Z.PreferencePanes.openWith({ id: "zotero-ai-sidebar-prefs" }),
+        }),
+      );
     },
   });
 }
@@ -1461,8 +1673,9 @@ export function unregisterSidebar() {
 - [ ] **Step 3: Wire into hooks**
 
 Modify `src/hooks.ts` (template ships an existing `hooks.ts` — append to its existing startup/shutdown handlers, do not delete template scaffolding):
+
 ```typescript
-import { registerSidebar, unregisterSidebar } from './modules/sidebar';
+import { registerSidebar, unregisterSidebar } from "./modules/sidebar";
 
 // inside the existing onStartup or equivalent:
 registerSidebar();
@@ -1474,12 +1687,14 @@ unregisterSidebar();
 - [ ] **Step 4: Add Fluent strings**
 
 Edit `addon/locale/en-US/addon.ftl`:
+
 ```
 zai-sidebar-header = AI Chat
 zai-sidebar-sidenav = AI
 ```
 
 Edit `addon/locale/zh-CN/addon.ftl`:
+
 ```
 zai-sidebar-header = AI 对话
 zai-sidebar-sidenav = AI
@@ -1492,6 +1707,7 @@ npm run build
 ```
 
 Install the freshly built `.xpi` in Zotero 7. Open any item. Confirm:
+
 - The sidebar tab labelled "AI Chat" / "AI 对话" appears in the right pane.
 - Selecting an item shows that item's title in the ContextCard.
 - Switching items resets the chat history.
@@ -1510,6 +1726,7 @@ git commit -m "feat(integration): mount React sidebar in Zotero ItemPane"
 ## Task 11: Preferences Pane (preset CRUD)
 
 **Files:**
+
 - Create: `src/ui/PreferencesPane.tsx`, `src/modules/preferences.ts`
 - Create: `addon/chrome/content/preferences.xhtml`
 - Modify: `src/hooks.ts` (call `registerPreferences` on startup)
@@ -1518,16 +1735,24 @@ git commit -m "feat(integration): mount React sidebar in Zotero ItemPane"
 - [ ] **Step 1: Implement preferences React UI**
 
 Create `src/ui/PreferencesPane.tsx`:
+
 ```tsx
-import React, { useEffect, useState } from 'react';
-import { loadPresets, savePresets, zoteroPrefs } from '../settings/storage';
-import { newPreset, DEFAULT_BASE_URLS, type ModelPreset, type ProviderKind } from '../settings/types';
+import React, { useEffect, useState } from "react";
+import { loadPresets, savePresets, zoteroPrefs } from "../settings/storage";
+import {
+  newPreset,
+  DEFAULT_BASE_URLS,
+  type ModelPreset,
+  type ProviderKind,
+} from "../settings/types";
 
 export function PreferencesPane() {
   const [presets, setPresets] = useState<ModelPreset[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  useEffect(() => { setPresets(loadPresets(zoteroPrefs())); }, []);
+  useEffect(() => {
+    setPresets(loadPresets(zoteroPrefs()));
+  }, []);
 
   const persist = (next: ModelPreset[]) => {
     setPresets(next);
@@ -1541,37 +1766,43 @@ export function PreferencesPane() {
   };
 
   const update = (id: string, patch: Partial<ModelPreset>) => {
-    persist(presets.map(p => p.id === id ? { ...p, ...patch } : p));
+    persist(presets.map((p) => (p.id === id ? { ...p, ...patch } : p)));
   };
 
-  const remove = (id: string) => persist(presets.filter(p => p.id !== id));
+  const remove = (id: string) => persist(presets.filter((p) => p.id !== id));
 
   return (
     <div className="prefs-pane">
       <h3>模型预设</h3>
       <div className="add-buttons">
-        <button onClick={() => add('anthropic')}>+ Anthropic</button>
-        <button onClick={() => add('openai')}>+ OpenAI 兼容</button>
+        <button onClick={() => add("anthropic")}>+ Anthropic</button>
+        <button onClick={() => add("openai")}>+ OpenAI 兼容</button>
       </div>
       <div className="preset-list">
-        {presets.map(p => (
+        {presets.map((p) => (
           <PresetRow
             key={p.id}
             preset={p}
             expanded={editingId === p.id}
             onToggle={() => setEditingId(editingId === p.id ? null : p.id)}
-            onUpdate={patch => update(p.id, patch)}
+            onUpdate={(patch) => update(p.id, patch)}
             onRemove={() => remove(p.id)}
           />
         ))}
-        {presets.length === 0 && <div className="empty">暂无预设。点击上方按钮添加。</div>}
+        {presets.length === 0 && (
+          <div className="empty">暂无预设。点击上方按钮添加。</div>
+        )}
       </div>
     </div>
   );
 }
 
 function PresetRow({
-  preset, expanded, onToggle, onUpdate, onRemove,
+  preset,
+  expanded,
+  onToggle,
+  onUpdate,
+  onRemove,
 }: {
   preset: ModelPreset;
   expanded: boolean;
@@ -1584,28 +1815,57 @@ function PresetRow({
       <div className="preset-summary" onClick={onToggle}>
         <span className="preset-label">{preset.label}</span>
         <span className="preset-provider">{preset.provider}</span>
-        <span className="preset-model">{preset.model || '(no model)'}</span>
-        <button onClick={e => { e.stopPropagation(); onRemove(); }}>删除</button>
+        <span className="preset-model">{preset.model || "(no model)"}</span>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove();
+          }}
+        >
+          删除
+        </button>
       </div>
       {expanded && (
         <div className="preset-edit">
           <Field label="名称">
-            <input value={preset.label} onChange={e => onUpdate({ label: e.target.value })} />
+            <input
+              value={preset.label}
+              onChange={(e) => onUpdate({ label: e.target.value })}
+            />
           </Field>
           <Field label="API Key">
-            <input type="password" value={preset.apiKey} onChange={e => onUpdate({ apiKey: e.target.value })} />
+            <input
+              type="password"
+              value={preset.apiKey}
+              onChange={(e) => onUpdate({ apiKey: e.target.value })}
+            />
           </Field>
           <Field label="Base URL">
-            <input value={preset.baseUrl} onChange={e => onUpdate({ baseUrl: e.target.value })}
-              placeholder={DEFAULT_BASE_URLS[preset.provider]} />
+            <input
+              value={preset.baseUrl}
+              onChange={(e) => onUpdate({ baseUrl: e.target.value })}
+              placeholder={DEFAULT_BASE_URLS[preset.provider]}
+            />
           </Field>
           <Field label="Model ID">
-            <input value={preset.model} onChange={e => onUpdate({ model: e.target.value })}
-              placeholder={preset.provider === 'anthropic' ? 'claude-opus-4-7-…' : 'gpt-5.2'} />
+            <input
+              value={preset.model}
+              onChange={(e) => onUpdate({ model: e.target.value })}
+              placeholder={
+                preset.provider === "anthropic"
+                  ? "claude-opus-4-7-…"
+                  : "gpt-5.2"
+              }
+            />
           </Field>
           <Field label="Max tokens">
-            <input type="number" value={preset.maxTokens}
-              onChange={e => onUpdate({ maxTokens: parseInt(e.target.value, 10) || 0 })} />
+            <input
+              type="number"
+              value={preset.maxTokens}
+              onChange={(e) =>
+                onUpdate({ maxTokens: parseInt(e.target.value, 10) || 0 })
+              }
+            />
           </Field>
         </div>
       )}
@@ -1613,7 +1873,13 @@ function PresetRow({
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
   return (
     <label className="prefs-field">
       <span>{label}</span>
@@ -1626,6 +1892,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 - [ ] **Step 2: Add preferences XHTML shell**
 
 Create `addon/chrome/content/preferences.xhtml`:
+
 ```xml
 <?xml version="1.0"?>
 <html xmlns="http://www.w3.org/1999/xhtml">
@@ -1641,21 +1908,22 @@ Create `addon/chrome/content/preferences.xhtml`:
 - [ ] **Step 3: Implement preferences registration**
 
 Create `src/modules/preferences.ts`:
+
 ```typescript
-import React from 'react';
-import { createRoot } from 'react-dom/client';
-import { PreferencesPane } from '../ui/PreferencesPane';
+import React from "react";
+import { createRoot } from "react-dom/client";
+import { PreferencesPane } from "../ui/PreferencesPane";
 
 export function registerPreferences() {
   const Z = (globalThis as any).Zotero;
   Z.PreferencePanes.register({
-    pluginID: 'zotero-ai-sidebar@local',
-    src: 'chrome://zotero-ai-sidebar/content/preferences.xhtml',
-    label: 'AI Sidebar',
-    image: 'chrome://zotero-ai-sidebar/content/icons/icon32.png',
-    id: 'zotero-ai-sidebar-prefs',
+    pluginID: "zotero-ai-sidebar@local",
+    src: "chrome://zotero-ai-sidebar/content/preferences.xhtml",
+    label: "AI Sidebar",
+    image: "chrome://zotero-ai-sidebar/content/icons/icon32.png",
+    id: "zotero-ai-sidebar-prefs",
     onLoad: ({ doc }: any) => {
-      const mount = doc.getElementById('zai-prefs-root');
+      const mount = doc.getElementById("zai-prefs-root");
       if (!mount) return;
       const root = createRoot(mount);
       root.render(React.createElement(PreferencesPane));
@@ -1667,8 +1935,9 @@ export function registerPreferences() {
 - [ ] **Step 4: Wire into startup**
 
 Modify `src/hooks.ts` to call `registerPreferences()` alongside `registerSidebar()`:
+
 ```typescript
-import { registerPreferences } from './modules/preferences';
+import { registerPreferences } from "./modules/preferences";
 
 // inside existing onStartup:
 registerPreferences();
@@ -1677,19 +1946,67 @@ registerPreferences();
 - [ ] **Step 5: Append preferences styles**
 
 Append to `addon/chrome/content/sidebar.css`:
+
 ```css
-.prefs-pane h3 { margin-top: 0; }
-.add-buttons { display: flex; gap: 6px; margin-bottom: 12px; }
-.preset-row { border: 1px solid #ddd; border-radius: 6px; margin-bottom: 6px; }
-.preset-summary { display: flex; gap: 8px; padding: 8px; align-items: center; cursor: pointer; }
-.preset-label { font-weight: 600; }
-.preset-provider { color: #666; font-size: 11px; text-transform: uppercase; }
-.preset-model { flex: 1; color: #333; font-family: monospace; font-size: 12px; }
-.preset-edit { padding: 8px; border-top: 1px solid #eee; display: flex; flex-direction: column; gap: 6px; }
-.prefs-field { display: flex; align-items: center; gap: 8px; }
-.prefs-field span { width: 100px; flex-shrink: 0; font-size: 12px; }
-.prefs-field input { flex: 1; }
-.empty { color: #999; padding: 12px; text-align: center; }
+.prefs-pane h3 {
+  margin-top: 0;
+}
+.add-buttons {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.preset-row {
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  margin-bottom: 6px;
+}
+.preset-summary {
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  align-items: center;
+  cursor: pointer;
+}
+.preset-label {
+  font-weight: 600;
+}
+.preset-provider {
+  color: #666;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+.preset-model {
+  flex: 1;
+  color: #333;
+  font-family: monospace;
+  font-size: 12px;
+}
+.preset-edit {
+  padding: 8px;
+  border-top: 1px solid #eee;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.prefs-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.prefs-field span {
+  width: 100px;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+.prefs-field input {
+  flex: 1;
+}
+.empty {
+  color: #999;
+  padding: 12px;
+  text-align: center;
+}
 ```
 
 - [ ] **Step 6: Build, install, manual verify**
@@ -1699,6 +2016,7 @@ npm run build
 ```
 
 Install. In Zotero 7 → Edit → Preferences → "AI Sidebar". Confirm:
+
 - Preferences pane appears.
 - Can add an Anthropic preset, fill in label / API key / model id, expand/collapse, delete.
 - Reopening preferences shows the saved presets.
@@ -1735,6 +2053,7 @@ Select no item. Confirm the sidebar shows "未选中条目，纯聊天模式". S
 - [ ] **Step 4: Paper chat**
 
 Select a paper that has a PDF attachment with extracted full-text. Confirm:
+
 - ContextCard shows the title + authors + year.
 - First message attaches the PDF text (no visible UI change but the assistant should be able to answer paper-specific questions).
 - Ask "summarize this paper in 3 bullet points". Confirm the response references the paper's content.
@@ -1758,6 +2077,7 @@ Send a message that will produce a long response. Click "停止" mid-stream. Con
 - [ ] **Step 9: Commit checklist results**
 
 If everything passes, no code changes — just tag the release:
+
 ```bash
 git tag v0.1.0
 ```
@@ -1768,16 +2088,41 @@ If issues are found, file them as separate fix tasks; do not amend this task.
 
 ## Coverage Map (spec → tasks)
 
-| Spec section | Implemented in |
-|---|---|
-| §3.1 Sidebar UI | T8 (ChatView/MessageBubble), T9 (PresetSwitcher/ContextCard), T10 (mount) |
-| §3.2 Provider Layer | T3 (interface/factory), T4 (Anthropic), T5 (OpenAI) |
-| §3.3 Context Builder | T6 |
-| §4.1 Model Presets | T2 (storage), T11 (UI) |
-| §4.1 baseUrl flexibility | T2 (type), T4/T5 (passed to SDKs), T11 (editable in UI) |
-| §4.2 API key storage (plaintext, Zotero prefs) | T2 |
-| §4.3 In-memory conversation, scoped to item | T7 (reducer), T10 (`key={itemID}` remount) |
-| §5 Build pipeline | T1 |
-| §6 Error handling (boundary only, no fallback) | T4/T5 (error chunk), T7 (assistant_error), T8 (red bubble) |
-| §7 Testing strategy | T2/T4/T5/T6/T7 unit tests; T12 manual e2e |
-| §8 MVP non-goals | not implemented (correct) |
+| Spec section                                   | Implemented in                                                            |
+| ---------------------------------------------- | ------------------------------------------------------------------------- |
+| §3.1 Sidebar UI                                | T8 (ChatView/MessageBubble), T9 (PresetSwitcher/ContextCard), T10 (mount) |
+| §3.2 Provider Layer                            | T3 (interface/factory), T4 (Anthropic), T5 (OpenAI)                       |
+| §3.3 Context Builder                           | T6                                                                        |
+| §4.1 Model Presets                             | T2 (storage), T11 (UI)                                                    |
+| §4.1 baseUrl flexibility                       | T2 (type), T4/T5 (passed to SDKs), T11 (editable in UI)                   |
+| §4.2 API key storage (plaintext, Zotero prefs) | T2                                                                        |
+| §4.3 In-memory conversation, scoped to item    | T7 (reducer), T10 (`key={itemID}` remount)                                |
+| §5 Build pipeline                              | T1                                                                        |
+| §6 Error handling (boundary only, no fallback) | T4/T5 (error chunk), T7 (assistant_error), T8 (red bubble)                |
+| §7 Testing strategy                            | T2/T4/T5/T6/T7 unit tests; T12 manual e2e                                 |
+| §8 MVP non-goals                               | not implemented (correct)                                                 |
+
+## Follow-up: Reader-Scoped Annotation Retrieval
+
+**Problem:** When the user asks to annotate a limited section such as “第一章” or “Introduction”, the model can currently call `zotero_get_reader_pdf_text` without `start/end`, which sends the whole Reader text layer before writing highlights. This is correct for full-paper annotation, but too broad for section-scoped annotation.
+
+**Goal:** Let the model locate and read only the Reader text range needed for PDF write workflows, while keeping the Codex-style rule that the model chooses tools and the local harness only executes them.
+
+**Planned tools / behavior:**
+
+- [ ] Add `zotero_search_reader_pdf(query, topK?)` that searches the active Reader text layer and returns bounded passages with `chars start-end`, using the same text source as `zotero_annotate_passage`.
+- [ ] Keep `zotero_get_reader_pdf_text({ start, end })` as the range reader for Reader text; use it after `zotero_search_reader_pdf` identifies section boundaries.
+- [ ] Update the tool manual: for section-scoped PDF writes, the model must first search Reader text for headings/boundaries, then read only the relevant range; only full-paper annotation should call `zotero_get_reader_pdf_text` without `start/end`.
+- [ ] Add tests for “Reader search returns ranges”, “Reader range caps by policy”, and “cache search remains separate from Reader search”.
+- [ ] Keep PDF modification gated by `requiresApproval` / YOLO; adding Reader search must not add any hidden write path.
+
+**Expected flow:**
+
+```text
+User: 给第一章增加注释
+Model: zotero_get_current_item
+Model: zotero_search_reader_pdf({ query: "Introduction" })
+Model: zotero_search_reader_pdf({ query: "2" / next section title })
+Model: zotero_get_reader_pdf_text({ start, end })
+Model: zotero_annotate_passage(...) for selected sentences
+```

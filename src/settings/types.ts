@@ -23,6 +23,7 @@ export interface ModelPreset {
     reasoningEffort?: ReasoningEffort;
     reasoningSummary?: ReasoningSummary;
     agentPermissionMode?: AgentPermissionMode;
+    omitMaxOutputTokens?: boolean;
     [key: string]: unknown;
   };
 }

@@ -105,7 +105,7 @@ export class OpenAIProvider implements Provider {
           model: preset.model,
           instructions: systemPrompt,
           input: toOpenAIInput(messages) as never,
-          max_output_tokens: preset.maxTokens,
+          ...maxOutputTokensParam(preset),
           reasoning: reasoningOptions(preset),
           stream: true,
           store: false,
@@ -152,7 +152,7 @@ export class OpenAIProvider implements Provider {
             model: preset.model,
             instructions: systemPrompt,
             input,
-            max_output_tokens: preset.maxTokens,
+            ...maxOutputTokensParam(preset),
             reasoning: reasoningOptions(preset),
             tools: tools.map(openAIToolSpec),
             tool_choice: 'auto',
@@ -398,6 +398,14 @@ function reasoningOptions(preset: ModelPreset): {
     effort: preset.extras?.reasoningEffort ?? 'xhigh',
     ...(summary === 'none' ? {} : { summary }),
   };
+}
+
+function maxOutputTokensParam(
+  preset: ModelPreset,
+): { max_output_tokens?: number } {
+  return preset.extras?.omitMaxOutputTokens === true
+    ? {}
+    : { max_output_tokens: preset.maxTokens };
 }
 
 function responseEventToChunk(event: ResponseEvent): StreamChunk | null {
