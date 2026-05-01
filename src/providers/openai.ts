@@ -12,6 +12,26 @@ import type {
   ReasoningEffort,
   ReasoningSummary,
 } from '../settings/types';
+import { DEFAULT_CONTEXT_POLICY } from '../context/policy';
+
+// OpenAI Responses-API tool loop. Three load-bearing decisions, all aligned
+// with OpenAI Codex's harness model:
+//
+// 1. INVARIANT: `store: false`. We do NOT rely on server-persisted response
+//    item IDs. Every iteration re-sends the full conversation `input` —
+//    user/assistant turns, function calls, function-call outputs.
+//    GOTCHA: previously we tried to chain via `previous_response_id`; that
+//    broke the moment a turn had `store:false` (no persisted ID).
+//    REF: CLAUDE.md "Development Lessons", Codex `responses/streaming.rs`.
+//
+// 2. INVARIANT: `parallel_tool_calls: false`. Tools run strictly sequentially
+//    so each tool's output is in the input list before the next call is
+//    issued. WHY: lets later calls see earlier passages/ranges in the same
+//    turn (the typical Codex "search → read range" pattern).
+//
+// 3. `maxToolIterations` is a SAFETY FUSE, not routing logic. We do not
+//    branch behavior on iteration count; we only stop the loop when the
+//    fuse blows. Default comes from policy (single source of truth).
 
 interface ResponseUsage {
   input_tokens?: number;
@@ -117,8 +137,12 @@ export class OpenAIProvider implements Provider {
   ): AsyncIterable<StreamChunk> {
     const tools = options.tools ?? [];
     const toolMap = new Map(tools.map((tool) => [tool.name, tool]));
+    // `input` accumulates across iterations: original messages, then each
+    // function_call we replay, then each function_call_output we synthesize
+    // from local tool execution. The model sees the same shape every turn.
     const input: unknown[] = toOpenAIInput(messages);
-    const maxIterations = options.maxToolIterations ?? 6;
+    const maxIterations =
+      options.maxToolIterations ?? DEFAULT_CONTEXT_POLICY.maxToolIterations;
 
     for (let iteration = 0; iteration <= maxIterations; iteration++) {
       let stream: AsyncIterable<unknown>;
@@ -191,11 +215,15 @@ export class OpenAIProvider implements Provider {
 
       if (failed) return;
 
+      // Natural exit: model produced text-only output. No tool calls ⇒ done.
       if (calls.length === 0) {
         if (usage) yield usageChunk(usage);
         return;
       }
 
+      // Replay function_call items into `input` BEFORE running them. The
+      // Responses API requires the call to appear in the request that also
+      // contains its function_call_output, otherwise the next turn errors.
       input.push(...calls.map(functionCallReplayItem));
 
       for (const call of calls) {
@@ -226,6 +254,8 @@ export class OpenAIProvider implements Provider {
       }
     }
 
+    // Safety-fuse blew. INVARIANT: never silently truncate; surface as error
+    // so the user can see the loop bound was the limiter, not the model.
     yield {
       type: 'error',
       message: 'Tool loop stopped because the model exceeded the local tool iteration limit.',
@@ -265,6 +295,11 @@ async function executeToolCall(
     };
   }
 
+  // INVARIANT: write tools (annotations, future Zotero mutations) MUST gate
+  // through requiresApproval. In default mode they refuse; only YOLO mode
+  // bypasses. There is no UI approval prompt yet — that is the planned
+  // path mirroring Codex's `AskForApproval::OnRequest`.
+  // REF: CLAUDE.md non-negotiable "No hidden Zotero writes".
   if (tool.requiresApproval && permissionMode !== 'yolo') {
     return {
       status: 'error',
@@ -351,33 +386,13 @@ function isFunctionCall(item: ResponseOutputItemLike): item is ResponseFunctionC
     typeof item.arguments === 'string';
 }
 
-function extractOutputText(output: ResponseOutputItemLike[]): string {
-  const chunks: string[] = [];
-  for (const item of output) {
-    if (item.type !== 'message') continue;
-    for (const part of item.content ?? []) {
-      if (part.type === 'output_text' && part.text) chunks.push(part.text);
-      if (part.type === 'refusal' && part.refusal) chunks.push(part.refusal);
-    }
-  }
-  return chunks.join('');
-}
-
-function extractReasoning(output: ResponseOutputItemLike[]): string {
-  const chunks: string[] = [];
-  for (const item of output) {
-    if (item.type !== 'reasoning') continue;
-    for (const part of item.summary ?? []) {
-      if (part.text) chunks.push(part.text);
-    }
-  }
-  return chunks.join('\n');
-}
-
 function reasoningOptions(preset: ModelPreset): {
   effort: ReasoningEffort;
   summary?: Exclude<ReasoningSummary, 'none'>;
 } {
+  // GOTCHA: 'none' must omit the `summary` key entirely — the API rejects
+  // an explicit `summary: 'none'` value. Default to 'concise' so the
+  // sidebar's collapsible thinking block has something to render.
   const summary = preset.extras?.reasoningSummary ?? 'concise';
   return {
     effort: preset.extras?.reasoningEffort ?? 'xhigh',

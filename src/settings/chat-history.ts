@@ -1,5 +1,25 @@
 import type { AssistantAnnotationDraft, Message } from '../providers/types';
 
+// Per-Zotero-item chat persistence.
+//
+// Storage shape: a single JSON file in the Zotero profile dir, keyed by
+// `item:<itemID>` (or `global` for chats with no current item). Each entry
+// holds the entire message history for that item — messages, context
+// metadata, thinking traces, image attachments, and annotation drafts.
+//
+// INVARIANT: writes are SERIALIZED via `writeQueue` to prevent two concurrent
+// `saveChatMessages` calls from racing on the same JSON file. WHY: we
+// read-modify-write the whole file each time; two unsynchronized writes
+// would clobber each other's threads.
+//
+// INVARIANT: `normalizeMessages` runs on EVERY read. Old persisted threads
+// may pre-date the current Message schema (added images, annotationDraft,
+// thinking, context). Normalization treats the file as untrusted and only
+// re-emits well-typed fields — schema rot recovery, not validation.
+//
+// REF: CLAUDE.md "Chat history persistence lives in src/settings/chat-history.ts;
+//      preserve messages, context traces, thinking summaries, and image metadata."
+
 interface StoredThread {
   itemID: number | null;
   updatedAt: string;
@@ -31,6 +51,11 @@ export async function loadChatMessages(itemID: number | null): Promise<Message[]
 }
 
 export function saveChatMessages(itemID: number | null, messages: Message[]): Promise<void> {
+  // Chain the next write onto the queue. `.catch(() => undefined)` ensures
+  // a previous write's failure does NOT cancel the next write — callers
+  // observe their own write's outcome via the returned promise.
+  // GOTCHA: an empty `messages` array deletes the thread entirely. The
+  // sidebar uses this for "clear chat" without a separate delete API.
   writeQueue = writeQueue.catch(() => undefined).then(async () => {
     const threads = await readThreads();
     const key = threadKey(itemID);
@@ -74,6 +99,10 @@ async function writeThreads(threads: StoredThreads): Promise<void> {
   );
 }
 
+// Treat `value` as untrusted JSON (could be from an older plugin version
+// or a hand-edited file). flatMap+[] is the discard pattern: any malformed
+// entry is silently dropped rather than failing the whole load. WHY silent:
+// we'd rather lose one corrupt message than refuse to open the chat.
 function normalizeMessages(value: unknown): Message[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((message) => {

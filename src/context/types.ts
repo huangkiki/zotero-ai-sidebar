@@ -1,3 +1,9 @@
+// MessageContext schema for context-card display + ledger formatting.
+// Each `planMode` value below maps to one tool/UI path:
+//   none / metadata_only / annotations / search_pdf / pdf_range /
+//   selected_text / full_pdf / annotation_write.
+// INVARIANT: this is descriptive metadata captured AFTER the model picks
+// a tool — not a planner schema. The model's choice is the planner.
 export type ContextMode =
   | "none"
   | "metadata_only"
@@ -15,16 +21,6 @@ export interface ToolTrace {
   name: string;
   status: "started" | "completed" | "error";
   summary?: string;
-}
-
-export interface ContextPlan {
-  mode: ContextMode;
-  query?: string;
-  topK?: number;
-  rangeStart?: number;
-  rangeEnd?: number;
-  reason?: string;
-  source?: ContextPlanSource;
 }
 
 export interface RetrievedPassage {

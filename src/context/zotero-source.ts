@@ -2,6 +2,23 @@ import type { ContextSource, ItemMetadata } from './builder';
 import { DEFAULT_CONTEXT_POLICY } from './policy';
 import type { ItemAnnotation } from './types';
 
+// Concrete `ContextSource` backed by Zotero's runtime APIs.
+//
+// The harness (agent-tools.ts) and the legacy buildContext path both go
+// through this adapter so we can swap a fixture implementation in tests
+// without touching tool code.
+//
+// Two recurring shapes you must understand to read this file:
+// - The "current item" can be either a parent regular item OR a PDF
+//   attachment item (the user may have selected the attachment directly
+//   in the Zotero collection view). `isAttachment()` disambiguates.
+// - Full text comes from Zotero's offline indexer cache (`Fulltext.
+//   getItemCacheFile`), NOT from PDF.js. Reading is bounded by
+//   `policy.fullTextCacheReadCharLimit` to avoid loading huge PDFs whole.
+//
+// REF: Zotero source `chrome/content/zotero/xpcom/data/item.js`,
+//      `chrome/content/zotero/xpcom/fulltext.js`.
+
 interface ZoteroCreator {
   firstName?: string;
   lastName?: string;
@@ -53,6 +70,10 @@ export const zoteroContextSource: ContextSource = {
     return meta;
   },
 
+  // Returns the Zotero indexer's cached plain text for the first PDF
+  // attachment under `itemID`. INVARIANT: this is NOT the PDF.js text
+  // layer — char offsets here will not align with `pdf-locator`'s offsets,
+  // so do NOT use this output to drive coordinate-based highlights.
   async getFullText(itemID) {
     const Z = getZ();
     const parent = await Z.Items.getAsync(itemID);
@@ -62,6 +83,9 @@ export const zoteroContextSource: ContextSource = {
       ? [parent]
       : await Promise.all(parent.getAttachments().map((id) => Z.Items.getAsync(id)));
 
+    // WHY first-PDF-wins: papers commonly have one PDF + a few supplemental
+    // PDFs; sending the first one matches user expectation. If we ever need
+    // multi-PDF fan-out, that's a new tool, not a change here.
     for (const att of attachmentItems) {
       if (att?.attachmentContentType === 'application/pdf') {
         const content = await readFulltextCache(Z, att);
@@ -71,6 +95,12 @@ export const zoteroContextSource: ContextSource = {
     return '';
   },
 
+  // INVARIANT: `getAnnotations(false)` excludes trashed annotations — we
+  // don't want to surface deleted highlights to the model.
+  // INVARIANT: filter requires text OR comment — empty annotations (e.g.
+  // bare image highlights with no caption) are dropped to avoid noise.
+  // Sorted by Zotero's native sortIndex so the model receives them in
+  // reading order, which mirrors the Zotero annotations sidebar.
   async getAnnotations(itemID) {
     const Z = getZ();
     const attachments = await getPdfAttachments(Z, itemID);
@@ -112,6 +142,11 @@ function annotationFromZoteroItem(item: ZoteroItem): ItemAnnotation {
   };
 }
 
+// `getItemCacheFile` returns `{ path }` even when the cache file does not
+// exist on disk; the read then throws with NS_ERROR_FILE_NOT_FOUND. We
+// catch and return '' so callers can treat both "no PDF" and "no cache"
+// uniformly. INVARIANT: `maxLength` here caps bytes read from disk — keeps
+// 50MB scientific PDFs from pinning memory in JS land.
 async function readFulltextCache(Z: ZoteroGlobal, item: ZoteroItem): Promise<string> {
   try {
     const cachePath = Z.Fulltext.getItemCacheFile(item).path;
@@ -125,6 +160,10 @@ async function readFulltextCache(Z: ZoteroGlobal, item: ZoteroItem): Promise<str
   }
 }
 
+// Zotero stores `date` as a free-form string (e.g. "2023", "2023-04-15",
+// "April 2023", "Spring 2023"). Scan for the first 4-digit year in
+// [1900, 2099] — broad enough for any modern paper, narrow enough that
+// random 4-digit numbers in titles won't match.
 function parseYear(date: string | undefined): number | undefined {
   if (!date) return undefined;
   for (let index = 0; index <= date.length - 4; index++) {

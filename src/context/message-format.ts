@@ -2,6 +2,22 @@ import type { Message } from "../providers/types";
 import { DEFAULT_CONTEXT_POLICY, type ContextPolicy } from "./policy";
 import type { ItemAnnotation, RetrievedPassage } from "./types";
 
+// Prompt assembly + context ledger.
+//
+// Two distinct shapes flow through this file:
+// - Wire shape (`toApiMessages`): what the provider actually sees. The
+//   *current* user turn gets context blocks inlined; older turns either
+//   replay a small slice (selected text / annotations / passages) or
+//   collapse to plain content.
+// - Display shape (`formatContextMarkdown`, `contextSummaryLine`): what
+//   the sidebar renders so the user can audit *what was sent*.
+//
+// INVARIANT: full PDF text from past turns is NEVER replayed. It lives in
+// the message's `context` metadata only; replays surface as "已发送 PDF
+// 全文 N 字" in the ledger. (See CLAUDE.md "context ledger design".)
+//
+// REF: Codex-style context compaction; Claudian's per-message context card.
+
 export function toApiMessages(
   messages: Message[],
   currentContext?: { message: Message; fullText?: string },
@@ -176,6 +192,11 @@ export function formatContextMarkdown(message: Message): string[] {
   return lines;
 }
 
+// Builds a compact, machine-friendly ledger of every prior turn's context
+// (mode, ranges, char counts, tool calls). WHY: handed to the model as a
+// system-prompt appendix so it can refer to "you already saw passage
+// 4500-5800 in turn 3" without us re-sending the bytes. This is the
+// project's substitute for Codex `previous_response_id` chaining.
 export function formatContextLedger(messages: Message[]): string {
   const lines: string[] = [];
   messages.forEach((message, index) => {
@@ -306,6 +327,17 @@ export function formatAnnotations(annotations: ItemAnnotation[]): string {
     .join("\n\n");
 }
 
+// Picks which prior user turns are eligible to have their context blocks
+// re-inlined into the wire shape. Three guards run in order, all required:
+//
+// 1. Turn window: only look at the last `retainedContextTurnCount` user
+//    turns. Older context falls off into "ledger only" status.
+// 2. Char budget: each retained turn deducts from a shared char budget;
+//    once it's exhausted, no more replays this turn.
+// 3. Signature dedup: if turn N and turn N-2 both carry the SAME selected
+//    text / passage range, replay only the more recent one. WHY: avoids
+//    sending the same paragraph 3× when the user keeps re-asking about it,
+//    and avoids cache-busting Anthropic's ephemeral cache.
 function retainedRecentContextIndexes(
   messages: Message[],
   currentIndex: number,

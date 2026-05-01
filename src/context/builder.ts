@@ -1,5 +1,21 @@
 import type { ItemAnnotation } from './types';
 
+// Legacy context builder.
+//
+// In production today, `sidebar.ts` calls `buildContext(..., 0)` — the
+// `pdfTokenBudget=0` short-circuits the PDF-text path so this function
+// effectively returns just (system prompt + metadata). The PDF-text branch
+// remains exercised by:
+//   - tests/context/builder.test.ts (regression coverage)
+//   - the React UI tree under src/ui/ (not currently mounted in the Zotero
+//     pane — see CLAUDE.md "Native DOM sidebar code lives mainly in
+//     src/modules/sidebar.ts").
+//
+// INVARIANT: PDF text fetched at PROMPT-BUILD time is the legacy path and
+// has no place in the agent loop. The model fetches PDF text on demand via
+// `agent-tools.ts` (zotero_get_full_pdf / zotero_search_pdf / zotero_read_pdf_range)
+// so it can decide what's worth its context budget.
+
 export interface ItemMetadata {
   title: string;
   authors: string[];

@@ -2,6 +2,21 @@ import type { RetrievedPassage } from './types';
 import type { ContextPolicy } from './policy';
 import { DEFAULT_CONTEXT_POLICY } from './policy';
 
+// Lightweight in-process PDF retrieval. No embeddings, no inverted index —
+// just paragraph splitting + term-occurrence scoring with a phrase boost.
+// WHY: Zotero plugins run inside the app process and we need predictable,
+// dependency-free search; the model can always re-issue a refined query.
+//
+// Two non-obvious choices live here:
+// - CJK queries are scored as character bigrams (e.g. "深度学习" ⇒
+//   ["深度","度学","学习"]) so partial matches in mixed-language PDFs work.
+//   Latin queries score as whole tokens (length>1) because bigramming
+//   English destroys precision.
+// - Paragraph split is preferred when the text has ≥3 paragraphs;
+//   otherwise we fall back to fixed-width chunking with overlap. This keeps
+//   results coherent for clean papers and still works on PDFs whose text
+//   layer flattened paragraph breaks.
+
 export function searchPdfPassages(
   pdfText: string,
   query: string,
@@ -46,6 +61,10 @@ export function extractPdfRange(
   return { text, score: 1, start, end: cappedEnd };
 }
 
+// INVARIANT: Latin tokens are kept whole (case-folded), CJK tokens are
+// expanded into 2-char bigrams. Single-letter Latin tokens drop out — they
+// match too much. Short CJK runs (≤4 chars) keep the whole-word entry too,
+// so a phrase like "梯度下降" still scores against itself, not just bigrams.
 export function queryTerms(query: string): string[] {
   const terms = new Set<string>();
   for (const token of tokenizeQuery(query)) {
@@ -127,6 +146,13 @@ function chunkText(text: string, policy: ContextPolicy): string[] {
   return chunks;
 }
 
+// Scoring formula:
+//   per-term: occurrences × clamp(termLength, 1, 8)
+//     ⇒ longer terms (rarer ⇒ more discriminative) score higher per hit,
+//       capped at 8 so a 50-char query term doesn't drown shorter ones.
+//   phrase bonus: if the verbatim query (≥4 chars) appears in the passage,
+//     add min(phraseLength, 40). WHY: rewards exact-phrase matches without
+//     letting a single huge phrase dominate ranking.
 function scorePassage(text: string, terms: string[], query: string): number {
   const lowered = text.toLowerCase();
   let score = 0;

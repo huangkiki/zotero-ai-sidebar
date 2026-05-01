@@ -43,6 +43,28 @@ const TOGGLE_BUTTON_ID = "zai-toggle-button";
 const FLOATING_TOGGLE_ID = "zai-floating-toggle";
 const contextPolicy = DEFAULT_CONTEXT_POLICY;
 const IMAGE_PROMPT_MAX_DIMENSION = 2048;
+// "Annotate this paper" preset prompt.
+//
+// This is the user-facing instruction injected when the user clicks the
+// quick prompt for full-text highlighting. It pairs with the
+// `fullTextHighlight: true` tool-set in agent-tools.ts (which restricts
+// writes to `zotero_annotate_passage` and removes the selection-based
+// write tool).
+//
+// Each numbered step matches a harness contract:
+//   1-2. Read the full PDF; if the harness truncates due to
+//        `policy.fullPdfTokenBudget`, top up via `zotero_read_pdf_range`.
+//   3.   Limit to 5-10 highlights so we don't blow `maxFullTextHighlights`
+//        (default 10). Anti-noise guidance ("avoid summary spans,
+//        equations") matches what users actually want highlighted.
+//   4.   `text` must be VERBATIM — pdf-locator's exact-match path is fast,
+//        the fuzzy fallback (≥0.85 confidence) handles minor OCR drift.
+//        80-char comment cap matches `maxFullTextHighlightCommentChars`.
+//   5.   Forces a final summary turn so the model exits the tool loop.
+//
+// The retry-with-rewrite hint addresses the locator's known weakness on
+// dehyphenation / column-break artifacts; rewrites preserving ≥80% of the
+// original text usually push fuzzy-match confidence past threshold.
 const FULL_TEXT_HIGHLIGHT_PROMPT = [
   "请执行以下流程，对当前 PDF 标注重点：",
   "",
@@ -124,6 +146,19 @@ interface PanelState {
   abort?: AbortController;
 }
 
+// Panel-state survival
+// =====================================================================
+// Each rendered sidebar mount carries a PanelState in this WeakMap. The
+// mount is the GC root: when the Zotero window closes, the mount drops
+// out, and the WeakMap entry goes with it (no manual cleanup needed).
+//
+// INVARIANT: rendering is FULL-REPLACE — `renderPanel` calls
+// `mount.replaceChildren()` and rebuilds. WHY full replace (not diff):
+// the sidebar is small, full replace is simpler than reconciliation, and
+// it's the same pattern as Zotero's own ItemPane sub-panels. The cost
+// (lost draft text + scroll position on every render) is paid by
+// `capturePanelState` (saves into `state` BEFORE replace) and then
+// `restoreMessagesScroll` + `restoreChatInput` (reapplied AFTER replace).
 const states = new WeakMap<Element, PanelState>();
 
 type AssistantProgressStage =
@@ -134,6 +169,13 @@ type AssistantProgressStage =
   | "using_tool"
   | "writing";
 
+// Entry point per Zotero item selection.
+// Two paths:
+//   - itemID changed (or first render): allocate fresh PanelState and
+//     kick off async history load. Old state is DROPPED — switching items
+//     means switching threads.
+//   - same itemID: reload presets (user may have edited them in the
+//     editor overlay) and reuse existing messages/draft/scroll state.
 function renderMount(mount: HTMLElement, itemID: number | null) {
   let state = states.get(mount);
   if (!state || state.itemID !== itemID) {
@@ -202,6 +244,18 @@ function renderPanel(mount: HTMLElement, state: PanelState) {
   });
 }
 
+// Captures DOM-resident state into PanelState BEFORE renderPanel wipes
+// the DOM. Two pieces of survival:
+//   1. Draft textarea content + selection range (so the user's typing
+//      survives streaming re-renders).
+//   2. Messages list scrollTop (so the auto-follow-vs-pinned-scroll
+//      decision in restoreMessagesScroll has accurate state).
+//
+// `skipNextDraftCapture` is the one-shot flag set by sendMessage AFTER
+// it clears the draft. WHY: the textarea DOM still holds the just-sent
+// text on the next render (until `restoreChatInput` reapplies the empty
+// state.draftText). Without this flag, capture would copy the still-
+// rendered old text back into state, undoing the clear.
 function capturePanelState(mount: HTMLElement, state: PanelState) {
   if (!state.skipNextDraftCapture) {
     const input = mount.querySelector(
@@ -1011,6 +1065,16 @@ function autoResizeInput(input: HTMLTextAreaElement) {
   input.style.overflowY = input.scrollHeight > maxHeight ? "auto" : "hidden";
 }
 
+// Paste compaction
+// =====================================================================
+// Long pastes are stored OUT-OF-BAND in `state.pasteBlocks` and replaced
+// in the textarea with a short marker like `[Pasted #1 +42 lines]`. The
+// marker preserves: (a) sidebar UI doesn't fight 1000-line paste with
+// scroll; (b) the textarea remains snappy for editing the prompt around
+// the paste. `expandPasteMarkers` rejoins the real content at SEND TIME
+// so the user can move/delete the marker without re-pasting.
+//
+// Threshold tuned by feel: 5 lines or 900 chars. Smaller pastes inline.
 function shouldCompactPastedText(text: string): boolean {
   return countLines(text) > 5 || text.length > 900;
 }
@@ -1122,18 +1186,6 @@ function relabelDraftImages(state: PanelState, input: HTMLTextAreaElement) {
   input.value = text;
 }
 
-function fileToDataUrl(doc: Document, file: File): Promise<string> {
-  const Reader = doc.defaultView?.FileReader ?? FileReader;
-  return new Promise((resolve, reject) => {
-    const reader = new Reader();
-    reader.addEventListener("load", () => resolve(String(reader.result ?? "")));
-    reader.addEventListener("error", () =>
-      reject(reader.error ?? new Error("Failed to read image")),
-    );
-    reader.readAsDataURL(file);
-  });
-}
-
 interface PromptImageData {
   dataUrl: string;
   mediaType: string;
@@ -1144,7 +1196,7 @@ async function fileToPromptImageData(
   doc: Document,
   file: File,
 ): Promise<PromptImageData> {
-  const originalDataUrl = await fileToDataUrl(doc, file);
+  const originalDataUrl = await blobToDataUrl(doc, file);
   const mediaType = promptSafeImageType(file.type);
   if (!mediaType)
     return rasterizeImageDataUrl(doc, originalDataUrl, "image/png");
@@ -1193,6 +1245,19 @@ async function rasterizeImageDataUrl(
   return rasterizeImageElement(doc, image, outputType);
 }
 
+// Downscale + transcode for multimodal API uploads.
+// WHY 2048px ceiling (IMAGE_PROMPT_MAX_DIMENSION): both OpenAI Responses
+// and Anthropic image inputs cap effective resolution near here; sending
+// larger costs more tokens with no quality gain on either provider.
+// `Math.min(1, ...)` keeps small images at their native size — never
+// upscales (no benefit, just bloats the data URL).
+//
+// Two graceful-degradation paths return the ORIGINAL image bytes:
+//   - canvas getContext fails (rare; XUL window may have GPU init issues)
+//   - canvas-to-blob conversion fails
+// In both cases we still send the image; only the resize is lost. NOT a
+// silent failure — the size mismatch is observable to the caller via the
+// returned `size` field which still reflects the data URL byte count.
 async function rasterizeImageElement(
   doc: Document,
   image: HTMLImageElement,
@@ -1248,6 +1313,11 @@ function decodeImage(
   });
 }
 
+// FileReader#readAsDataURL wrapped in a promise.
+// WHY pull FileReader off `doc.defaultView`: tests run with a synthesized
+// document; Zotero's XUL window has its own FileReader constructor
+// distinct from the global one. `File` extends `Blob`, so this single
+// helper serves both image-paste and canvas-blob paths.
 function blobToDataUrl(doc: Document, blob: Blob): Promise<string> {
   const Reader = doc.defaultView?.FileReader ?? FileReader;
   return new Promise((resolve, reject) => {
@@ -1273,6 +1343,18 @@ async function captureScreenImage(doc: Document): Promise<File | null> {
   );
 }
 
+// Two-tier screenshot capture.
+// Tier 1 — `getDisplayMedia` (this function): the standard browser screen
+// capture API. The user gets the OS screen-picker dialog; we draw a
+// single frame onto a canvas and convert to PNG. Works in modern Zotero
+// XUL builds and is the preferred path.
+// Tier 2 — `captureScreenImageWithExternalTool` (fallback): on Linux,
+// some Zotero builds don't expose getDisplayMedia in the XUL window. We
+// shell out to `gnome-screenshot` / `flameshot` / ImageMagick `import`
+// and read the file back. Each tool exits non-zero if cancelled.
+// INVARIANT: caller (`captureScreenImage`) tries Tier 1 first; Tier 2
+// only runs if Tier 1 returns null. NEVER both — would prompt the user
+// twice.
 async function captureScreenImageWithDisplayMedia(
   doc: Document,
 ): Promise<File | null> {
@@ -1324,6 +1406,12 @@ async function captureScreenImageWithExternalTool(
   if (typeof exec !== "function" || typeof getBinary !== "function")
     return null;
 
+  // Tools tried in order of "least disruptive UX first":
+  //   gnome-screenshot -a   — area-select, native GNOME UI
+  //   flameshot gui -p      — area-select, modern annotation overlay
+  //   ImageMagick `import`  — fullscreen capture, last resort
+  // `-p path` / `-f path` write to a fixed temp file we read back. We
+  // remove the temp file on success AND failure (best-effort cleanup).
   const path = `/tmp/zotero-ai-sidebar-screenshot-${Date.now()}.png`;
   const commands: Array<[string, string[]]> = [
     ["/usr/bin/gnome-screenshot", ["-a", "-f", path]],
@@ -1441,6 +1529,20 @@ interface SendMessageOptions {
   fullTextHighlight?: boolean;
 }
 
+// User-message → wire-message pipeline.
+// Responsibilities (in order, each one matters):
+//   1. Trim & filter draft images (only images whose marker survives in
+//      the final text are sent — the user can delete a marker mid-edit).
+//   2. Skip if not configured: open the preset editor instead of erroring.
+//   3. Capture the SELECTED PDF TEXT exactly once at send time. WHY: the
+//      user may type their question after selecting; locking selection
+//      here makes the wire content match what the chip showed.
+//   4. Snapshot the annotation draft for explainSelection flows BEFORE we
+//      append user message — `attachAnnotationDraft` will use the snapshot
+//      regardless of how selection state evolves during streaming.
+//   5. Reset draft state (text/images/scroll-anchor) to fresh defaults.
+//   6. Persist BEFORE streaming so the user message is durable even if the
+//      provider request errors out.
 async function sendMessage(
   mount: HTMLElement,
   state: PanelState,
@@ -1507,6 +1609,24 @@ interface StreamAssistantOptions {
   fullTextHighlight?: boolean;
 }
 
+// streamAssistant: the project's OUTER loop wrapping the provider's inner
+// tool loop. Codex parallel: this is where the Zotero plugin sits in the
+// place of Codex's `runner` — owning tool sessions, chunk dispatch, UI
+// state transitions, and persistence.
+//
+// Stage state machine on `activeAssistantStage`:
+//   building_context → waiting_model → using_tool ⇄ waiting_model →
+//   thinking ⇄ writing → (cleared on finish/error)
+// Each transition triggers a re-render so the user sees what's happening.
+//
+// INVARIANT: `void saveChatMessages(...)` fires on every tool_call chunk.
+// WHY persist mid-stream: if Zotero crashes during a long tool loop, the
+// thread still has the user message + tool traces accumulated so far.
+// (CLAUDE.md "Show Zotero tool-call traces visibly in the conversation".)
+//
+// INVARIANT: `toolSession.dispose()` MUST run in the finally block —
+// the locator session holds a memoized PdfLocator that pins page bundles
+// in memory. Skipping dispose leaks across turns.
 async function streamAssistant(
   mount: HTMLElement,
   state: PanelState,
@@ -1562,6 +1682,12 @@ async function streamAssistant(
       state.itemID,
       contextLedger,
     );
+    // Build a fresh tool session per turn. WHY per-turn (not cached):
+    // - Reader's PDF.js text layer can change between turns (user opens a
+    //   different attachment); a stale locator would point at the wrong PDF.
+    // - `selectionAnnotation` is a getter, so the tool sees the snapshot
+    //   that's CURRENT when the model invokes the write tool, not at
+    //   session-creation time.
     toolSession = createZoteroAgentToolSession({
       source: zoteroContextSource,
       itemID: state.itemID,
@@ -1634,6 +1760,13 @@ async function streamAssistant(
   }
 }
 
+// Splits the assistant's text into (body, annotationDraft) using the
+// `建议注释` parser. The marker block is REMOVED from `assistant.content`
+// (assigned to `parsed.body`) so the chat bubble doesn't show the
+// suggestion text twice — once in the prose, once in the suggestion
+// card. The `snapshot` carries the PDF anchor that was live when the
+// turn started; we deep-copy `annotation` so the saved draft is
+// invariant under later selection changes.
 function attachAnnotationDraft(
   assistant: Message,
   snapshot: SelectionAnnotationDraft,
@@ -1662,6 +1795,16 @@ async function buildSystemContextOnly(
   };
 }
 
+// Builds the system prompt sent to the model each turn.
+// Three sections, in order:
+//   1. Item-metadata block (from buildContext): title/authors/year/abstract.
+//   2. "Agent policy" block: tells the model what tools exist and that the
+//      harness — not the model — enforces budgets. Plain English so we
+//      don't hide tool semantics in JSON schema alone.
+//   3. Ledger: machine-readable record of past turns' context (chars
+//      sent, tool calls, plan modes). Marked "not currently attached"
+//      so the model treats it as memory, not source material.
+// REF: docs/HARNESS_ENGINEERING.md "Prompt Assembly".
 function contextAwareSystemPrompt(
   systemPrompt: string,
   contextLedger: string,
@@ -1669,6 +1812,18 @@ function contextAwareSystemPrompt(
   return `${systemPrompt}\n\nAgent policy: You can call local Zotero tools to read the current item metadata, PDF annotations, targeted PDF passages, exact PDF ranges, or the full PDF. You can also call permission-aware Zotero write tools when the user explicitly asks to save a note or annotation. Decide which tool is needed; the local harness only executes tools and enforces budgets. Use only currently attached context or tool output for paper-specific claims. The ledger below records previous Zotero context that may no longer be visible; do not treat it as available source text.\n\nPreviously sent context ledger (not currently attached):\n${contextLedger}`;
 }
 
+// Tool-trace upsert. Each chunk that comes from the provider stream is
+// either status="started" (push a new trace) or "completed"/"error"
+// (replace the most recent `started` trace with the same name).
+//
+// INVARIANT: this works because OpenAI is configured with
+// `parallel_tool_calls: false` — at most ONE in-flight tool per name at a
+// time. If we ever enable parallel calls, this needs a call_id key.
+//
+// `chunk.context` is also merged into the user message's context so the
+// MessageContext for that turn accumulates plan-mode/range/passages from
+// every tool the model invoked. The user-message context is the "fact
+// sheet" shown in the assistant-process collapsible.
 function recordToolCall(
   message: Message,
   chunk: {
@@ -1706,6 +1861,16 @@ function recordToolCall(
   };
 }
 
+// Retry the last assistant turn. INVARIANT: we REUSE the existing user
+// message (with its captured selection/context) — re-deriving selection
+// from the live Reader at retry time would silently change what the
+// model sees vs the original turn. The user expects "retry" to give a
+// new answer to the SAME question, not re-trigger context capture.
+//
+// Carries the previous assistant's `annotationDraft.snapshot` forward as
+// `annotationSnapshot`. WHY: if the original turn was an explainSelection
+// flow, the regenerated answer should still be anchored to the same PDF
+// passage so the new "建议注释" suggestion can be saved at the same spot.
 async function regenerateLastResponse(mount: HTMLElement, state: PanelState) {
   if (state.sending) return;
   await ensureHistoryLoaded(mount, state);
@@ -1748,6 +1913,27 @@ async function ensureHistoryLoaded(mount: HTMLElement, state: PanelState) {
   await loadPersistedMessages(mount, state);
 }
 
+// Selection state machine
+// =====================================================================
+// Three concurrent maps track PDF text selection per Zotero item ID:
+//   selectedTextByItem        — current selection text from the Reader.
+//   selectedAnnotationByItem  — Zotero annotation snapshot (for the write
+//                                tool zotero_add_annotation_to_selection).
+//   ignoredSelectedTextByItem — text the user dismissed via the chip's
+//                                "x" button. Stored so the polling monitor
+//                                doesn't immediately re-arm the same text.
+//
+// Sources of selection updates:
+//   1. Zotero `renderTextSelectionPopup` event → `rememberReaderSelection`
+//      (event-driven, fires when the user finishes a drag-select).
+//   2. SELECTION_MONITOR_MS poll → `refreshActiveReaderSelection`
+//      (catches keyboard-driven selection and selection-clear).
+// Hybrid because Reader doesn't fire a clear event when a selection ends.
+//
+// INVARIANT: an item is keyed by parent-item-id where possible (see
+// `readerItemIDs`); the same selection appears under both parent and
+// attachment IDs so the chip survives switching between them.
+
 function getSelectedTextForPrompt(
   mount: HTMLElement,
   itemID: number | null,
@@ -1775,6 +1961,12 @@ function getStoredSelectionAnnotation(
     : null;
 }
 
+// `clearWhenEmpty` distinguishes the two callers:
+// - Polling monitor (focusInSidebar=false ⇒ true): if the Reader has no
+//   live selection AND the user is interacting with the sidebar, clear
+//   stored selection so the chip disappears once the user starts typing.
+// - Send-time read (false): keep the stored selection so a click on the
+//   composer doesn't drop the selection chip the user just made.
 function refreshActiveReaderSelection(
   win: Window | null | undefined,
   itemID: number | null,
@@ -1803,6 +1995,13 @@ function getActiveReaderSelection(reader: unknown): string {
   ]);
 }
 
+// Hooks Zotero's Reader event so we capture the annotation snapshot at
+// the same time the selection popup renders. WHY at popup-render time:
+// that's when Zotero has a fully-formed annotation candidate (with
+// position/sortIndex) — we keep a copy so the write tool can save it
+// later without re-deriving coordinates.
+// REF: Zotero source `chrome/content/zotero/reader.js`
+//      registerEventListener("renderTextSelectionPopup", ...).
 function registerReaderSelectionCapture() {
   const readerAPI = (Zotero as any).Reader;
   if (readerSelectionHandler || !readerAPI?.registerEventListener) return;
@@ -1907,6 +2106,12 @@ function rememberReaderSelection(
   }
 }
 
+// Two near-twin lookups — DELIBERATE, do not merge:
+// - `firstStoredSelectedText` returns whatever is in storage IGNORING the
+//   ignored-by-user flag. Used by `ignoreSelectedTextForPrompt` which
+//   needs to look up the text it's about to mark as ignored.
+// - `firstUsableStoredSelectedText` filters out ignored entries. Used by
+//   the polling monitor and any "should we show the chip?" path.
 function firstStoredSelectedText(ids: number[]): string {
   for (const id of ids) {
     const text = selectedTextByItem.get(id);
@@ -1935,6 +2140,11 @@ function clearStoredSelectedText(ids: number[]) {
   }
 }
 
+// User clicked the "x" on the selection chip. INVARIANT: we both DELETE
+// the active selection AND record it in `ignoredSelectedTextByItem`, so
+// the next polling tick doesn't re-arm the same text. The ignore record
+// is cleared in `rememberReaderSelection` only when a *different* text is
+// selected — a fresh selection re-enables the chip.
 function ignoreSelectedTextForPrompt(
   mount: HTMLElement,
   itemID: number | null,
@@ -1949,6 +2159,10 @@ function ignoreSelectedTextForPrompt(
   }
 }
 
+// Returns BOTH the parent item ID and the attachment ID for a Reader-open
+// PDF, deduped. WHY both: the user may switch between viewing the parent
+// in the items pane and the attachment via Reader; storing the selection
+// under both IDs keeps the chip visible across that switch.
 function readerItemIDs(
   reader: unknown,
   fallbackItemID: number | null,
@@ -1978,11 +2192,22 @@ function readerAttachmentID(reader: unknown): number | null {
       : null;
 }
 
+// Active Reader = the reader instance for the foreground Zotero tab.
+// REF: Zotero source `chrome/content/zotero/elements/zoteroTabs.js` for
+//      Zotero_Tabs.selectedID; `chrome/content/zotero/reader.js` for
+//      Reader.getByTabID. The chain optionals defend against the user
+//      having no Reader tab open.
 function getActiveReader(win: Window | null | undefined): any {
   const tabID = (win as any)?.Zotero_Tabs?.selectedID;
   return tabID ? (Zotero as any).Reader?.getByTabID?.(tabID) : null;
 }
 
+// Returns the active Reader ONLY IF it's open on the same paper as the
+// current chat thread. WHY this guard: agent tools that need PDF.js text
+// (the highlight-write tool) must operate on the SAME paper the user is
+// chatting about — otherwise we'd write a highlight to the wrong PDF.
+// `activeReaderConversationItemID` walks attachment→parent so the match
+// works whether the Reader is on the parent or the attachment.
 function getActiveReaderForItem(
   win: Window | null | undefined,
   itemID: number | null,
@@ -2101,6 +2326,17 @@ function afterRender(mount: HTMLElement, callback: () => void) {
   }
 }
 
+// Scroll preservation
+// =====================================================================
+// CLAUDE.md rule: streaming output should auto-scroll only when the user
+// is already near the bottom; if they've scrolled up, preserve their
+// position while new chunks arrive.
+//
+// State lives in `state.messagesScrollTop` so it survives re-renders
+// (every chunk triggers `renderPanel`). `state.autoFollowMessages` toggles
+// based on near-bottom detection — once the user scrolls up, we don't
+// re-engage auto-follow until they scroll back to the bottom themselves.
+
 function scrollMessagesToBottom(mount: HTMLElement) {
   const messages = mount.querySelector(".messages") as HTMLElement | null;
   if (!messages) return;
@@ -2122,6 +2358,10 @@ function isMessagesNearBottom(mount: HTMLElement): boolean {
   return isMessagesElementNearBottom(messages);
 }
 
+// 40px = roughly one body line of slack. Below this we treat the user as
+// "at the bottom" and re-engage auto-follow. Tuned by hand: large enough
+// to absorb sub-pixel scroll snap, small enough that scrolling up by one
+// full message disengages follow mode.
 function isMessagesElementNearBottom(messages: HTMLElement): boolean {
   return (
     messages.scrollHeight - messages.scrollTop - messages.clientHeight < 40
@@ -2201,6 +2441,10 @@ function bubble(
   });
   actions.append(copy);
 
+  // Retry button only appears on the LATEST assistant message. WHY: the
+  // regenerate path drops the last assistant message and re-streams from
+  // the prior user turn — meaningful only for the latest exchange. Older
+  // assistant messages get only copy/delete actions.
   if (
     message.role === "assistant" &&
     index === findLastAssistantIndex(state.messages)
@@ -2265,6 +2509,11 @@ function bubble(
   return root;
 }
 
+// Render the assistant's "建议注释" block (parsed by annotation-draft.ts).
+// READ-ONLY display until the user clicks "保存". INVARIANT: this is NOT a
+// hidden write — saving requires a button click and routes through
+// `saveAnnotationDraftFromBubble`, which goes through the same Zotero
+// annotation API as a manual annotation. CLAUDE.md "No hidden Zotero writes".
 function renderAnnotationSuggestion(
   doc: Document,
   mount: HTMLElement,
@@ -2498,6 +2747,13 @@ function refreshAnnotationSuggestion(mount: HTMLElement, index: number) {
   else root.append(next);
 }
 
+// Renders the "思考与上下文" collapsible block above an assistant bubble.
+// IMPORTANT: pulls context from the PREVIOUS USER turn, NOT the assistant
+// itself. WHY: context (selectedText / passages / tool calls) is recorded
+// on the user message — that's the turn that triggered the model. The
+// assistant message is just the response, with no context of its own.
+// Matches Claudian's pattern of pinning the context card to the question
+// that triggered the answer.
 function renderAssistantProcess(
   doc: Document,
   root: HTMLElement,
@@ -2571,6 +2827,27 @@ function renderToolTrace(
   root.append(box);
 }
 
+// Hand-rolled Markdown block parser.
+// =====================================================================
+// WHY hand-rolled (not a library):
+//   1. SECURITY — model output runs in the privileged Zotero XUL context.
+//      Every text node is created via `createTextNode` / `textContent` so
+//      a prompt-injected `<script>` or `<iframe>` cannot execute. A
+//      general-purpose Markdown lib would need a sanitizer pass and we'd
+//      still be one library upgrade away from a regression.
+//   2. STREAMING — open delimiters (e.g. unclosed `**`) fall back to
+//      literal text rather than corrupting subsequent chunks. The
+//      renderer is called repeatedly during streaming with growing
+//      content; partial syntax must never produce broken DOM.
+//   3. BUNDLE SIZE — Zotero plugin loads in a XUL window; we want zero
+//      external runtime cost for chat rendering.
+//
+// Supported subset (block):
+//   #/##/###/#### headings, ordered+unordered lists (no nesting),
+//   ```fence``` code blocks, > blockquote, paragraphs.
+// NOT supported: tables, HR, image syntax, nested lists, setext headings.
+// REF: Claudian's MessageRenderer (similar minimal subset for the same
+//      streaming reasons); CommonMark spec we deliberately don't follow.
 function renderMarkdownInto(target: HTMLElement, markdown: string) {
   const doc = target.ownerDocument!;
   target.replaceChildren();
@@ -2605,6 +2882,9 @@ function renderMarkdownInto(target: HTMLElement, markdown: string) {
     list.append(li);
   };
 
+  // INVARIANT: code body uses `textContent`, NOT innerHTML — prompt
+  // injection inside fenced code stays as displayed text. Class name uses
+  // `language-${lang}` for any future syntax-highlighting CSS hook.
   const flushCode = () => {
     if (codeLines == null) return;
     const pre = doc.createElement("pre");
@@ -2679,6 +2959,14 @@ function renderMarkdownInto(target: HTMLElement, markdown: string) {
   flushParagraph();
 }
 
+// Inline markdown: `code`, **bold**, [label](url).
+// Streaming-safe pattern: at each step we look for the EARLIEST opening
+// delimiter; if its closing partner is not yet in the buffer, we emit the
+// rest as literal text and return. WHY: during streaming, the next chunk
+// may bring the closing delimiter — but until then, NEVER half-render a
+// `<strong>` or `<a>` (those would have to be unwound on the next call).
+// INVARIANT: every emitted node is either createTextNode or createElement
+// with textContent; no innerHTML on any path.
 function appendInlineMarkdown(parent: HTMLElement, text: string) {
   const doc = parent.ownerDocument!;
   let cursor = 0;
@@ -2732,6 +3020,9 @@ function appendInlineMarkdown(parent: HTMLElement, text: string) {
       cursor = next + 1;
       continue;
     }
+    // GOTCHA: `target=_blank` + `rel=noreferrer` is required for any link
+    // rendered from model output. Without rel=noreferrer, Firefox would
+    // pass the Zotero XUL window's referrer to the opened page.
     const anchor = doc.createElement("a");
     anchor.href = link.href;
     anchor.target = "_blank";
@@ -3046,6 +3337,11 @@ function field(doc: Document, label: string, control: HTMLElement) {
   return wrapper;
 }
 
+// Plugin lifecycle entry.
+// `registerSidebar` runs once on bootstrap; `registerSidebarForWindow`
+// runs for each Zotero main window (Zotero supports multiple windows).
+// INVARIANT: must be idempotent — `registered` flag and per-window
+// `windowSidebars` Map dedupe re-entries.
 export function registerSidebar() {
   registered = true;
   registerReaderSelectionCapture();
@@ -3068,6 +3364,14 @@ export function registerSidebarForWindow(win: Window) {
   doc.getElementById(SPLITTER_ID)?.remove();
   doc.getElementById(COLUMN_ID)?.remove();
 
+  // XUL splitter + vbox: native Zotero column rather than a React mount.
+  // WHY native DOM (not React): Zotero 7+'s ItemPane DOES NOT recover
+  // gracefully from a React tree crash inside its custom-element column.
+  // CLAUDE.md: "avoid reintroducing React UI in the Zotero pane unless
+  // crash behavior has been revalidated."
+  // `zotero-persist=width` lets Zotero remember the user's column width
+  // across restarts. The wheel-stopPropagation prevents scroll events from
+  // bleeding through to the items pane underneath.
   const splitter = doc.createXULElement("splitter");
   splitter.id = SPLITTER_ID;
   splitter.setAttribute("resizebefore", "closest");
@@ -3275,6 +3579,14 @@ function updateToggleButton(state: WindowSidebarState) {
   }
 }
 
+// Monkey-patches `ZoteroPane.itemSelected` so we re-render after the user
+// selects an item. WHY patch (not just a setInterval): item selection is
+// the single trigger we MUST react to to swap chat threads, and Zotero
+// doesn't expose a clean event for it on every supported version.
+// INVARIANT: `unregisterSidebarForWindow` only restores the original if
+// our patched function is still installed — defends against another
+// plugin patching after us (we'd otherwise undo their patch).
+// REF: Zotero source `chrome/content/zotero/zoteroPane.js` ZoteroPane.itemSelected.
 function patchItemSelection(win: Window, state: WindowSidebarState) {
   const pane = (win as any).ZoteroPane;
   if (typeof pane?.itemSelected !== "function") return;
@@ -3311,6 +3623,11 @@ function getSelectedItemID(win: Window): number | null {
   return conversationItemID(item);
 }
 
+// "Conversation item ID" = the parent regular item, NOT the PDF
+// attachment. WHY: a chat thread is keyed by the bibliographic item so
+// the same conversation persists across opening different attachments
+// (e.g. paper PDF vs supplementary PDF). When the Reader is on the
+// attachment, walk up to its parent.
 function activeReaderConversationItemID(win: Window): number | null {
   const reader = getActiveReader(win);
   const r = reader as {

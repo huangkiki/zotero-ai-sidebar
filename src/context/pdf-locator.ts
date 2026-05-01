@@ -1,3 +1,26 @@
+// Locator that maps a verbatim text passage to PDF coordinates so we can
+// write a Zotero highlight at the correct rectangle.
+//
+// Why this file is hard:
+// 1. Zotero exposes TWO PDF text APIs we have to support:
+//    - "processed" (Zotero 8/9): char-level data with rects and break flags.
+//    - "textContent" (PDF.js fallback): item-level strings with transforms,
+//      no per-char rects — we synthesize them by interpolating x within
+//      each item's width.
+// 2. The PDF text we match against is normalized (lowercased, ligatures
+//    expanded, hyphen-line-breaks collapsed, whitespace coalesced). We must
+//    map normalized offsets back to ORIGINAL char offsets to extract rects
+//    accurately. That's `normalizeWithMap` + `originalRangeFromNormalized`.
+// 3. Match runs in two stages per page: exact substring in normalized text,
+//    falling back to a Levenshtein fuzzy scan with stride = needle/4. We
+//    never claim a hit below `minConfidence` (default 0.85).
+// 4. Annotations in Zotero sort by a "pageIndex|offset|topY" string. The
+//    semantics of `offset` differ between the two text-source paths — see
+//    `sortOffsetForRange`.
+//
+// REF: Zotero source `Zotero.Annotations.saveFromJSON`, PDF.js
+//      `getTextContent`, Zotero pdf-reader `_pdfPages` / `getProcessedData`.
+
 export type PdfRect = [number, number, number, number];
 
 export interface LocateResult {
@@ -112,10 +135,20 @@ interface ProcessedCharLike {
   wordBreakAfter?: boolean;
 }
 
+// Tuning constants. INVARIANT: changes here must be re-validated against
+// real PDFs (small-font 2-col papers expose Y-grouping bugs first).
 const DEFAULT_MIN_CONFIDENCE = 0.85;
+// LINE_Y_TOLERANCE is in PDF user-space units: items whose y differs by
+// ≤2 are treated as the same visual line. Loose enough for descender drift,
+// tight enough to keep adjacent lines separate at body font sizes.
 const LINE_Y_TOLERANCE = 2;
+// Reader can be polled for up to 5s before its iframe has a pdfDocument.
+// GOTCHA: opening a tab via `Zotero.Reader.open` resolves before the PDF.js
+// viewer is ready; we MUST wait, not throw immediately.
 const PDF_SOURCE_WAIT_MS = 5000;
 const PDF_SOURCE_POLL_MS = 120;
+// Common Latin ligatures the PDF text layer emits as single codepoints.
+// Expanded BEFORE matching so a needle "office" finds "oﬃce".
 const LIGATURES: Record<string, string> = {
   "\ufb00": "ff",
   "\ufb01": "fi",
@@ -141,6 +174,10 @@ export async function createPdfLocator(reader: unknown): Promise<PdfLocator> {
     );
   }
 
+  // Page bundles are loaded lazily and memoized as PROMISES (not values),
+  // so two concurrent locate() calls share one extraction pass per page.
+  // INVARIANT: never re-extract a page — the textContent / processed
+  // results are not guaranteed to be identical across calls.
   const bundles = new Map<number, Promise<PageBundle | null>>();
   const pageLengths = new Map<number, number>();
   const pageLabels = await source.getPageLabels();
@@ -158,6 +195,9 @@ export async function createPdfLocator(reader: unknown): Promise<PdfLocator> {
     return bundle;
   };
 
+  // Sum of pageText lengths for pages [0, pageIndex). Used by the
+  // textContent source to build a document-wide sort offset (Zotero needs
+  // this so annotations sort in reading order across pages).
   const cumulativeOffset = async (pageIndex: number): Promise<number> => {
     let offset = 0;
     for (let index = 0; index < pageIndex; index++) {
@@ -179,6 +219,16 @@ export async function createPdfLocator(reader: unknown): Promise<PdfLocator> {
       }
       return pages.join("\n");
     },
+    // Two-stage match. WHY two stages: most model-supplied passages match
+    // verbatim (they were copied from getFullText output), so an O(N) page
+    // scan with `indexOf` finds them fast. We only fall back to the O(N·k)
+    // fuzzy stage for the minority of cases where ligatures / dehyphenation
+    // / column-break artifacts perturb the text.
+    //
+    // Exact match returns immediately on the first page that contains the
+    // needle. Fuzzy match scans ALL pages and picks the highest-confidence
+    // window above `minConfidence` — never a same-page early-exit, because
+    // a low-confidence early page can mask a high-confidence later page.
     async locate(needle, opts) {
       const normalizedNeedle = normalizeWithMap(needle).text;
       if (!normalizedNeedle) return null;
@@ -238,6 +288,11 @@ async function waitForPdfSource(
   return source;
 }
 
+// Walks the Zotero Reader object graph looking for any PDF text source.
+// GOTCHA: Zotero 7/8/9 expose this differently and even pre-release builds
+// switch between `_internalReader._primaryView` and direct `_iframeWindow`.
+// We try every shape we know and take the first that yields pageCount > 0.
+// REF: Zotero source `chrome/content/zotero/elements/reader.js`.
 function extractPdfSource(reader: unknown): PdfPageSource | null {
   const r = reader as any;
   const views = [
@@ -632,6 +687,20 @@ function anchorFromItem(
   };
 }
 
+// Normalizer with offset back-mapping.
+// Returns:
+//   text: lowercased + ligatures expanded + zero-widths stripped + each run
+//         of whitespace collapsed to a single space.
+//   map:  for each char in `text`, the offset in the ORIGINAL `input` that
+//         char came from. Used by `originalRangeFromNormalized` to recover
+//         original-space offsets after we match in normalized space.
+//
+// Special-case `-\n` (hyphen at line end): both consumed, no output. WHY:
+// PDFs hyphenate words across lines; preserving the hyphen would make
+// "self-\nattention" fail to match "self-attention".
+//
+// INVARIANT: map.length === [...text].length AT EVERY POINT during build —
+// used by `originalRangeFromNormalized` to find the source char of `text[i]`.
 function normalizeWithMap(input: string): NormalizedText {
   const chars: string[] = [];
   const map: number[] = [];
@@ -730,6 +799,15 @@ function isZeroWidth(char: string): boolean {
   );
 }
 
+// Fuzzy match: slide a needle-sized window across the page in coarse
+// strides and pick the highest-confidence window. Confidence = 1 - (edit
+// distance / max(window, needle)).
+// WHY stride = needleLength / 4 (not 1): full O(N·k) Levenshtein over every
+// offset would be too slow for long pages. A stride of needle/4 still finds
+// the optimum window within a few characters, and the misalignment is
+// absorbed by Levenshtein insertions/deletions on the boundaries.
+// GOTCHA: this CANNOT find a match shorter than `needleLength` — by design,
+// since the caller wants a passage of roughly the needle's size.
 function fuzzyNormalizedMatch(
   page: PageBundle,
   normalizedNeedle: string,
@@ -815,6 +893,14 @@ async function locateOnPage(
   };
 }
 
+// Sort offset semantics differ between the two source types:
+// - "processed": offset is the FIRST char's `itemIndex` in the page's char
+//   stream — Zotero's native annotation sort comparator expects this for
+//   processed-page annotations.
+// - "textContent" (PDF.js fallback): offset is a document-wide char index
+//   (cumulativeOffset + rangeStart). WHY document-wide: Zotero compares
+//   sortIndex strings lexicographically, so per-page-relative offsets
+//   would sort the same value across different pages incorrectly.
 function sortOffsetForRange(
   page: PageBundle,
   rangeStart: number,
@@ -880,6 +966,12 @@ function rectsForRange(
     .filter((rect): rect is PdfRect => !!rect);
 }
 
+// Build per-line rectangles from char-level "processed" anchors.
+// Approach: walk anchors in stream order, expanding the current rect
+// (union of bounding boxes) until we hit a `lineBreakAfter` flag — flush,
+// then start a new rect. WHY: Zotero highlights look right when each
+// visual line is its own rectangle (matches how the PDF text is laid out);
+// one giant union rect would fill the page gutter on multi-line passages.
 function processedRectsForAnchors(anchors: ItemAnchor[]): PdfRect[] {
   const rects: PdfRect[] = [];
   let current: PdfRect | null = null;
@@ -914,6 +1006,13 @@ function roundRect(rect: PdfRect): PdfRect {
   return rect.map((value) => Number(value.toFixed(3))) as PdfRect;
 }
 
+// textContent fallback path: anchors only have line-level transforms (one
+// (x,y) per text item, not per char), so we cluster anchors into visual
+// lines by Y proximity. PDF Y axis grows UPWARD, hence the `b.y - a.y`
+// descending sort. INVARIANT: tolerance is `LINE_Y_TOLERANCE` units —
+// anchors within that vertical band are the same visual line.
+// GOTCHA: this is O(N²) — fine for a single passage's anchors (dozens),
+// not for whole-page clustering.
 function groupAnchorsByY(anchors: ItemAnchor[]): ItemAnchor[][] {
   const sorted = anchors
     .slice()
@@ -952,6 +1051,13 @@ function lineRect(
   ];
 }
 
+// Cuts a partial rect out of one item-level anchor by linearly
+// interpolating x within the anchor's width. WHY linear (not glyph-aware):
+// the textContent path doesn't expose per-glyph widths, so we approximate
+// monospace-style positioning. GOTCHA: this is INACCURATE for proportional
+// fonts — a passage like "Wii Wii Wii" gets equal-width slices when the
+// real glyphs differ. Acceptable because the highlight is shown over the
+// right line and the user can always edit it in Zotero.
 function anchorPartialRect(
   anchor: ItemAnchor,
   matchStart: number,
@@ -972,6 +1078,11 @@ function anchorPartialRect(
   return [Math.min(startX, endX), y0, Math.max(startX, endX), y1];
 }
 
+// Zotero's annotation sort key. Format: "PPPPP|OOOOOO|TTTTT" — three
+// zero-padded numeric fields joined with "|". Lexicographic order on this
+// string yields reading order: by page, then by stream/char offset, then
+// by Y position within the page.
+// REF: Zotero source `chrome/content/zotero/elements/annotation-row.js`.
 function buildSortIndex(
   pageIndex: number,
   offset: number,

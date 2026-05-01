@@ -5,6 +5,17 @@ import { createPdfLocator, type PdfLocator } from "./pdf-locator";
 import { DEFAULT_CONTEXT_POLICY, type ContextPolicy } from "./policy";
 import { extractPdfRange, searchPdfPassages } from "./retrieval";
 
+// Codex-style local harness for Zotero. Each tool is a structured function
+// the model can call; the harness validates args, enforces policy budgets,
+// runs the Zotero side-effect, and returns a structured result.
+//
+// INVARIANT: NO local intent routing. The model decides whether it needs
+// metadata, search, range, full PDF, or annotation writes — never our code.
+// (See CLAUDE.md "No hardcoded semantic intent matching".)
+//
+// REF: Codex `mcp_tool_call` registry pattern; OpenAI Codex
+//      `responses_api/function_call` schema.
+
 export interface ToolFactoryOptions {
   source: ContextSource;
   itemID: number | null;
@@ -25,6 +36,9 @@ export interface SelectionAnnotationDraft {
   annotation: Record<string, unknown>;
 }
 
+// Session-less convenience wrapper for tests. Production callers should
+// use `createZoteroAgentToolSession` directly so they can `dispose()` the
+// PdfLocator (otherwise the locator pins page bundles in memory).
 export function createZoteroAgentTools(
   options: ToolFactoryOptions,
 ): AgentTool[] {
@@ -257,10 +271,18 @@ export function createZoteroAgentToolSession(
     },
   ];
 
+  // Default mode: full read-tool set + selection-anchored write tool.
   if (!options.fullTextHighlight) {
     return { tools, dispose: highlightSession.dispose };
   }
 
+  // Full-text-highlight mode (the "annotate this paper" preset prompt):
+  // - Drop the user-selection-anchored annotation tool (no UI selection in
+  //   this flow; the model picks passages itself).
+  // - Replace it with `zotero_annotate_passage`, which uses the PDF locator
+  //   to fuzzy-match a verbatim passage and write a highlight there.
+  // WHY: tool-subset switching prevents the model from invoking the wrong
+  // write path during a bulk-annotation flow.
   const allowed = [
     "zotero_get_current_item",
     "zotero_get_full_pdf",
@@ -278,6 +300,12 @@ export function createZoteroAgentToolSession(
   };
 }
 
+// Two PDF-text sources, deliberately split:
+// - Default: Zotero's offline full-text cache (fast, but no coordinates).
+// - Highlight mode: PDF.js text layer via the active Reader (slower init,
+//   but yields coordinates needed to *write* highlights at the right spot).
+// GOTCHA: never mix them in one turn — char offsets differ between the
+// fulltext cache and the reader's text layer.
 async function getToolPdfText(
   options: ToolFactoryOptions,
   session: FullTextHighlightState,
@@ -306,6 +334,11 @@ interface FullTextHighlightState {
   dispose(): void;
 }
 
+// Locator session: lazily builds one PdfLocator per tool session and
+// memoizes it. INVARIANT: at most one in-flight locator init promise — the
+// model often calls `zotero_get_full_pdf` and `zotero_annotate_passage` in
+// rapid succession, and we MUST NOT trigger PDF.js text-layer extraction
+// twice in parallel (it produces inconsistent char offsets).
 function createFullTextHighlightState(
   options: ToolFactoryOptions,
 ): FullTextHighlightState {
@@ -390,6 +423,9 @@ function createAnnotatePassageTool(
         return errorResult(
           "zotero_annotate_passage requires a non-empty `comment`.",
         );
+      // INVARIANT: per-turn highlight cap. We surface an *error* result so
+      // the model gets clear feedback in its tool-output stream and pivots
+      // to summarizing instead of looping until maxToolIterations blows.
       if (!session.canWriteHighlight()) {
         return errorResult(
           `Highlight limit reached (${policy.maxFullTextHighlights}). Stop creating annotations and summarize the saved highlights.`,
@@ -585,6 +621,9 @@ function formatMetadata(item: ItemMetadata): string {
   return lines.join("\n");
 }
 
+// Token-to-char heuristic shared with builder.ts: 1 token ≈ 4 chars.
+// GOTCHA: this is a rough OAI/Anthropic English heuristic; CJK uses fewer
+// chars per token, so this *over-budgets* tokens for Chinese papers (safe).
 function truncateByTokenBudget(text: string, tokenBudget: number): string {
   const charBudget = tokenBudget * 4;
   return text.length > charBudget ? text.slice(0, charBudget) : text;

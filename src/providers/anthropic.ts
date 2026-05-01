@@ -2,6 +2,12 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { Provider, Message, ProviderStreamOptions, StreamChunk } from './types';
 import type { ModelPreset } from '../settings/types';
 
+// Anthropic Messages-streaming adapter.
+// GOTCHA: this adapter does NOT yet implement the agent tool loop. The
+// Codex-style harness/tools flow currently runs only on the OpenAI Responses
+// path. `_options.tools` is intentionally ignored — switching providers in
+// the sidebar disables Zotero tools for that turn.
+// REF: providers/openai.ts for the tool-loop reference implementation.
 export class AnthropicProvider implements Provider {
   async *stream(
     messages: Message[],
@@ -22,6 +28,11 @@ export class AnthropicProvider implements Provider {
         {
           model: preset.model,
           max_tokens: preset.maxTokens,
+          // WHY: mark the system prompt as `ephemeral` so Anthropic prompt
+          // caching kicks in across turns — the prompt is large (paper
+          // metadata + context plan) and stable for the duration of the
+          // current Zotero item's chat thread.
+          // REF: Anthropic prompt-caching docs; cache_control TTL is short.
           system: [
             { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } },
           ],
@@ -116,6 +127,9 @@ function anthropicImageMediaType(
   }
 }
 
+// GOTCHA: Anthropic's image source expects raw base64, NOT a `data:` URL.
+// We strip the `data:image/png;base64,` prefix here. OpenAI takes the full
+// data-URL via `input_image.image_url`, so the providers diverge on this.
 function dataUrlPayload(dataUrl: string): string {
   const comma = dataUrl.indexOf(',');
   return comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
