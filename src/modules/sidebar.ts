@@ -48,21 +48,22 @@ const SELECTION_CONTEXT_QUERY_CHARS = 500;
 // "Annotate this paper" preset prompt.
 //
 // This is the user-facing instruction injected when the user clicks the
-// quick prompt for full-text highlighting. It pairs with the
-// `fullTextHighlight: true` tool-set in agent-tools.ts (which restricts
-// writes to `zotero_annotate_passage` and removes the selection-based
-// write tool).
+// quick prompt for full-text highlighting. It is an explicit shortcut, not
+// local intent routing: ordinary typed requests still go through the same
+// always-visible tool manual and model-selected Zotero tools.
 //
 // Each numbered step matches a harness contract:
-//   1-2. Read the full PDF; if the harness truncates due to
-//        `policy.fullPdfTokenBudget`, top up via `zotero_read_pdf_range`.
-//   3.   Limit to 5-10 highlights so we don't blow `maxFullTextHighlights`
+//   1.   Read metadata/abstract so the paper's main thread is explicit.
+//   2-3. Read Reader text, not Zotero's full-text cache, because
+//        `zotero_annotate_passage` locates against the same Reader text
+//        layer. If truncated, top up with the same Reader-text tool range.
+//   4.   Limit to 5-10 highlights so we don't blow `maxFullTextHighlights`
 //        (default 10). Anti-noise guidance ("avoid summary spans,
 //        equations") matches what users actually want highlighted.
-//   4.   `text` must be VERBATIM — pdf-locator's exact-match path is fast,
+//   5.   `text` must be VERBATIM — pdf-locator's exact-match path is fast,
 //        the fuzzy fallback (≥0.85 confidence) handles minor OCR drift.
 //        80-char comment cap matches `maxFullTextHighlightCommentChars`.
-//   5.   Forces a final summary turn so the model exits the tool loop.
+//   6.   Forces a final summary turn so the model exits the tool loop.
 //
 // The retry-with-rewrite hint addresses the locator's known weakness on
 // dehyphenation / column-break artifacts; rewrites preserving ≥80% of the
@@ -70,19 +71,34 @@ const SELECTION_CONTEXT_QUERY_CHARS = 500;
 const FULL_TEXT_HIGHLIGHT_PROMPT = [
   "请执行以下流程，对当前 PDF 标注重点：",
   "",
-  "1. 调用 zotero_get_full_pdf 一次，读取当前 PDF 文本。",
-  "2. 如果工具输出显示全文被截断（Truncated: yes / sent chars < total chars），请用 zotero_read_pdf_range 补读未覆盖的关键范围，尽量覆盖全文后再选择重点。",
-  "3. 通读后，从中选出 5–10 条最值得标注的重点句（论点、关键定义、核心结果、关键限制、贡献点等），避免标摘要性的整段、避免标公式。",
-  "4. 对每一条调用 zotero_annotate_passage：",
+  "1. 先调用 zotero_get_current_item，读取标题、作者、年份和摘要；用摘要建立论文主线（研究问题、方法、结果、结论）。",
+  "2. 再调用 zotero_get_reader_pdf_text，读取当前 Reader 的 PDF 文本层。注意：后续要高亮的 text 必须从这个工具输出中逐字复制，不要从 zotero_get_full_pdf 复制。",
+  "3. 如果工具输出显示全文被截断（Truncated: yes / sent chars < total chars），请继续调用 zotero_get_reader_pdf_text 并传入 start/end 补读未覆盖的关键范围。",
+  "4. 通读后，从 Reader 文本中选出 5–10 条最值得标注的重点句（论点、关键定义、核心结果、关键限制、贡献点等），优先选择能支撑摘要主线的正文原句；避免标摘要性的整段、避免标公式。如果摘要里有高度概括贡献/结论的关键句，最多标 1 条。",
+  "5. 对每一条调用 zotero_annotate_passage：",
   "   - text 字段必须是 PDF 中的逐字原文，不要改写、不要翻译、不要省略标点。",
   "   - comment 字段用中文，简洁说明“这句话为什么重要”，≤ 80 字。",
   "   - color 字段不传，使用默认色。",
-  "5. 全部标注完成后，再用一段中文总结：标了哪几句、整体读后感、可能漏掉的角度。",
+  "6. 全部标注完成后，再用一段中文总结：摘要主线、标了哪几句、正文补充了什么、可能漏掉的角度。",
   "",
   "注意：",
-  "- 不要调用其它写工具。",
-  "- 本轮工具环境只允许 zotero_annotate_passage 这个批量写工具；如果达到工具返回的 highlight limit，请停止写入并总结已保存内容。",
+  "- 只有本次全文标注需要写入 PDF；不要调用与本任务无关的写工具。",
+  "- 如果达到工具返回的 highlight limit，请停止写入并总结已保存内容。",
   '- 如果某句调用 zotero_annotate_passage 返回 "Passage not found"，可以稍微改写后重试（保持原句 80% 以上文字不变）；连续两次都找不到就放弃这句、继续下一条。',
+].join("\n");
+
+const ZOTERO_TOOL_MANUAL = [
+  "Zotero tool manual:",
+  "- The model, not the local UI, decides which Zotero tool to call. The local harness only validates arguments, enforces budgets/permissions, executes tools, and returns visible tool traces.",
+  "- Use zotero_get_current_item for title, authors, year, tags, and abstract. Prefer it before whole-paper summaries, contribution analysis, or full-paper annotation planning.",
+  "- Use zotero_get_full_pdf for ordinary whole-paper reading, summary, review, comparison, or analysis. This reads Zotero's full-text cache and is not the source for text that will be highlighted.",
+  "- Use zotero_search_pdf for targeted concepts, figures, experiments, equations, claims, definitions, and local evidence; use zotero_read_pdf_range only to expand cache-based ranges from prior tool output or the ledger.",
+  "- Use zotero_get_annotations when the user asks about existing Zotero highlights, notes, comments, annotations, or reading marks.",
+  "- Use zotero_get_reader_pdf_text when the user explicitly asks to write PDF highlights/annotations or annotate the whole paper. Copy zotero_annotate_passage.text verbatim from zotero_get_reader_pdf_text output so the passage can be located in the Reader text layer.",
+  "- Use zotero_add_annotation_to_selection only when the user explicitly asks to save a note/comment on the current PDF selection.",
+  "- Use zotero_annotate_passage only when the user explicitly asks to write highlights/annotations into the PDF. Do not use write tools for ordinary requests like summarizing key points unless the user asks to write/highlight/annotate in Zotero.",
+  "- PDF modification requires approval or YOLO mode. If a write tool is blocked, explain that the user must enable YOLO or approve the write, and do not pretend the PDF was modified.",
+  "- For paper-specific claims, rely only on currently attached context or Zotero tool outputs. If you have only caption/text and not an image, say so explicitly for visual questions.",
 ].join("\n");
 
 let registered = false;
@@ -2071,7 +2087,7 @@ function contextAwareSystemPrompt(
   systemPrompt: string,
   contextLedger: string,
 ): string {
-  return `${systemPrompt}\n\nAgent policy: You can call local Zotero tools to read the current item metadata, PDF annotations, targeted PDF passages, exact PDF ranges, or the full PDF. You can also call permission-aware Zotero write tools when the user explicitly asks to save a note or annotation. Decide which tool is needed; the local harness only executes tools and enforces budgets. Use only currently attached context or tool output for paper-specific claims. The ledger below records previous Zotero context that may no longer be visible; do not treat it as available source text.\n\nPreviously sent context ledger (not currently attached):\n${contextLedger}`;
+  return `${systemPrompt}\n\n${ZOTERO_TOOL_MANUAL}\n\nThe ledger below records previous Zotero context that may no longer be visible; do not treat it as available source text.\n\nPreviously sent context ledger (not currently attached):\n${contextLedger}`;
 }
 
 // Tool-trace upsert. Each chunk that comes from the provider stream is

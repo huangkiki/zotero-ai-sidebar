@@ -1,7 +1,7 @@
 // MessageContext schema for context-card display + ledger formatting.
 // Each `planMode` value below maps to one tool/UI path:
 //   none / metadata_only / annotations / search_pdf / pdf_range /
-//   selected_text / full_pdf / annotation_write.
+//   selected_text / full_pdf / reader_pdf_text / annotation_write.
 // INVARIANT: this is descriptive metadata captured AFTER the model picks
 // a tool — not a planner schema. The model's choice is the planner.
 export type ContextMode =
@@ -12,6 +12,7 @@ export type ContextMode =
   | "pdf_range"
   | "selected_text"
   | "full_pdf"
+  | "reader_pdf_text"
   | "annotation_write";
 
 export type ContextPlanSource = "selected" | "model" | "fallback";

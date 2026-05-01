@@ -27,9 +27,9 @@ harness enforcement.
   "bypass approvals" style used by coding agents and is intended for trusted
   local workflows.
 
-Current Zotero context tools are read-only, so YOLO mainly prepares the harness
-for future write tools such as creating notes, adding annotations, and exporting
-Markdown summaries.
+PDF modification tools such as annotation creation are marked
+`requiresApproval`. Until an approval UI exists, they are blocked in `default`
+mode and run only in `yolo` mode. Read tools remain available without YOLO.
 
 ## Local Context Tools
 
@@ -38,12 +38,19 @@ Markdown summaries.
   available in the system prompt.
 - `annotations`: attach Zotero PDF annotations, highlights, comments, page
   labels, and colors.
-- `search_pdf`: search current PDF full text with the model-provided query;
-  bounded candidate passages are returned to the model with character ranges.
-- `pdf_range`: attach an exact PDF character range. The model must provide
-  `rangeStart` and `rangeEnd`; the harness does not infer chapter boundaries.
-- `full_pdf`: attach current PDF full text when the model explicitly requests
-  whole-paper context through the tool loop.
+- `search_pdf`: search current PDF full-text cache with the model-provided
+  query; bounded candidate passages are returned with character ranges.
+- `pdf_range`: attach an exact full-text-cache character range. The model must
+  provide `rangeStart` and `rangeEnd`; the harness does not infer chapter
+  boundaries.
+- `full_pdf`: attach current PDF full-text cache when the model explicitly
+  requests whole-paper context through the tool loop.
+- `reader_pdf_text`: attach text from the active Zotero Reader/PDF.js text
+  layer for PDF write workflows. Passages copied from this source can be
+  located by `zotero_annotate_passage`.
+- `annotation_write`: records permission-aware write tools such as
+  `zotero_annotate_passage`. These tools must be visible in traces and blocked
+  unless the permission mode allows writes.
 
 Selected PDF text is explicit UI context, not an inferred semantic intent. When
 present, it is attached directly to the current user message and recorded as
@@ -95,6 +102,9 @@ model enough state to request the smallest necessary local context again.
 - Treat annotations as first-class context because they represent user-created
   reading state.
 - Do not write Zotero notes or annotations unless the user explicitly asks.
+- For PDF highlights selected by the model, read from `reader_pdf_text` before
+  writing; do not copy highlight passages from the full-text cache, because its
+  text can differ from the Reader text layer used for coordinates.
 - Markdown summary generation should be a separate write tool with explicit
   confirmation and a visible destination.
 - If exact PDF content is unavailable, say which tool/context is missing rather

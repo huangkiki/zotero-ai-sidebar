@@ -21,6 +21,9 @@ export interface ToolFactoryOptions {
   itemID: number | null;
   policy?: ContextPolicy;
   selectionAnnotation?: () => SelectionAnnotationDraft | null;
+  // Kept for the explicit "full-text highlights" quick prompt. Tool
+  // availability no longer branches on this flag; the model sees the same
+  // manual/tools and decides what to call.
   fullTextHighlight?: boolean;
   getActiveReader?: () => unknown | null;
 }
@@ -94,7 +97,7 @@ export function createZoteroAgentToolSession(
     {
       name: "zotero_search_pdf",
       description:
-        "Search the current PDF full text using a query written by the model. Use this for targeted evidence, follow-up questions, definitions, figures, experiments, equations, claims, or local passages. The harness returns bounded passages with character ranges.",
+        "Search the current PDF full-text cache using a query written by the model. Use this for targeted evidence, follow-up questions, definitions, figures, experiments, equations, claims, or local passages. The harness returns bounded passages with character ranges. For passages that will be written back as PDF highlights, use zotero_get_reader_pdf_text instead so the copied text matches the Reader text layer.",
       parameters: objectSchema(
         {
           query: stringSchema("Search query for the current PDF full text."),
@@ -112,9 +115,8 @@ export function createZoteroAgentToolSession(
         const query = stringArg(parsed, "query");
         if (!query)
           return errorResult("zotero_search_pdf requires a non-empty query.");
-        const pdfText = await getToolPdfText(options, highlightSession, itemID);
-        if (!pdfText)
-          return errorResult(readablePdfTextError(options, highlightSession));
+        const pdfText = await getToolPdfText(options, itemID);
+        if (!pdfText) return errorResult(readablePdfTextError());
         const topK = numberArg(parsed, "topK") ?? policy.searchCandidateCount;
         const passages = searchPdfPassages(pdfText, query, topK, policy);
         return {
@@ -136,7 +138,7 @@ export function createZoteroAgentToolSession(
     {
       name: "zotero_read_pdf_range",
       description:
-        "Read an exact character range from the current PDF full text. Use only when a previous tool result or ledger gives useful start/end ranges. The harness validates and caps the range.",
+        "Read an exact character range from the current PDF full-text cache. Use only when a previous cache-based tool result or ledger gives useful start/end ranges. The harness validates and caps the range. For passages that will be written back as PDF highlights, use zotero_get_reader_pdf_text instead.",
       parameters: objectSchema(
         {
           start: numberSchema(
@@ -160,9 +162,8 @@ export function createZoteroAgentToolSession(
             "zotero_read_pdf_range requires numeric start and end.",
           );
         }
-        const pdfText = await getToolPdfText(options, highlightSession, itemID);
-        if (!pdfText)
-          return errorResult(readablePdfTextError(options, highlightSession));
+        const pdfText = await getToolPdfText(options, itemID);
+        if (!pdfText) return errorResult(readablePdfTextError());
         const range = extractPdfRange(pdfText, start, end, policy);
         if (!range)
           return errorResult("The requested PDF range is invalid or empty.");
@@ -181,15 +182,14 @@ export function createZoteroAgentToolSession(
     {
       name: "zotero_get_full_pdf",
       description:
-        "Read the current PDF full text for whole-paper synthesis. Use when the user asks to summarize, review, compare, or analyze the entire paper and smaller tools are insufficient. The harness applies a full-PDF budget cap.",
+        "Read the current PDF full-text cache for whole-paper synthesis. Use when the user asks to summarize, review, compare, or analyze the entire paper and smaller tools are insufficient. Do not copy highlight text from this tool for zotero_annotate_passage; use zotero_get_reader_pdf_text for PDF write workflows. The harness applies a full-PDF budget cap.",
       parameters: objectSchema({}),
       execute: async () => {
         const itemID = currentItemID(options);
         if (itemID == null)
           return errorResult("No Zotero item is currently selected.");
-        const pdfText = await getToolPdfText(options, highlightSession, itemID);
-        if (!pdfText)
-          return errorResult(readablePdfTextError(options, highlightSession));
+        const pdfText = await getToolPdfText(options, itemID);
+        if (!pdfText) return errorResult(readablePdfTextError());
         const text = truncateByTokenBudget(pdfText, policy.fullPdfTokenBudget);
         const truncated = text.length < pdfText.length;
         return {
@@ -213,6 +213,7 @@ export function createZoteroAgentToolSession(
         };
       },
     },
+    createGetReaderPdfTextTool(policy, highlightSession),
     {
       name: "zotero_add_annotation_to_selection",
       description:
@@ -269,60 +270,31 @@ export function createZoteroAgentToolSession(
         };
       },
     },
+    createAnnotatePassageTool(policy, highlightSession),
   ];
 
-  // Default mode: full read-tool set + selection-anchored write tool.
-  if (!options.fullTextHighlight) {
-    return { tools, dispose: highlightSession.dispose };
-  }
-
-  // Full-text-highlight mode (the "annotate this paper" preset prompt):
-  // - Drop the user-selection-anchored annotation tool (no UI selection in
-  //   this flow; the model picks passages itself).
-  // - Replace it with `zotero_annotate_passage`, which uses the PDF locator
-  //   to fuzzy-match a verbatim passage and write a highlight there.
-  // WHY: tool-subset switching prevents the model from invoking the wrong
-  // write path during a bulk-annotation flow.
-  const allowed = [
-    "zotero_get_current_item",
-    "zotero_get_full_pdf",
-    "zotero_read_pdf_range",
-    "zotero_search_pdf",
-  ];
-  return {
-    tools: [
-      ...allowed
-        .map((name) => tools.find((tool) => tool.name === name))
-        .filter((tool): tool is AgentTool => !!tool),
-      createAnnotatePassageTool(policy, highlightSession),
-    ],
-    dispose: highlightSession.dispose,
-  };
+  return { tools, dispose: highlightSession.dispose };
 }
 
-// Two PDF-text sources, deliberately split:
-// - Default: Zotero's offline full-text cache (fast, but no coordinates).
-// - Highlight mode: PDF.js text layer via the active Reader (slower init,
-//   but yields coordinates needed to *write* highlights at the right spot).
-// GOTCHA: never mix them in one turn — char offsets differ between the
-// fulltext cache and the reader's text layer.
 async function getToolPdfText(
   options: ToolFactoryOptions,
-  session: FullTextHighlightState,
   itemID: number,
 ): Promise<string> {
-  if (!options.fullTextHighlight) return options.source.getFullText(itemID);
+  return options.source.getFullText(itemID);
+}
+
+function readablePdfTextError(): string {
+  return "No readable PDF full-text cache is available for the current item.";
+}
+
+async function getReaderPdfText(
+  session: FullTextHighlightState,
+): Promise<string> {
   const locator = await session.getOrCreateLocator();
   return locator ? locator.getFullText() : "";
 }
 
-function readablePdfTextError(
-  options: ToolFactoryOptions,
-  session: FullTextHighlightState,
-): string {
-  if (!options.fullTextHighlight) {
-    return "No readable PDF full-text cache is available for the current item.";
-  }
+function readableReaderPdfTextError(session: FullTextHighlightState): string {
   return `No readable PDF.js text layer is available from the active Zotero Reader. ${session.locatorError()}`;
 }
 
@@ -336,8 +308,8 @@ interface FullTextHighlightState {
 
 // Locator session: lazily builds one PdfLocator per tool session and
 // memoizes it. INVARIANT: at most one in-flight locator init promise — the
-// model often calls `zotero_get_full_pdf` and `zotero_annotate_passage` in
-// rapid succession, and we MUST NOT trigger PDF.js text-layer extraction
+// model often calls `zotero_get_reader_pdf_text` and `zotero_annotate_passage`
+// in rapid succession, and we MUST NOT trigger PDF.js text-layer extraction
 // twice in parallel (it produces inconsistent char offsets).
 function createFullTextHighlightState(
   options: ToolFactoryOptions,
@@ -387,6 +359,90 @@ function createFullTextHighlightState(
   };
 }
 
+function createGetReaderPdfTextTool(
+  policy: ContextPolicy,
+  session: FullTextHighlightState,
+): AgentTool {
+  return {
+    name: "zotero_get_reader_pdf_text",
+    description:
+      "Read PDF text from the active Zotero Reader/PDF.js text layer. Use this when the user explicitly asks to write PDF highlights/annotations, because passages copied from this tool can be located by zotero_annotate_passage. Requires the PDF to be open in Zotero Reader. For ordinary summarization or non-writing analysis, use zotero_get_full_pdf instead. Optional start/end read an exact Reader-text range from a previous zotero_get_reader_pdf_text result.",
+    parameters: objectSchema({
+      start: numberSchema(
+        "Optional zero-based start character offset from a previous Reader-text result.",
+      ),
+      end: numberSchema(
+        "Optional end character offset from a previous Reader-text result.",
+      ),
+    }),
+    execute: async (args) => {
+      const pdfText = await getReaderPdfText(session);
+      if (!pdfText) return errorResult(readableReaderPdfTextError(session));
+
+      const parsed = objectArgs(args);
+      const slice = readerTextSlice(pdfText, parsed, policy);
+      if (!slice) {
+        return errorResult(
+          "zotero_get_reader_pdf_text requires both numeric start and end when either range field is provided, and the range must be valid.",
+        );
+      }
+      const truncated = slice.end < pdfText.length;
+      return {
+        output: [
+          "[Reader PDF text for annotation]",
+          "Source: active Zotero Reader text layer",
+          "Use with: zotero_annotate_passage",
+          `Chars: ${slice.text.length} / ${pdfText.length}`,
+          `Truncated: ${truncated ? "yes" : "no"}`,
+          `Range: ${slice.start}-${slice.end}`,
+          "",
+          slice.text,
+        ].join("\n"),
+        summary: `读取 Reader PDF 文本 ${slice.text.length}/${pdfText.length} 字`,
+        context: {
+          planMode: "reader_pdf_text",
+          fullTextChars: slice.text.length,
+          fullTextTotalChars: pdfText.length,
+          fullTextTruncated: truncated,
+          rangeStart: slice.start,
+          rangeEnd: slice.end,
+        },
+      };
+    },
+  };
+}
+
+function readerTextSlice(
+  pdfText: string,
+  args: Record<string, unknown>,
+  policy: ContextPolicy,
+): { start: number; end: number; text: string } | null {
+  const startArg = numberArg(args, "start");
+  const endArg = numberArg(args, "end");
+  const hasStart = startArg != null;
+  const hasEnd = endArg != null;
+  if (hasStart !== hasEnd) return null;
+
+  if (!hasStart && !hasEnd) {
+    const end = Math.min(pdfText.length, policy.fullPdfTokenBudget * 4);
+    return { start: 0, end, text: pdfText.slice(0, end) };
+  }
+  if (startArg == null || endArg == null) return null;
+
+  const start = Math.floor(startArg);
+  const requestedEnd = Math.floor(endArg);
+  if (start !== startArg || requestedEnd !== endArg) return null;
+  if (start < 0 || requestedEnd <= start || start >= pdfText.length)
+    return null;
+
+  const end = Math.min(
+    requestedEnd,
+    start + policy.maxRangeChars,
+    pdfText.length,
+  );
+  return { start, end, text: pdfText.slice(start, end) };
+}
+
 function createAnnotatePassageTool(
   policy: ContextPolicy,
   session: FullTextHighlightState,
@@ -394,7 +450,7 @@ function createAnnotatePassageTool(
   return {
     name: "zotero_annotate_passage",
     description:
-      "Create a Zotero PDF highlight annotation on a specific passage. Use after reading PDF text via zotero_get_full_pdf to mark key sentences. Provide the exact passage text (verbatim from the PDF) and a short comment. The harness locates the passage in the PDF and creates a highlight at that position.",
+      "Create a Zotero PDF highlight annotation on a specific passage. Use only when the user explicitly asks to write highlights/annotations into the PDF, such as annotating the whole paper or highlighting key sentences. Before using this tool for full-text annotation, call zotero_get_current_item to read the abstract, then call zotero_get_reader_pdf_text and copy `text` verbatim from that Reader-text output. Do not copy highlight text from zotero_get_full_pdf, because that tool uses Zotero's full-text cache rather than the Reader text layer. For ordinary summaries, do not use this write tool. PDF modification requires approval or YOLO mode.",
     requiresApproval: true,
     parameters: objectSchema(
       {

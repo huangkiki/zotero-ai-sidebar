@@ -85,7 +85,6 @@ describe("createZoteroAgentTools", () => {
     const session = createZoteroAgentToolSession({
       source,
       itemID: 1,
-      fullTextHighlight: true,
       getActiveReader: () =>
         readerWithPdfText("Important contribution improves retrieval."),
     });
@@ -119,7 +118,6 @@ describe("createZoteroAgentTools", () => {
     const session = createZoteroAgentToolSession({
       source,
       itemID: 1,
-      fullTextHighlight: true,
       getActiveReader: () => null,
     });
     const tool = session.tools.find(
@@ -137,7 +135,6 @@ describe("createZoteroAgentTools", () => {
     const session = createZoteroAgentToolSession({
       source,
       itemID: 1,
-      fullTextHighlight: true,
       getActiveReader: () => readerWithPdfText("Important text."),
     });
     const tool = session.tools.find(
@@ -159,7 +156,6 @@ describe("createZoteroAgentTools", () => {
     const session = createZoteroAgentToolSession({
       source,
       itemID: 1,
-      fullTextHighlight: true,
       policy: {
         ...sourcePolicy(),
         maxFullTextHighlights: 1,
@@ -181,26 +177,27 @@ describe("createZoteroAgentTools", () => {
     expect(saveCount).toBe(1);
   });
 
-  it("restricts the full-text highlight tool set", () => {
+  it("exposes reader-text and write tools in the default tool set", () => {
     const session = createZoteroAgentToolSession({
       source,
       itemID: 1,
-      fullTextHighlight: true,
       getActiveReader: () => readerWithPdfText("Text."),
     });
 
     expect(session.tools.map((tool) => tool.name)).toEqual([
       "zotero_get_current_item",
-      "zotero_get_full_pdf",
-      "zotero_read_pdf_range",
+      "zotero_get_annotations",
       "zotero_search_pdf",
+      "zotero_read_pdf_range",
+      "zotero_get_full_pdf",
+      "zotero_get_reader_pdf_text",
+      "zotero_add_annotation_to_selection",
       "zotero_annotate_passage",
     ]);
     expect(
-      session.tools.some(
-        (tool) => tool.name === "zotero_add_annotation_to_selection",
-      ),
-    ).toBe(false);
+      session.tools.find((tool) => tool.name === "zotero_annotate_passage")
+        ?.requiresApproval,
+    ).toBe(true);
   });
 
   it("exposes full PDF truncation metadata", async () => {
@@ -233,14 +230,13 @@ describe("createZoteroAgentTools", () => {
     });
   });
 
-  it("uses Reader text instead of Zotero cache text during full-text highlight", async () => {
+  it("keeps cache full text separate from Reader text for annotation", async () => {
     const session = createZoteroAgentToolSession({
       source: {
         ...source,
-        getFullText: async () => "cache text that should not be used",
+        getFullText: async () => "cache text for ordinary summary",
       },
       itemID: 1,
-      fullTextHighlight: true,
       getActiveReader: () =>
         readerWithPdfText("reader text used for highlighting"),
     });
@@ -250,16 +246,55 @@ describe("createZoteroAgentTools", () => {
     const search = session.tools.find(
       (candidate) => candidate.name === "zotero_search_pdf",
     );
+    const readerText = session.tools.find(
+      (candidate) => candidate.name === "zotero_get_reader_pdf_text",
+    );
 
     const fullResult = await fullPdf!.execute({});
     const searchResult = await search!.execute({
-      query: "highlighting",
+      query: "ordinary",
       topK: 1,
     });
+    const readerResult = await readerText!.execute({});
 
-    expect(fullResult.output).toContain("reader text used for highlighting");
-    expect(fullResult.output).not.toContain("cache text");
-    expect(searchResult.output).toContain("reader text used for highlighting");
+    expect(fullResult.output).toContain("cache text for ordinary summary");
+    expect(fullResult.output).not.toContain("reader text");
+    expect(searchResult.output).toContain("cache text for ordinary summary");
+    expect(readerResult.output).toContain("[Reader PDF text for annotation]");
+    expect(readerResult.output).toContain("reader text used for highlighting");
+    expect(readerResult.context).toMatchObject({
+      planMode: "reader_pdf_text",
+      fullTextChars: "reader text used for highlighting".length,
+      fullTextTotalChars: "reader text used for highlighting".length,
+      fullTextTruncated: false,
+      rangeStart: 0,
+      rangeEnd: "reader text used for highlighting".length,
+    });
+  });
+
+  it("reads capped ranges from Reader text", async () => {
+    const session = createZoteroAgentToolSession({
+      source,
+      itemID: 1,
+      policy: {
+        ...sourcePolicy(),
+        maxRangeChars: 4,
+      },
+      getActiveReader: () => readerWithPdfText("0123456789"),
+    });
+    const readerText = session.tools.find(
+      (candidate) => candidate.name === "zotero_get_reader_pdf_text",
+    );
+
+    const result = await readerText!.execute({ start: 2, end: 9 });
+
+    expect(result.output).toContain("Range: 2-6");
+    expect(result.output).toContain("\n2345");
+    expect(result.context).toMatchObject({
+      planMode: "reader_pdf_text",
+      rangeStart: 2,
+      rangeEnd: 6,
+    });
   });
 });
 

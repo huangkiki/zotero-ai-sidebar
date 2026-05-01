@@ -128,6 +128,9 @@ export function contextSummaryLine(message: Message): string {
       total && total !== context.fullTextChars
         ? `/${total} 字${context.fullTextTruncated ? "（已截断）" : ""}`
         : " 字";
+    if (context.planMode === "reader_pdf_text") {
+      return `模型请求 Reader PDF 文本 ${context.fullTextChars}${suffix}`;
+    }
     return `已随本轮发送 PDF 全文 ${context.fullTextChars}${suffix}`;
   }
   if (context.toolCalls?.length) {
@@ -224,12 +227,27 @@ export function formatContextLedger(messages: Message[]): string {
     ];
     if (context.selectedText)
       parts.push(`selected_text_chars=${context.selectedText.length}`);
-    if (context.fullTextChars)
-      parts.push(`full_pdf_chars=${context.fullTextChars}`);
-    if (context.fullTextTotalChars) {
-      parts.push(`full_pdf_total_chars=${context.fullTextTotalChars}`);
+    if (context.fullTextChars) {
+      parts.push(
+        context.planMode === "reader_pdf_text"
+          ? `reader_pdf_text_chars=${context.fullTextChars}`
+          : `full_pdf_chars=${context.fullTextChars}`,
+      );
     }
-    if (context.fullTextTruncated) parts.push("full_pdf_truncated=true");
+    if (context.fullTextTotalChars) {
+      parts.push(
+        context.planMode === "reader_pdf_text"
+          ? `reader_pdf_text_total_chars=${context.fullTextTotalChars}`
+          : `full_pdf_total_chars=${context.fullTextTotalChars}`,
+      );
+    }
+    if (context.fullTextTruncated) {
+      parts.push(
+        context.planMode === "reader_pdf_text"
+          ? "reader_pdf_text_truncated=true"
+          : "full_pdf_truncated=true",
+      );
+    }
     if (context.retrievedPassages?.length) {
       const chars = context.retrievedPassages.reduce(
         (sum, passage) => sum + passage.text.length,
