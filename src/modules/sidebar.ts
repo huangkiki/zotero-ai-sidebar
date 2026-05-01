@@ -38,6 +38,9 @@ import {
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
 const COLUMN_ID = "zai-column";
 const SPLITTER_ID = "zai-column-splitter";
+const NOTE_COLUMN_ID = "zai-note-column";
+const NOTE_SPLITTER_ID = "zai-note-column-splitter";
+const NOTE_ROOT_ID = "zai-note-root";
 const ROOT_ID = "zai-root";
 const TOGGLE_BUTTON_ID = "zai-toggle-button";
 const FLOATING_TOGGLE_ID = "zai-floating-toggle";
@@ -114,6 +117,13 @@ interface WindowSidebarState {
   column: Element;
   splitter: Element;
   mount: HTMLElement;
+  noteColumn: Element;
+  noteSplitter: Element;
+  noteMount: HTMLElement;
+  noteItemID?: number;
+  noteAutosaveTimer?: number;
+  noteAutosavePromise?: Promise<void>;
+  noteEditorCleanup?: () => void;
   toggleButton?: Element;
   floatingButton?: HTMLElement;
   selectionMonitorID?: number;
@@ -355,17 +365,24 @@ function renderToolbar(doc: Document, mount: HTMLElement, state: PanelState) {
     "div",
     toolbarPresets.length ? "preset-switcher" : "preset-empty",
   );
+  const topRow = el(doc, "div", "preset-switcher-row preset-switcher-top");
+  const bottomRow = el(
+    doc,
+    "div",
+    "preset-switcher-row preset-switcher-bottom",
+  );
   const title = el(doc, "strong", "", "AI 对话");
-  bar.append(title);
+  topRow.append(title);
 
   if (toolbarPresets.length === 0) {
-    bar.append(el(doc, "span", "", "未配置模型"));
+    topRow.append(el(doc, "span", "", "未配置模型"));
     const button = buttonEl(doc, "添加模型");
     button.addEventListener("click", () => {
       state.editing = true;
       renderPanel(mount, state);
     });
-    bar.append(button);
+    bottomRow.append(button);
+    bar.append(topRow, bottomRow);
     return bar;
   }
 
@@ -385,7 +402,7 @@ function renderToolbar(doc: Document, mount: HTMLElement, state: PanelState) {
     );
     renderPanel(mount, state);
   });
-  bar.append(select);
+  topRow.append(select);
 
   const settings = buttonEl(doc, state.editing ? "收起" : "设置");
   settings.addEventListener("click", () => {
@@ -399,7 +416,7 @@ function renderToolbar(doc: Document, mount: HTMLElement, state: PanelState) {
       void copyToClipboard(doc, formatConversationMarkdown(state));
       flashButton(copyAll, "已复制");
     });
-    bar.append(copyAll);
+    topRow.append(copyAll);
 
     const clear = buttonEl(doc, "清空");
     clear.disabled = state.sending;
@@ -409,13 +426,23 @@ function renderToolbar(doc: Document, mount: HTMLElement, state: PanelState) {
       void saveChatMessages(state.itemID, state.messages);
       renderPanel(mount, state);
     });
-    bar.append(clear);
+    topRow.append(clear);
   }
-  bar.append(settings);
+  const noteWindowOpen = isNoteWindowOpenForMount(mount);
+  const openNote = buttonEl(doc, noteWindowOpen ? "已打开" : "打开笔记");
+  openNote.className = "open-note-button";
+  openNote.title = "在当前 Zotero 窗口打开当前条目的子笔记";
+  openNote.disabled = state.itemID == null || noteWindowOpen;
+  openNote.addEventListener("click", () => {
+    void openCurrentItemNote(doc, state.itemID, openNote);
+  });
+  bottomRow.append(openNote);
+  bottomRow.append(settings);
   const hide = buttonEl(doc, "隐藏");
   hide.title = "隐藏 AI 对话列";
   hide.addEventListener("click", () => hideCurrentSidebar(mount));
-  bar.append(hide);
+  bottomRow.append(hide);
+  bar.append(topRow, bottomRow);
   return bar;
 }
 
@@ -2449,7 +2476,8 @@ function startSelectionMonitor(win: Window, sidebar: WindowSidebarState) {
   sidebar.selectionMonitorID = win.setInterval(() => {
     const itemID = getSelectedItemID(win);
     const before = getStoredSelectedText(itemID);
-    const focusInSidebar = isFocusInside(sidebar.mount);
+    const focusInSidebar =
+      isFocusInside(sidebar.mount) || isFocusInside(sidebar.noteMount);
     const after = refreshActiveReaderSelection(win, itemID, !focusInSidebar);
     if (before !== after) {
       updateSelectionIndicators(sidebar.mount, itemID);
@@ -2958,6 +2986,20 @@ function bubble(
   });
   actions.append(copy);
 
+  if (message.role === "assistant" && message.content.trim()) {
+    const saveNote = buttonEl(doc, "写入笔记");
+    saveNote.title = betterNotesInsertAvailable()
+      ? "用 Better Notes 写入当前条目的子笔记"
+      : "写入当前条目的 Zotero 子笔记";
+    saveNote.disabled =
+      state.itemID == null ||
+      (state.sending && state.activeAssistantIndex === index);
+    saveNote.addEventListener("click", () => {
+      void writeAssistantMessageToNote(doc, state.itemID, message, saveNote);
+    });
+    actions.append(saveNote);
+  }
+
   // Retry button only appears on the LATEST assistant message. WHY: the
   // regenerate path drops the last assistant message and re-streams from
   // the prior user turn — meaningful only for the latest exchange. Older
@@ -3024,6 +3066,988 @@ function bubble(
     );
   }
   return root;
+}
+
+async function openCurrentItemNote(
+  doc: Document,
+  itemID: number | null,
+  button: HTMLButtonElement,
+) {
+  const originalText = button.textContent || "打开笔记";
+  const originalTitle = button.title;
+  button.textContent = "打开中...";
+  button.disabled = true;
+  let opened = false;
+
+  try {
+    const { note, created } = await resolveTargetNote(itemID);
+    await showNoteWindow(doc, note);
+    opened = true;
+    button.textContent = created ? "已新建并打开" : "已打开";
+    button.title = `目标笔记 #${note.id}`;
+    button.disabled = true;
+  } catch (err) {
+    button.textContent = "打开失败";
+    button.title = err instanceof Error ? err.message : String(err);
+  } finally {
+    if (!opened) {
+      doc.defaultView?.setTimeout(() => {
+        button.textContent = originalText;
+        button.title = originalTitle;
+        button.disabled = false;
+      }, 1400);
+    }
+  }
+}
+
+async function showNoteWindow(doc: Document, note: Zotero.Item) {
+  const sidebar = findSidebarStateByDocument(doc);
+  if (!sidebar) throw new Error("无法找到 AI 侧栏");
+
+  sidebar.noteItemID = note.id;
+  setNoteColumnVisible(sidebar, true);
+  try {
+    renderNoteWindow(sidebar, note);
+    updateOpenNoteButton(sidebar);
+  } catch (err) {
+    sidebar.noteItemID = undefined;
+    sidebar.noteMount.replaceChildren();
+    setNoteColumnVisible(sidebar, false);
+    updateOpenNoteButton(sidebar);
+    throw err;
+  }
+}
+
+function renderNoteWindow(sidebar: WindowSidebarState, note: Zotero.Item) {
+  const doc = sidebar.noteMount.ownerDocument!;
+  sidebar.noteEditorCleanup?.();
+  sidebar.noteEditorCleanup = undefined;
+  sidebar.noteMount.replaceChildren();
+  const head = doc.createElementNS(XHTML_NS, "div") as HTMLElement;
+  head.className = "zai-note-window-head";
+
+  const title = doc.createElementNS(XHTML_NS, "div") as HTMLElement;
+  title.className = "zai-note-window-title";
+  title.textContent = noteTitle(note);
+  title.title = "拖动左侧橙色分隔线可调整笔记栏宽度";
+
+  const resizeHint = doc.createElementNS(XHTML_NS, "span") as HTMLElement;
+  resizeHint.className = "zai-note-resize-hint";
+  resizeHint.textContent = "↔ 拖左侧边缘";
+  resizeHint.title = "请拖动笔记栏左侧橙色分隔线调整宽度，避免拖出 Zotero PDF 信息栏";
+
+  const status = doc.createElementNS(XHTML_NS, "span") as HTMLElement;
+  status.className = "zai-note-window-status";
+  status.textContent = "自动保存";
+
+  const save = buttonEl(doc, "保存");
+  save.className = "zai-note-window-button zai-note-window-save";
+  save.disabled = true;
+  save.title = "没有未保存修改";
+
+  const close = buttonEl(doc, "关闭");
+  close.className = "zai-note-window-button";
+  head.append(title, resizeHint, status, save, close);
+
+  const body = doc.createElementNS(XHTML_NS, "div") as HTMLElement;
+  body.className = "zai-note-window-body";
+
+  const zoteroEditor = createZoteroNoteEditorElement(doc);
+  if (zoteroEditor) {
+    body.append(zoteroEditor);
+    sidebar.noteMount.append(head, body);
+    initializeZoteroNoteEditor(
+      sidebar,
+      zoteroEditor,
+      note,
+      status,
+      save,
+      close,
+    );
+    return;
+  }
+
+  const editor = doc.createElementNS(XHTML_NS, "div") as HTMLElement;
+  editor.className = "zai-note-rich-editor";
+  editor.contentEditable = "true";
+  editor.spellcheck = true;
+  editor.tabIndex = 0;
+  editor.setAttribute("role", "textbox");
+  editor.setAttribute("aria-multiline", "true");
+  editor.setAttribute("data-placeholder", "输入笔记...");
+  renderEditableNoteHTML(editor, note.getNote?.() || "");
+  editor.dataset.savedHTML = editableNoteHTML(editor);
+
+  const markChanged = () => {
+    updateNoteSaveState(editor, save);
+    scheduleAutosaveNote(sidebar, note, editor, status, save);
+  };
+
+  editor.addEventListener("input", markChanged);
+  editor.addEventListener("paste", (event: ClipboardEvent) => {
+    const text = event.clipboardData?.getData("text/plain");
+    if (!text) return;
+    event.preventDefault();
+    insertPlainTextAtSelection(doc, text);
+    markChanged();
+  });
+  sidebar.noteEditorCleanup = installNoteEditorEventIsolation(
+    doc,
+    editor,
+    () => void autosaveNoteNow(sidebar, note, editor, status, save),
+  );
+  save.addEventListener("click", () => {
+    void autosaveNoteNow(sidebar, note, editor, status, save);
+  });
+  close.addEventListener("click", () => {
+    void closeNoteWindow(sidebar, note, editor, status, save, close);
+  });
+
+  body.append(editor);
+  sidebar.noteMount.append(head, body);
+}
+
+interface ZoteroNoteEditorElement extends Element {
+  mode?: string;
+  viewMode?: string;
+  item?: Zotero.Item;
+  notitle?: boolean;
+  focus?: () => Promise<void>;
+  saveSync?: () => void;
+  destroy?: () => void;
+  getCurrentInstance?: () => { _iframeWindow?: Window } | null;
+  _id?: (id: string) => Element | null;
+}
+
+function createZoteroNoteEditorElement(
+  doc: Document,
+): ZoteroNoteEditorElement | null {
+  if (!doc.defaultView?.customElements?.get("note-editor")) return null;
+  const createXULElement = doc.createXULElement?.bind(doc);
+  if (!createXULElement) return null;
+  const editor = createXULElement(
+    "note-editor",
+  ) as ZoteroNoteEditorElement;
+  editor.setAttribute("class", "zai-zotero-note-editor");
+  editor.setAttribute("flex", "1");
+  editor.setAttribute("notitle", "1");
+  return editor;
+}
+
+function initializeZoteroNoteEditor(
+  sidebar: WindowSidebarState,
+  editor: ZoteroNoteEditorElement,
+  note: Zotero.Item,
+  status: HTMLElement,
+  saveButton: HTMLButtonElement,
+  closeButton: HTMLButtonElement,
+) {
+  const doc = sidebar.noteMount.ownerDocument!;
+  const win = doc.defaultView;
+  status.textContent = "Zotero 自动保存";
+  saveButton.disabled = false;
+  saveButton.title = "手动触发 Zotero 官方笔记编辑器保存";
+
+  editor.notitle = true;
+  editor.mode = "edit";
+  editor.viewMode = "library";
+  editor.item = note;
+  hideZoteroNoteEditorLinks(editor);
+
+  const saveNow = () => {
+    saveZoteroNoteEditor(editor, status, saveButton);
+  };
+  const closeNow = () => {
+    closeZoteroNoteWindow(sidebar, editor, closeButton);
+  };
+  const stopBubble = (event: Event) => {
+    event.stopPropagation();
+  };
+  const refocusEditor = () => {
+    void focusZoteroNoteEditor(editor);
+  };
+  const handleKeyDown = (event: KeyboardEvent) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      saveNow();
+    }
+    event.stopPropagation();
+  };
+
+  saveButton.addEventListener("click", saveNow);
+  closeButton.addEventListener("click", closeNow);
+  editor.addEventListener("focusin", stopBubble);
+  editor.addEventListener("pointerdown", stopBubble);
+  editor.addEventListener("click", stopBubble);
+  editor.addEventListener("keydown", handleKeyDown);
+
+  let initTimer: number | undefined;
+  const afterInit = (attempt = 0) => {
+    hideZoteroNoteEditorLinks(editor);
+    const instance = editor.getCurrentInstance?.();
+    if (instance?._iframeWindow) {
+      installZoteroNoteEditorKeySave(editor, status, saveButton);
+      void focusZoteroNoteEditor(editor);
+      return;
+    }
+    if (attempt >= 80 || !win) return;
+    initTimer = win.setTimeout(() => afterInit(attempt + 1), 50);
+  };
+  initTimer = win?.setTimeout(() => afterInit(), 0);
+  win?.setTimeout(refocusEditor, 150);
+
+  sidebar.noteEditorCleanup = () => {
+    if (initTimer && win) win.clearTimeout(initTimer);
+    saveButton.removeEventListener("click", saveNow);
+    closeButton.removeEventListener("click", closeNow);
+    editor.removeEventListener("focusin", stopBubble);
+    editor.removeEventListener("pointerdown", stopBubble);
+    editor.removeEventListener("click", stopBubble);
+    editor.removeEventListener("keydown", handleKeyDown);
+    editor.destroy?.();
+  };
+}
+
+function hideZoteroNoteEditorLinks(editor: ZoteroNoteEditorElement) {
+  const links = editor._id?.("links-container") as (HTMLElement & {
+    hidden?: boolean;
+  }) | null;
+  if (links) links.hidden = true;
+}
+
+async function focusZoteroNoteEditor(editor: ZoteroNoteEditorElement) {
+  try {
+    await editor.focus?.();
+  } catch (err) {
+    Zotero.debug(
+      `[Zotero AI Sidebar] Could not focus Zotero note editor: ${String(err)}`,
+    );
+  }
+}
+
+function saveZoteroNoteEditor(
+  editor: ZoteroNoteEditorElement,
+  status: HTMLElement,
+  saveButton: HTMLButtonElement,
+) {
+  try {
+    status.textContent = "保存中...";
+    editor.saveSync?.();
+    status.textContent = "已保存";
+    saveButton.disabled = false;
+  } catch (err) {
+    status.textContent = "保存失败";
+    status.title = err instanceof Error ? err.message : String(err);
+  }
+}
+
+function installZoteroNoteEditorKeySave(
+  editor: ZoteroNoteEditorElement,
+  status: HTMLElement,
+  saveButton: HTMLButtonElement,
+) {
+  const iframeWindow = editor.getCurrentInstance?.()?._iframeWindow;
+  if (!iframeWindow || (editor as Element).hasAttribute("data-zai-save-key")) {
+    return;
+  }
+  const saveOnKeyDown = (event: KeyboardEvent) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      saveZoteroNoteEditor(editor, status, saveButton);
+    }
+  };
+  iframeWindow.addEventListener("keydown", saveOnKeyDown, true);
+  (editor as Element).setAttribute("data-zai-save-key", "true");
+}
+
+function closeZoteroNoteWindow(
+  sidebar: WindowSidebarState,
+  editor: ZoteroNoteEditorElement,
+  closeButton: HTMLButtonElement,
+) {
+  try {
+    closeButton.disabled = true;
+    editor.saveSync?.();
+    sidebar.noteItemID = undefined;
+    sidebar.noteEditorCleanup?.();
+    sidebar.noteEditorCleanup = undefined;
+    sidebar.noteMount.replaceChildren();
+    setNoteColumnVisible(sidebar, false);
+    updateOpenNoteButton(sidebar);
+  } finally {
+    closeButton.disabled = false;
+  }
+}
+
+function renderEditableNoteHTML(target: HTMLElement, html: string) {
+  target.replaceChildren();
+  const doc = target.ownerDocument!;
+  const Parser = doc.defaultView?.DOMParser;
+  if (!html.trim() || !Parser) return;
+  const parsed = new Parser().parseFromString(html, "text/html");
+  if (parsed.body) appendSanitizedNoteChildren(doc, target, parsed.body);
+}
+
+function editableNoteHTML(editor: HTMLElement): string {
+  const doc = editor.ownerDocument!;
+  const scratch = doc.createElement("div");
+  appendSanitizedNoteChildren(doc, scratch, editor);
+  return isEditableNoteEmpty(scratch) ? "" : String(scratch.innerHTML).trim();
+}
+
+function isEditableNoteEmpty(element: HTMLElement): boolean {
+  if (element.querySelector("table, hr, blockquote, pre, ul, ol")) return false;
+  return !(element.textContent || "").replace(/\u200b/g, "").trim();
+}
+
+function insertPlainTextAtSelection(doc: Document, text: string) {
+  if (doc.execCommand?.("insertText", false, text)) return;
+  const selection = doc.getSelection?.();
+  if (!selection || !selection.rangeCount) return;
+  selection.deleteFromDocument();
+  selection.getRangeAt(0).insertNode(doc.createTextNode(text));
+  selection.collapseToEnd();
+}
+
+function installNoteEditorEventIsolation(
+  doc: Document,
+  editor: HTMLElement,
+  saveNow: () => void,
+): () => void {
+  const stopBubble = (event: Event) => {
+    event.stopPropagation();
+  };
+  const stopKeyboardBubble = (event: KeyboardEvent) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      saveNow();
+    }
+    // Do not stop the event in capture phase: Firefox/contenteditable needs the
+    // normal target phase for Enter, Backspace/Delete and list editing.
+    event.stopPropagation();
+  };
+  const ensureEditorFocus = () => {
+    if (doc.activeElement === editor) return;
+    const selection = doc.getSelection?.();
+    if (selection?.anchorNode && !editor.contains(selection.anchorNode)) return;
+    editor.focus({ preventScroll: true });
+  };
+
+  for (const type of [
+    "mousedown",
+    "mouseup",
+    "click",
+    "dblclick",
+    "pointerdown",
+    "pointerup",
+  ]) {
+    editor.addEventListener(type, stopBubble);
+  }
+  editor.addEventListener("focus", stopBubble);
+  editor.addEventListener("click", ensureEditorFocus);
+  editor.addEventListener("keydown", stopKeyboardBubble);
+  editor.addEventListener("keypress", stopBubble);
+  editor.addEventListener("keyup", stopBubble);
+
+  return () => {
+    for (const type of [
+      "mousedown",
+      "mouseup",
+      "click",
+      "dblclick",
+      "pointerdown",
+      "pointerup",
+    ]) {
+      editor.removeEventListener(type, stopBubble);
+    }
+    editor.removeEventListener("focus", stopBubble);
+    editor.removeEventListener("click", ensureEditorFocus);
+    editor.removeEventListener("keydown", stopKeyboardBubble);
+    editor.removeEventListener("keypress", stopBubble);
+    editor.removeEventListener("keyup", stopBubble);
+  };
+}
+
+interface EditableSelectionSnapshot {
+  anchorPath: number[];
+  anchorOffset: number;
+  focusPath: number[];
+  focusOffset: number;
+}
+
+function saveEditableSelection(root: HTMLElement): EditableSelectionSnapshot | null {
+  const selection = root.ownerDocument?.getSelection?.();
+  if (
+    !selection ||
+    !selection.anchorNode ||
+    !selection.focusNode ||
+    !root.contains(selection.anchorNode) ||
+    !root.contains(selection.focusNode)
+  ) {
+    return null;
+  }
+  const anchorPath = nodePathFromRoot(root, selection.anchorNode);
+  const focusPath = nodePathFromRoot(root, selection.focusNode);
+  if (!anchorPath || !focusPath) return null;
+  return {
+    anchorPath,
+    anchorOffset: selection.anchorOffset,
+    focusPath,
+    focusOffset: selection.focusOffset,
+  };
+}
+
+function restoreEditableSelection(
+  root: HTMLElement,
+  snapshot: EditableSelectionSnapshot | null,
+) {
+  if (!snapshot || !root.isConnected) return;
+  const restore = () => {
+    if (!root.isConnected) return;
+    const anchor = nodeFromRootPath(root, snapshot.anchorPath);
+    const focus = nodeFromRootPath(root, snapshot.focusPath);
+    if (!anchor || !focus) return;
+    const anchorOffset = clampNodeOffset(anchor, snapshot.anchorOffset);
+    const focusOffset = clampNodeOffset(focus, snapshot.focusOffset);
+    root.focus({ preventScroll: true });
+    const selection = root.ownerDocument?.getSelection?.();
+    if (!selection) return;
+    const selectionWithExtent = selection as Selection & {
+      setBaseAndExtent?: (
+        anchorNode: Node,
+        anchorOffset: number,
+        focusNode: Node,
+        focusOffset: number,
+      ) => void;
+    };
+    if (selectionWithExtent.setBaseAndExtent) {
+      selectionWithExtent.setBaseAndExtent(
+        anchor,
+        anchorOffset,
+        focus,
+        focusOffset,
+      );
+      return;
+    }
+    const range = root.ownerDocument!.createRange();
+    range.setStart(anchor, anchorOffset);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  };
+  restore();
+  const win = root.ownerDocument?.defaultView;
+  win?.requestAnimationFrame?.(restore);
+  win?.setTimeout(restore, 80);
+}
+
+function restoreEditableSelectionIfLost(
+  root: HTMLElement,
+  snapshot: EditableSelectionSnapshot | null,
+) {
+  if (hasEditableSelection(root)) return;
+  restoreEditableSelection(root, snapshot);
+}
+
+function hasEditableSelection(root: HTMLElement): boolean {
+  const selection = root.ownerDocument?.getSelection?.();
+  return !!(
+    selection?.anchorNode &&
+    selection.focusNode &&
+    root.contains(selection.anchorNode) &&
+    root.contains(selection.focusNode)
+  );
+}
+
+function nodePathFromRoot(root: Node, node: Node): number[] | null {
+  const path: number[] = [];
+  let current: Node | null = node;
+  while (current && current !== root) {
+    const parent: Node | null = current.parentNode;
+    if (!parent) return null;
+    path.unshift(Array.prototype.indexOf.call(parent.childNodes, current));
+    current = parent;
+  }
+  return current === root ? path : null;
+}
+
+function nodeFromRootPath(root: Node, path: number[]): Node | null {
+  let current: Node = root;
+  for (const index of path) {
+    const child = current.childNodes.item(index);
+    if (!child) return null;
+    current = child;
+  }
+  return current;
+}
+
+function clampNodeOffset(node: Node, offset: number): number {
+  const max =
+    node.nodeType === Node.TEXT_NODE
+      ? (node.textContent || "").length
+      : node.childNodes.length;
+  return Math.max(0, Math.min(offset, max));
+}
+
+async function closeNoteWindow(
+  sidebar: WindowSidebarState,
+  note: Zotero.Item,
+  editor: HTMLElement,
+  status: HTMLElement,
+  saveButton: HTMLButtonElement,
+  closeButton: HTMLButtonElement,
+) {
+  try {
+    closeButton.disabled = true;
+    await autosaveNoteNow(sidebar, note, editor, status, saveButton);
+    sidebar.noteItemID = undefined;
+    sidebar.noteEditorCleanup?.();
+    sidebar.noteEditorCleanup = undefined;
+    sidebar.noteMount.replaceChildren();
+    setNoteColumnVisible(sidebar, false);
+    updateOpenNoteButton(sidebar);
+  } finally {
+    closeButton.disabled = false;
+  }
+}
+
+function scheduleAutosaveNote(
+  sidebar: WindowSidebarState,
+  note: Zotero.Item,
+  editor: HTMLElement,
+  status: HTMLElement,
+  saveButton: HTMLButtonElement,
+) {
+  const win = editor.ownerDocument?.defaultView;
+  if (sidebar.noteAutosaveTimer && win) {
+    win.clearTimeout(sidebar.noteAutosaveTimer);
+  }
+  if (!isNoteEditorDirty(editor)) {
+    updateNoteSaveState(editor, saveButton);
+    return;
+  }
+  status.textContent = "未保存";
+  sidebar.noteAutosaveTimer = win?.setTimeout(() => {
+    sidebar.noteAutosaveTimer = undefined;
+    void autosaveNoteNow(sidebar, note, editor, status, saveButton);
+  }, 1800);
+}
+
+async function autosaveNoteNow(
+  sidebar: WindowSidebarState,
+  note: Zotero.Item,
+  editor: HTMLElement,
+  status: HTMLElement,
+  saveButton: HTMLButtonElement,
+) {
+  const win = editor.ownerDocument?.defaultView;
+  if (sidebar.noteAutosaveTimer && win) {
+    win.clearTimeout(sidebar.noteAutosaveTimer);
+    sidebar.noteAutosaveTimer = undefined;
+  }
+  if (!isNoteEditorDirty(editor)) {
+    updateNoteSaveState(editor, saveButton);
+    return;
+  }
+  if (sidebar.noteAutosavePromise) {
+    await sidebar.noteAutosavePromise;
+  }
+  status.textContent = "保存中...";
+  saveButton.disabled = true;
+  const selection = saveEditableSelection(editor);
+  sidebar.noteAutosavePromise = (async () => {
+    const html = editableNoteHTML(editor);
+    note.setNote(html || "<p></p>");
+    await note.saveTx();
+  })();
+  try {
+    await sidebar.noteAutosavePromise;
+    editor.dataset.savedHTML = editableNoteHTML(editor);
+    status.textContent = "已保存";
+    updateNoteSaveState(editor, saveButton);
+    restoreEditableSelectionIfLost(editor, selection);
+  } catch (err) {
+    status.textContent = "保存失败";
+    status.title = err instanceof Error ? err.message : String(err);
+    updateNoteSaveState(editor, saveButton);
+    restoreEditableSelectionIfLost(editor, selection);
+    throw err;
+  } finally {
+    sidebar.noteAutosavePromise = undefined;
+  }
+}
+
+function isNoteEditorDirty(editor: HTMLElement): boolean {
+  return editableNoteHTML(editor) !== (editor.dataset.savedHTML ?? "");
+}
+
+function updateNoteSaveState(
+  editor: HTMLElement,
+  saveButton: HTMLButtonElement,
+) {
+  const dirty = isNoteEditorDirty(editor);
+  saveButton.disabled = !dirty;
+  saveButton.title = dirty ? "保存当前修改 (Ctrl+S)" : "没有未保存修改";
+}
+
+function findSidebarStateByDocument(doc: Document): WindowSidebarState | null {
+  for (const win of mountedWindows) {
+    const state = windowSidebars.get(win);
+    if (state?.mount.ownerDocument === doc) return state;
+  }
+  return null;
+}
+
+function findSidebarStateByMount(mount: HTMLElement): WindowSidebarState | null {
+  for (const win of mountedWindows) {
+    const state = windowSidebars.get(win);
+    if (state?.mount === mount) return state;
+  }
+  return null;
+}
+
+function isNoteWindowOpenForMount(mount: HTMLElement): boolean {
+  return !!findSidebarStateByMount(mount)?.noteItemID;
+}
+
+function updateOpenNoteButton(state: WindowSidebarState) {
+  const button = state.mount.querySelector(
+    ".open-note-button",
+  ) as HTMLButtonElement | null;
+  if (!button) return;
+  const opened = !!state.noteItemID;
+  button.textContent = opened ? "已打开" : "打开笔记";
+  button.disabled = opened;
+}
+
+function setNoteColumnVisible(state: WindowSidebarState, visible: boolean) {
+  const noteColumn = state.noteColumn as Element & {
+    hidden?: boolean;
+    collapsed?: boolean;
+  };
+  const noteSplitter = state.noteSplitter as Element & { hidden?: boolean };
+  noteColumn.hidden = !visible;
+  noteSplitter.hidden = !visible;
+  if (visible) {
+    noteColumn.collapsed = false;
+    state.noteColumn.removeAttribute("collapsed");
+    state.noteColumn.removeAttribute("hidden");
+    state.noteSplitter.removeAttribute("hidden");
+    if (!state.noteColumn.getAttribute("width")) {
+      state.noteColumn.setAttribute("width", "360");
+    }
+    return;
+  }
+  noteColumn.collapsed = true;
+  state.noteColumn.setAttribute("collapsed", "true");
+  state.noteColumn.setAttribute("hidden", "true");
+  state.noteSplitter.setAttribute("hidden", "true");
+}
+
+function noteTitle(note: Zotero.Item): string {
+  const title = (note as Zotero.Item & { getNoteTitle?: () => string })
+    .getNoteTitle?.();
+  return title || `Zotero 笔记 #${note.id}`;
+}
+
+function refreshVisibleNoteWindow(doc: Document, noteID: number) {
+  const sidebar = findSidebarStateByDocument(doc);
+  if (sidebar?.noteItemID !== noteID) return;
+  const note = getZoteroItem(noteID);
+  if (isZoteroNote(note)) renderNoteWindow(sidebar, note);
+}
+
+function appendSanitizedNoteChildren(
+  doc: Document,
+  target: HTMLElement,
+  source: Node,
+) {
+  const children = Array.from(source.childNodes).filter(
+    (node): node is Node => !!node,
+  );
+  for (const child of children) {
+    if (child.nodeType === 3) {
+      target.append(doc.createTextNode(child.textContent || ""));
+      continue;
+    }
+    if (child.nodeType !== 1) continue;
+
+    const sourceEl = child as Element;
+    const tag = sourceEl.tagName.toLowerCase();
+    if (!ALLOWED_NOTE_TAGS.has(tag)) {
+      appendSanitizedNoteChildren(doc, target, sourceEl);
+      continue;
+    }
+
+    const clone = doc.createElement(tag);
+    copySafeNoteAttributes(sourceEl, clone);
+    appendSanitizedNoteChildren(doc, clone, sourceEl);
+    target.append(clone);
+  }
+}
+
+const ALLOWED_NOTE_TAGS = new Set([
+  "a",
+  "b",
+  "blockquote",
+  "br",
+  "code",
+  "col",
+  "colgroup",
+  "div",
+  "em",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "hr",
+  "i",
+  "li",
+  "ol",
+  "p",
+  "pre",
+  "s",
+  "span",
+  "strong",
+  "sub",
+  "sup",
+  "table",
+  "tbody",
+  "td",
+  "th",
+  "thead",
+  "tr",
+  "u",
+  "ul",
+]);
+
+function copySafeNoteAttributes(source: Element, target: HTMLElement) {
+  for (const attr of Array.from(source.attributes)) {
+    const name = attr.name.toLowerCase();
+    const value = attr.value;
+    if (name.startsWith("on")) continue;
+    if (name === "href") {
+      if (!isSafeNoteUrl(value)) continue;
+      target.setAttribute("href", value);
+      target.setAttribute("rel", "noreferrer");
+      target.setAttribute("target", "_blank");
+      continue;
+    }
+    if (name.startsWith("data-")) {
+      target.setAttribute(name, value);
+      continue;
+    }
+    if (
+      name === "style" &&
+      !/url\s*\(|expression\s*\(/i.test(value)
+    ) {
+      target.setAttribute(name, value);
+      continue;
+    }
+    if (["alt", "class", "colspan", "rowspan", "title"].includes(name)) {
+      target.setAttribute(name, value);
+    }
+  }
+}
+
+function isSafeNoteUrl(value: string): boolean {
+  const url = value.trim().toLowerCase();
+  return !!url && !url.startsWith("javascript:") && !url.startsWith("data:");
+}
+
+async function writeAssistantMessageToNote(
+  doc: Document,
+  itemID: number | null,
+  message: Message,
+  button: HTMLButtonElement,
+) {
+  const originalText = button.textContent || "写入笔记";
+  const originalTitle = button.title;
+  button.textContent = "写入中...";
+  button.disabled = true;
+
+  try {
+    const result = await appendAssistantContentToItemNote(
+      doc,
+      itemID,
+      message.content,
+    );
+    button.textContent = result.usedBetterNotes
+      ? "已写入 BN"
+      : result.created
+        ? "已新建笔记"
+        : "已写入";
+    button.title = `目标笔记 #${result.noteID}`;
+    refreshVisibleNoteWindow(doc, result.noteID);
+  } catch (err) {
+    button.textContent = "写入失败";
+    button.title = err instanceof Error ? err.message : String(err);
+  } finally {
+    doc.defaultView?.setTimeout(() => {
+      button.textContent = originalText;
+      button.title = originalTitle;
+      button.disabled = false;
+    }, 1400);
+  }
+}
+
+async function appendAssistantContentToItemNote(
+  doc: Document,
+  itemID: number | null,
+  content: string,
+): Promise<{ noteID: number; created: boolean; usedBetterNotes: boolean }> {
+  if (itemID == null) throw new Error("未选择 Zotero 条目");
+  const target = await resolveTargetNote(itemID);
+  const html = assistantContentToNoteHTML(doc, content);
+  const usedBetterNotes = await insertHTMLIntoNote(target.note, html);
+  return {
+    noteID: target.note.id,
+    created: target.created,
+    usedBetterNotes,
+  };
+}
+
+async function resolveTargetNote(
+  itemID: number | null,
+): Promise<{ note: Zotero.Item; created: boolean }> {
+  if (itemID == null) throw new Error("未选择 Zotero 条目");
+  const item = getZoteroItem(itemID);
+  if (!item) throw new Error(`找不到 Zotero 条目 #${itemID}`);
+  if (isZoteroNote(item)) return { note: item, created: false };
+
+  const parent = parentItemForNotes(item);
+  const existing = childNotesForItem(parent)[0];
+  if (existing) return { note: existing, created: false };
+
+  return { note: await createChildNote(parent), created: true };
+}
+
+function getZoteroItem(itemID: number): Zotero.Item | null {
+  const item = Zotero.Items.get(itemID) as Zotero.Item | false | undefined;
+  return item || null;
+}
+
+function parentItemForNotes(item: Zotero.Item): Zotero.Item {
+  const maybeAttachment = item as Zotero.Item & {
+    isAttachment?: () => boolean;
+    parentID?: number;
+  };
+  if (maybeAttachment.isAttachment?.() && maybeAttachment.parentID) {
+    return getZoteroItem(maybeAttachment.parentID) ?? item;
+  }
+  return item;
+}
+
+function childNotesForItem(item: Zotero.Item): Zotero.Item[] {
+  const getNotes = (item as Zotero.Item & { getNotes?: () => unknown })
+    .getNotes;
+  if (!getNotes) return [];
+
+  const ids = getNotes.call(item);
+  if (!Array.isArray(ids) || ids.length === 0) return [];
+  const notes = Zotero.Items.get(ids as number[]) as
+    | Zotero.Item[]
+    | Zotero.Item
+    | false
+    | undefined;
+  const items = Array.isArray(notes) ? notes : notes ? [notes] : [];
+  return items.filter(isZoteroNote);
+}
+
+function isZoteroNote(item: Zotero.Item | null | undefined): item is Zotero.Item {
+  return !!item && (item as Zotero.Item & { isNote?: () => boolean }).isNote?.();
+}
+
+async function createChildNote(parent: Zotero.Item): Promise<Zotero.Item> {
+  const note = new (Zotero as unknown as { Item: new (type: string) => any }).Item(
+    "note",
+  ) as Zotero.Item;
+  note.libraryID = parent.libraryID;
+  (note as Zotero.Item & { parentID?: number }).parentID = parent.id;
+  note.setNote("<p>AI 笔记</p>");
+  await note.saveTx();
+  return note;
+}
+
+function assistantContentToNoteHTML(doc: Document, content: string): string {
+  const root = doc.createElement("div");
+  root.append(doc.createElement("hr"));
+
+  const title = doc.createElement("h2");
+  title.textContent = `AI 总结 ${formatNoteTimestamp(new Date())}`;
+  root.append(title);
+
+  const body = doc.createElement("div");
+  renderMarkdownInto(body, content.trim());
+  while (body.firstChild) root.appendChild(body.firstChild);
+  return String(root.innerHTML);
+}
+
+async function insertHTMLIntoNote(
+  note: Zotero.Item,
+  html: string,
+): Promise<boolean> {
+  const betterNotesInsert = betterNotesNoteInsert();
+  if (betterNotesInsert) {
+    await betterNotesInsert(note, html, -1, false);
+    return true;
+  }
+
+  note.setNote(appendHTMLToExistingNote(note.getNote() || "", html));
+  await note.saveTx();
+  return false;
+}
+
+function betterNotesInsertAvailable(): boolean {
+  return !!betterNotesNoteInsert();
+}
+
+function betterNotesNoteInsert():
+  | ((
+      note: Zotero.Item,
+      html: string,
+      lineIndex?: number,
+      forceMetadata?: boolean,
+    ) => Promise<void> | void)
+  | null {
+  const noteApi = (Zotero as unknown as {
+    BetterNotes?: {
+      api?: {
+        note?: {
+          insert?: (
+            note: Zotero.Item,
+            html: string,
+            lineIndex?: number,
+            forceMetadata?: boolean,
+          ) => Promise<void> | void;
+        };
+      };
+    };
+  }).BetterNotes?.api?.note;
+  return typeof noteApi?.insert === "function"
+    ? noteApi.insert.bind(noteApi)
+    : null;
+}
+
+function appendHTMLToExistingNote(existing: string, addition: string): string {
+  if (!existing.trim()) return `<div>${addition}</div>`;
+  const closingDiv = existing.lastIndexOf("</div>");
+  if (closingDiv >= 0 && existing.slice(closingDiv).trim() === "</div>") {
+    return `${existing.slice(0, closingDiv)}${addition}${existing.slice(
+      closingDiv,
+    )}`;
+  }
+  return `${existing}${addition}`;
+}
+
+function formatNoteTimestamp(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return [
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
+    `${pad(date.getHours())}:${pad(date.getMinutes())}`,
+  ].join(" ");
 }
 
 // Render the assistant's "建议注释" block (parsed by annotation-draft.ts).
@@ -4075,6 +5099,8 @@ export function registerSidebarForWindow(win: Window) {
 
   doc.getElementById(SPLITTER_ID)?.remove();
   doc.getElementById(COLUMN_ID)?.remove();
+  doc.getElementById(NOTE_SPLITTER_ID)?.remove();
+  doc.getElementById(NOTE_COLUMN_ID)?.remove();
 
   // XUL splitter + vbox: native Zotero column rather than a React mount.
   // WHY native DOM (not React): Zotero 7+'s ItemPane DOES NOT recover
@@ -4092,6 +5118,30 @@ export function registerSidebarForWindow(win: Window) {
   splitter.setAttribute("orient", "horizontal");
   splitter.append(doc.createXULElement("grippy"));
 
+  const noteSplitter = doc.createXULElement("splitter");
+  noteSplitter.id = NOTE_SPLITTER_ID;
+  noteSplitter.setAttribute("resizebefore", "closest");
+  noteSplitter.setAttribute("resizeafter", "closest");
+  noteSplitter.setAttribute("collapse", "after");
+  noteSplitter.setAttribute("orient", "horizontal");
+  noteSplitter.setAttribute("hidden", "true");
+  noteSplitter.append(doc.createXULElement("grippy"));
+
+  const noteColumn = doc.createXULElement("vbox");
+  noteColumn.id = NOTE_COLUMN_ID;
+  noteColumn.setAttribute("class", "zai-note-column");
+  noteColumn.setAttribute("width", "360");
+  noteColumn.setAttribute("zotero-persist", "width");
+  noteColumn.setAttribute("collapsed", "true");
+  noteColumn.setAttribute("hidden", "true");
+  noteColumn.addEventListener(
+    "wheel",
+    (event: Event) => event.stopPropagation(),
+    {
+      passive: true,
+    },
+  );
+
   const column = doc.createXULElement("vbox");
   column.id = COLUMN_ID;
   column.setAttribute("class", "zai-column");
@@ -4105,15 +5155,33 @@ export function registerSidebarForWindow(win: Window) {
   link.rel = "stylesheet";
   link.href = `chrome://${addon.data.config.addonRef}/content/sidebar.css`;
 
+  const noteLink = doc.createElementNS(XHTML_NS, "link") as HTMLLinkElement;
+  noteLink.rel = "stylesheet";
+  noteLink.href = `chrome://${addon.data.config.addonRef}/content/sidebar.css`;
+
   const mount = doc.createElementNS(XHTML_NS, "div") as HTMLElement;
   mount.id = ROOT_ID;
   mount.className = "zai-root-independent";
 
+  const noteMount = doc.createElementNS(XHTML_NS, "div") as HTMLElement;
+  noteMount.id = NOTE_ROOT_ID;
+  noteMount.className = "zai-note-root";
+
+  noteColumn.append(noteLink, noteMount);
   column.append(link, mount);
-  parent.insertBefore(splitter, contextPane.nextSibling);
+  parent.insertBefore(noteSplitter, contextPane.nextSibling);
+  parent.insertBefore(noteColumn, noteSplitter.nextSibling);
+  parent.insertBefore(splitter, noteColumn.nextSibling);
   parent.insertBefore(column, splitter.nextSibling);
 
-  const state: WindowSidebarState = { column, splitter, mount };
+  const state: WindowSidebarState = {
+    column,
+    splitter,
+    mount,
+    noteColumn,
+    noteSplitter,
+    noteMount,
+  };
   splitter.addEventListener("command", () => updateToggleButton(state));
   splitter.addEventListener("mouseup", () => updateToggleButton(state));
   windowSidebars.set(win, state);
@@ -4140,6 +5208,10 @@ export function unregisterSidebarForWindow(win: Window) {
 
   state.splitter.remove();
   state.column.remove();
+  state.noteSplitter.remove();
+  state.noteEditorCleanup?.();
+  state.noteEditorCleanup = undefined;
+  state.noteColumn.remove();
   state.toggleButton?.remove();
   state.floatingButton?.remove();
   stopSelectionMonitor(win, state);
@@ -4236,6 +5308,11 @@ function setColumnCollapsed(
     splitter.hidden = true;
     state.column.setAttribute("collapsed", "true");
     state.splitter.setAttribute("hidden", "true");
+    state.noteItemID = undefined;
+    state.noteEditorCleanup?.();
+    state.noteEditorCleanup = undefined;
+    state.noteMount.replaceChildren();
+    setNoteColumnVisible(state, false);
   } else {
     column.collapsed = false;
     splitter.hidden = false;

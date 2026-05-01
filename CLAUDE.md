@@ -40,6 +40,15 @@ cd ~/Downloads/Zotero_linux-x86_64
 - Keep screenshot/image attachments visible in the UI and ensure they are actually sent to multimodal providers, not just displayed locally.
 - Avoid UI elements that cause the right sidebar to jump while the user scrolls or selects PDF text.
 
+### Better Notes-inspired Note Editing Direction
+
+- Treat the note panel as a visual companion to the AI chat, not a replacement for chat behavior. The target layout remains `PDF/Reader | note panel | AI chat`.
+- Prefer Zotero's official `<note-editor>`/`EditorInstance` rich editor for note editing. It already handles ProseMirror-style rendered editing, formatted text, lists, Enter, Backspace/Delete, arrow keys, selection, and autosave inside Zotero's focus system.
+- Borrow Better Notes' interaction model, not its whole runtime: users edit rendered rich text directly; do not show Markdown source for clicked paragraphs; do not use block-by-block cards, `+` insertion buttons, or a separate preview toggle for normal editing.
+- Keep note editing isolated from AI chat state. Opening, editing, saving, or closing the note panel must not re-render or reset chat messages, composer drafts, model selections, streaming state, or tool traces.
+- Do not fight Zotero Reader/PDF keyboard handlers with aggressive global `keydown` capture around a custom `contenteditable`. If keyboard focus conflicts appear, first prefer the official note editor or iframe-level focus integration.
+- Hide nonessential note-editor chrome only for layout fit, but avoid patching Zotero editor internals unless the behavior is verified against the target Zotero version.
+
 ## Architecture Notes
 
 - Native DOM sidebar code lives mainly in `src/modules/sidebar.ts`; avoid reintroducing React UI in the Zotero pane unless crash behavior has been revalidated.
@@ -60,6 +69,7 @@ cd ~/Downloads/Zotero_linux-x86_64
 - The chat draft must survive sidebar re-renders during streaming, tool calls, reader selection updates, and preset/config changes.
 - Screenshot/image support is only complete when images are both displayed in the chat and converted into provider multimodal inputs.
 - Zotero write tools, such as adding annotations, must be explicit tools with visible traces. Block them in default mode unless approval UI exists or YOLO mode is selected.
+- The note panel should use Zotero's official note editor when available. A plain `contenteditable` fallback is acceptable only as a fallback, because formatted lists and keyboard focus can conflict with Zotero Reader/PDF handlers.
 - Release artifacts are produced by GitHub Actions from tags. Do not commit XPI build artifacts; run `npm run release:xpi` after version bump and commit.
 
 ## Code Reference Map
@@ -86,10 +96,12 @@ Use these files as the first reference points before changing behavior:
 - OpenAI Codex source: https://github.com/openai/codex
 - Zotero source: https://github.com/zotero/zotero
 - Claudian source: https://github.com/YishenTu/claudian
+- Better Notes source: https://github.com/windingwind/zotero-better-notes
 - Codex-style agent loop: reference OpenAI Codex concepts of model-driven tool calls, local harness validation, follow-up turns after tool calls, and approval/YOLO-style execution. Do not copy semantic intent tables into the Zotero plugin.
 - Codex source symbols to re-check when needed: `needs_follow_up`, tool-call handling, context compaction/truncation, approval policy, and sandbox/permission mode.
 - Claudian-style UI: reference the message rendering pattern, not its runtime architecture. Useful concepts are `MessageRenderer`, `ThinkingBlockRenderer`, `ToolCallRenderer`, context footer/process blocks, and scroll-to-bottom behavior.
 - Zotero source for compatibility checks: reference Reader APIs around `Zotero.Reader.registerEventListener`, `renderTextSelectionPopup`, `Zotero.Reader.getByTabID`, annotation APIs around `Zotero.Annotations.saveFromJSON` and `DEFAULT_COLOR`, and DOM/pane IDs such as `zotero-item-pane` and `zotero-context-pane`.
+- Better Notes reference scope: use it for note-editing UX expectations and rich-editor behavior only. Do not copy its full workspace model or introduce broad note-management features unless explicitly requested.
 - When adapting Zotero 8/9, verify API symbols against the target Zotero tag/branch before changing plugin code. Prefer symbol checks over version-specific branches unless an API truly diverges.
 
 ## Non-Negotiables
