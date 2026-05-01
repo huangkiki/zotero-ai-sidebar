@@ -9,7 +9,15 @@ export interface ModelPreset {
   provider: ProviderKind;
   apiKey: string;
   baseUrl: string;
+  // Currently-active model — what providers actually send to the API. Stays
+  // a single string so provider adapters don't need to change.
   model: string;
+  // Available models for this preset. The composer-footer switcher lets the
+  // user pick one and writes the choice back to `model`. Persisted in prefs
+  // so the selection is sticky across sessions.
+  // GOTCHA: optional for back-compat with legacy presets that only had
+  // `model`. `normalizePreset` in storage.ts back-fills this on load.
+  models?: string[];
   maxTokens: number;
   extras?: {
     reasoningEffort?: ReasoningEffort;
@@ -52,13 +60,15 @@ export const REASONING_SUMMARY_OPTIONS: Array<[ReasoningSummary, string]> = [
 ];
 
 export function newPreset(provider: ProviderKind): ModelPreset {
+  const defaultModel = DEFAULT_MODELS[provider];
   return {
     id: crypto.randomUUID(),
     label: provider === 'anthropic' ? 'Claude' : 'GPT',
     provider,
     apiKey: '',
     baseUrl: DEFAULT_BASE_URLS[provider],
-    model: DEFAULT_MODELS[provider],
+    model: defaultModel,
+    models: defaultModel ? [defaultModel] : [],
     maxTokens: 8192,
     extras: provider === 'openai'
       ? {

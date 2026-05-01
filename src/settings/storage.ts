@@ -69,16 +69,55 @@ function normalizePreset(value: unknown): ModelPreset | null {
   const preset = value as Partial<ModelPreset>;
   if (preset.provider !== 'openai' && preset.provider !== 'anthropic') return null;
   const provider = preset.provider as ProviderKind;
+  const { model, models } = normalizeModels(provider, preset.model, preset.models);
   return {
     id: String(preset.id || `preset-${Date.now()}`),
     label: String(preset.label || (provider === 'anthropic' ? 'Claude' : 'GPT')),
     provider,
     apiKey: String(preset.apiKey || ''),
     baseUrl: String(preset.baseUrl || DEFAULT_BASE_URLS[provider]),
-    model: String(preset.model || DEFAULT_MODELS[provider]),
+    model,
+    models,
     maxTokens: Number(preset.maxTokens || 8192),
     extras: normalizeExtras(provider, preset.extras),
   };
+}
+
+// Migration + repair for the active model and the available-models list.
+// Three legacy/invalid shapes we have to handle without losing user data:
+//   1. Legacy preset (only `model`, no `models`) → `models = [model]`.
+//   2. New preset with `models` but `model` empty → `model = models[0]`.
+//   3. User edited `model` to something not in `models` (out-of-band or
+//      via toolbar dropdown before adding to list) → prepend `model` so the
+//      active selection stays available.
+// INVARIANT on return: `model` is non-empty (DEFAULT_MODELS fallback) and
+// `models` includes `model` as one of its entries.
+function normalizeModels(
+  provider: ProviderKind,
+  rawModel: unknown,
+  rawModels: unknown,
+): { model: string; models: string[] } {
+  const fromList = Array.isArray(rawModels)
+    ? rawModels
+        .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+        .filter((entry) => entry.length > 0)
+    : [];
+  const trimmedActive = typeof rawModel === 'string' ? rawModel.trim() : '';
+  const active =
+    trimmedActive ||
+    (fromList.length > 0 ? fromList[0] : DEFAULT_MODELS[provider]);
+  // Dedupe while preserving the user's list order. Only prepend `active`
+  // when it is missing from the list — that way reordering done in the
+  // editor survives a save/load round-trip.
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  const sourceOrder = fromList.includes(active) ? fromList : [active, ...fromList];
+  for (const entry of sourceOrder) {
+    if (!entry || seen.has(entry)) continue;
+    seen.add(entry);
+    ordered.push(entry);
+  }
+  return { model: active, models: ordered };
 }
 
 // `extras` is provider-specific. Only OpenAI uses reasoning-* fields

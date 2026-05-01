@@ -26,7 +26,6 @@ import {
   DEFAULT_MODELS,
   DEFAULT_REASONING_EFFORT,
   DEFAULT_REASONING_SUMMARY,
-  MODEL_SUGGESTIONS,
   REASONING_EFFORT_OPTIONS,
   REASONING_SUMMARY_OPTIONS,
   type AgentPermissionMode,
@@ -418,9 +417,80 @@ function renderPresetEditor(
     doc,
     draft.baseUrl || DEFAULT_BASE_URLS[draft.provider],
   );
-  const model = inputEl(doc, draft.model || DEFAULT_MODELS[draft.provider]);
-  const modelListId = `zai-models-${makeId()}`;
-  model.setAttribute("list", modelListId);
+  const initialModels =
+    draft.models && draft.models.length > 0
+      ? draft.models
+      : draft.model
+        ? [draft.model]
+        : [];
+  // Chip-style model list: each model is a compact pill (input + tiny ✕)
+  // and "+" sits at the end as another chip. flex-wrap keeps them on one
+  // row when space allows. Every input/delete fires syncDraft() so changes
+  // save live, matching label/apiKey/baseUrl behavior.
+  const modelsField = doc.createElement("div") as HTMLDivElement;
+  modelsField.className = "preset-models-list";
+  const placeholderFor = (kind: ProviderKind) =>
+    DEFAULT_MODELS[kind] || (kind === "anthropic" ? "claude-..." : "gpt-...");
+  // Auto-size the input via the `size` attribute (monospace font ⇒ ~1ch each).
+  // Clamped 8..28 so empty inputs are still typable and crazy-long ids don't
+  // blow out the row.
+  const sizeModelInput = (input: HTMLInputElement) => {
+    const text = input.value || input.placeholder;
+    input.size = Math.max(8, Math.min(28, text.length || 8));
+  };
+  const addModelChip = (initialValue: string): HTMLInputElement => {
+    const chip = el(doc, "span", "preset-models-chip");
+    const input = inputEl(doc, initialValue);
+    input.placeholder = placeholderFor(provider.value as ProviderKind);
+    input.classList.add("preset-models-input");
+    input.spellcheck = false;
+    input.addEventListener("input", () => {
+      sizeModelInput(input);
+      syncDraft();
+    });
+    const remove = buttonEl(doc, "✕");
+    remove.classList.add("preset-models-remove");
+    remove.title = "删除此模型";
+    remove.addEventListener("click", () => {
+      chip.remove();
+      syncDraft();
+    });
+    chip.append(input, remove);
+    modelsField.insertBefore(chip, addBtn);
+    sizeModelInput(input);
+    return input;
+  };
+  const addBtn = buttonEl(doc, "+ 添加");
+  addBtn.classList.add("preset-models-add");
+  addBtn.title = "添加一个新模型 ID";
+  addBtn.addEventListener("click", () => {
+    const input = addModelChip("");
+    input.focus();
+    syncDraft();
+  });
+  modelsField.append(addBtn);
+  for (const id of initialModels) addModelChip(id);
+
+  const collectModelInputs = (): HTMLInputElement[] =>
+    Array.from(
+      modelsField.querySelectorAll(".preset-models-input"),
+    ) as HTMLInputElement[];
+
+  const readModelsField = (): { model: string; models: string[] } => {
+    const lines = collectModelInputs()
+      .map((input) => input.value.trim())
+      .filter((value) => value.length > 0);
+    const providerKind = provider.value as ProviderKind;
+    // Keep the user's currently-active selection sticky if it survives the
+    // edit. Otherwise fall back to first row; if the list is empty, use
+    // the provider default. Mirrors normalizePreset's repair logic.
+    const active =
+      current.model && lines.includes(current.model)
+        ? current.model
+        : lines[0] || DEFAULT_MODELS[providerKind];
+    return { model: active, models: lines };
+  };
+
   const maxTokens = inputEl(doc, String(draft.maxTokens || 8192), "number");
   const reasoningEffort = selectEl(doc, REASONING_EFFORT_OPTIONS);
   reasoningEffort.value =
@@ -430,16 +500,10 @@ function renderPresetEditor(
   reasoningSummary.value =
     draft.extras?.reasoningSummary ?? DEFAULT_REASONING_SUMMARY;
   reasoningSummary.disabled = draft.provider !== "openai";
-  const modelList = doc.createElement("datalist");
-  modelList.id = modelListId;
-  for (const suggestion of MODEL_SUGGESTIONS[draft.provider]) {
-    const option = doc.createElement("option");
-    option.value = suggestion;
-    modelList.append(option);
-  }
 
   const readDraft = (): ModelPreset => {
     const providerKind = provider.value as ProviderKind;
+    const { model: activeModel, models } = readModelsField();
     return {
       id: current.id,
       provider: providerKind,
@@ -447,7 +511,8 @@ function renderPresetEditor(
         label.value.trim() || (providerKind === "anthropic" ? "Claude" : "GPT"),
       apiKey: apiKey.value.trim(),
       baseUrl: baseUrl.value.trim() || DEFAULT_BASE_URLS[providerKind],
-      model: model.value.trim() || DEFAULT_MODELS[providerKind],
+      model: activeModel,
+      models,
       maxTokens: parseInt(maxTokens.value, 10) || 8192,
       extras:
         providerKind === "openai"
@@ -481,9 +546,25 @@ function renderPresetEditor(
     ) {
       baseUrl.value = DEFAULT_BASE_URLS[nextProvider];
     }
-    if (!model.value || Object.values(DEFAULT_MODELS).includes(model.value)) {
-      model.value = DEFAULT_MODELS[nextProvider];
+    const inputs = collectModelInputs();
+    const currentLines = inputs
+      .map((input) => input.value.trim())
+      .filter((value) => value.length > 0);
+    const allDefaults =
+      currentLines.length === 0 ||
+      currentLines.every((line) =>
+        Object.values(DEFAULT_MODELS).includes(line),
+      );
+    if (allDefaults) {
+      // Replace existing chips with a single one carrying the new provider's default.
+      Array.from(modelsField.querySelectorAll(".preset-models-chip")).forEach(
+        (chip) => (chip as HTMLElement).remove(),
+      );
+      addModelChip(DEFAULT_MODELS[nextProvider] || "");
     }
+    collectModelInputs().forEach((input) => {
+      input.placeholder = placeholderFor(nextProvider);
+    });
     reasoningEffort.disabled = nextProvider !== "openai";
     reasoningSummary.disabled = nextProvider !== "openai";
     if (nextProvider === "openai" && !reasoningEffort.value) {
@@ -492,16 +573,10 @@ function renderPresetEditor(
     if (nextProvider === "openai" && !reasoningSummary.value) {
       reasoningSummary.value = DEFAULT_REASONING_SUMMARY;
     }
-    modelList.replaceChildren();
-    for (const suggestion of MODEL_SUGGESTIONS[nextProvider]) {
-      const option = doc.createElement("option");
-      option.value = suggestion;
-      modelList.append(option);
-    }
     syncDraft();
   });
 
-  for (const control of [label, apiKey, baseUrl, model, maxTokens]) {
+  for (const control of [label, apiKey, baseUrl, maxTokens]) {
     control.addEventListener("input", syncDraft);
   }
   reasoningEffort.addEventListener("change", syncDraft);
@@ -512,11 +587,10 @@ function renderPresetEditor(
     field(doc, "名称", label),
     field(doc, "API Key", apiKey),
     field(doc, "Base URL", baseUrl),
-    field(doc, "Model ID", model),
+    field(doc, "Models", modelsField),
     field(doc, "Max tokens", maxTokens),
     field(doc, "Reasoning", reasoningEffort),
     field(doc, "Reasoning Summary", reasoningSummary),
-    modelList,
   );
 
   const buttons = el(doc, "div", "add-buttons");
@@ -975,10 +1049,104 @@ function renderComposerFooter(
   actions.append(
     screenshotAttach,
     imageAttach,
+    renderModelSwitcher(doc, mount, state),
     renderYoloToggle(doc, mount, state),
   );
   footer.append(status, actions);
   return footer;
+}
+
+// Composer-footer model switcher (Claudian-style).
+// - 0 models in current preset → render nothing.
+// - 1 model               → static label (user still sees WHICH model is in use).
+// - 2+ models             → trigger button + upward popup. Click opens, picks
+//                            mutate `preset.model` via upsertPreset + persist
+//                            (so the choice is sticky across sessions). Outside
+//                            click and Escape close the popup.
+// REF: Claudian's footer model dropdown — same pattern.
+function renderModelSwitcher(
+  doc: Document,
+  mount: HTMLElement,
+  state: PanelState,
+): HTMLElement {
+  const preset = selectedChatPreset(state) ?? selectedPreset(state);
+  const models = preset?.models ?? [];
+  const wrap = el(doc, "div", "model-switcher");
+  if (!preset || models.length === 0) {
+    wrap.style.display = "none";
+    return wrap;
+  }
+  const active =
+    preset.model && models.includes(preset.model) ? preset.model : models[0];
+  if (models.length === 1) {
+    wrap.classList.add("model-switcher-static");
+    wrap.title = `当前模型：${active}`;
+    wrap.append(el(doc, "span", "model-switcher-label", active));
+    return wrap;
+  }
+
+  const trigger = doc.createElement("button") as HTMLButtonElement;
+  trigger.type = "button";
+  trigger.className = "model-switcher-trigger";
+  trigger.textContent = active;
+  trigger.title = "切换当前预设的模型";
+  trigger.disabled = state.sending;
+  trigger.setAttribute("aria-haspopup", "menu");
+  trigger.setAttribute("aria-expanded", "false");
+
+  const popup = el(doc, "div", "model-switcher-popup");
+  popup.setAttribute("role", "menu");
+  popup.style.display = "none";
+
+  const closePopup = () => {
+    if (popup.style.display === "none") return;
+    popup.style.display = "none";
+    trigger.setAttribute("aria-expanded", "false");
+    doc.removeEventListener("mousedown", outsideHandler, true);
+    doc.removeEventListener("keydown", escapeHandler, true);
+  };
+  const openPopup = () => {
+    if (popup.style.display !== "none") return;
+    popup.style.display = "";
+    trigger.setAttribute("aria-expanded", "true");
+    doc.addEventListener("mousedown", outsideHandler, true);
+    doc.addEventListener("keydown", escapeHandler, true);
+  };
+  const outsideHandler = (event: Event) => {
+    if (!wrap.contains(event.target as Node)) closePopup();
+  };
+  const escapeHandler = (event: KeyboardEvent) => {
+    if (event.key === "Escape") {
+      closePopup();
+      trigger.focus();
+    }
+  };
+
+  for (const id of models) {
+    const item = doc.createElement("button") as HTMLButtonElement;
+    item.type = "button";
+    item.className = "model-switcher-item";
+    if (id === active) item.classList.add("model-switcher-item-active");
+    item.textContent = id;
+    item.setAttribute("role", "menuitem");
+    item.addEventListener("click", () => {
+      closePopup();
+      if (id === preset.model) return;
+      upsertPreset(state, { ...preset, model: id });
+      persist(state);
+      updateToolbarOption(mount, { ...preset, model: id });
+      renderPanel(mount, state);
+    });
+    popup.append(item);
+  }
+
+  trigger.addEventListener("click", () => {
+    if (popup.style.display === "none") openPopup();
+    else closePopup();
+  });
+
+  wrap.append(trigger, popup);
+  return wrap;
 }
 
 function renderYoloToggle(
