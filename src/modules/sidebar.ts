@@ -15,6 +15,7 @@ import {
   toApiMessages,
 } from "../context/message-format";
 import { DEFAULT_CONTEXT_POLICY } from "../context/policy";
+import { extractPdfRange, searchPdfPassages } from "../context/retrieval";
 import { zoteroContextSource } from "../context/zotero-source";
 import { getProvider } from "../providers/factory";
 import type { AssistantAnnotationDraft, Message } from "../providers/types";
@@ -43,6 +44,8 @@ const TOGGLE_BUTTON_ID = "zai-toggle-button";
 const FLOATING_TOGGLE_ID = "zai-floating-toggle";
 const contextPolicy = DEFAULT_CONTEXT_POLICY;
 const IMAGE_PROMPT_MAX_DIMENSION = 2048;
+const SELECTION_CONTEXT_RADIUS_CHARS = 2500;
+const SELECTION_CONTEXT_QUERY_CHARS = 500;
 // "Annotate this paper" preset prompt.
 //
 // This is the user-facing instruction injected when the user clicks the
@@ -144,6 +147,17 @@ interface PanelState {
   draftImages: DraftImage[];
   nextPasteID: number;
   abort?: AbortController;
+  messagesScrollLock?: MessagesScrollLock;
+}
+
+interface MessagesScrollSnapshot {
+  top: number;
+  atBottom: boolean;
+}
+
+interface MessagesScrollLock {
+  snapshot: MessagesScrollSnapshot;
+  until: number;
 }
 
 // Panel-state survival
@@ -239,7 +253,12 @@ function renderPanel(mount: HTMLElement, state: PanelState) {
   state.scrollToBottom = false;
   state.focusInput = false;
   afterRender(mount, () => {
-    restoreMessagesScroll(mount, state, !!shouldScroll);
+    const lockedScroll = activeMessagesScrollLock(state);
+    if (lockedScroll) {
+      scheduleMessagesScrollRestore(mount, lockedScroll);
+    } else {
+      restoreMessagesScroll(mount, state, !!shouldScroll);
+    }
     restoreChatInput(mount, state, !!shouldFocus);
   });
 }
@@ -269,6 +288,12 @@ function capturePanelState(mount: HTMLElement, state: PanelState) {
 
   const messages = mount.querySelector(".messages") as HTMLElement | null;
   if (messages) {
+    const lockedScroll = activeMessagesScrollLock(state);
+    if (lockedScroll) {
+      state.messagesScrollTop = lockedScroll.top;
+      state.autoFollowMessages = lockedScroll.atBottom;
+      return;
+    }
     state.messagesScrollTop = messages.scrollTop;
   }
 }
@@ -490,7 +515,7 @@ function renderPresetEditor(
     field(doc, "Model ID", model),
     field(doc, "Max tokens", maxTokens),
     field(doc, "Reasoning", reasoningEffort),
-    field(doc, "Summary", reasoningSummary),
+    field(doc, "Reasoning Summary", reasoningSummary),
     modelList,
   );
 
@@ -577,7 +602,7 @@ function renderQuickPrompts(
     {
       label: "解释选区",
       prompt:
-        "请根据当前 PDF 选区，先用中文解释这段话：它在说什么、与上下文的关系、为什么值得关注。不要调用任何 Zotero 工具。\n\n在解释正文之后，另起一段，以 `建议注释：` 开头，下面用 `- ` 列出 1-3 条简短要点（每条 ≤ 80 字），可以直接贴到 PDF 上当注释。如果当前没有可用 PDF 选区，请提示我先选中文本，并省略 `建议注释：` 段。",
+        "请解释当前 PDF 选区的文字。默认结合本轮已附带的附近上下文分析：先说明选区本身在说什么，再说明它在上下文中的作用，以及为什么值得关注。如果当前选区是在提出观点、给出论据/证据、定义概念、说明方法细节、承接/转折、限制条件或结论，请明确说出它属于哪一类；如果是观点或论据，必须说清楚这句话在论证链条里的作用。\n\n如果已附带的附近上下文仍不足，且当前模型可以调用 Zotero 工具，请继续用 zotero_search_pdf 或 zotero_read_pdf_range 读取更多相邻内容后再判断；避免基于孤立句子作过度推断。凡现有证据不足以支持的判断，请明确标注为“基于当前上下文尚不能确定”。\n\n在解释正文之后，另起一段，以 `建议注释：` 开头，下面用 `- ` 列出 1-3 条简短要点（每条 ≤ 80 字），可以直接贴到 PDF 上当注释。建议注释只能写当前选区和已核对上下文支持的内容。如果当前没有可用 PDF 选区，请提示我先选中文本，并省略 `建议注释：` 段。",
       disabled: !selectedText,
       disabledTitle: "请先在 PDF 中选中需要注释的句子",
       explainSelection: true,
@@ -623,6 +648,11 @@ function fullTextHighlightDisabledReason(
 function renderMessages(doc: Document, mount: HTMLElement, state: PanelState) {
   const messages = el(doc, "div", "messages");
   messages.addEventListener("scroll", () => {
+    const lockedScroll = activeMessagesScrollLock(state);
+    if (lockedScroll) {
+      scheduleMessagesScrollRestore(mount, lockedScroll);
+      return;
+    }
     state.messagesScrollTop = messages.scrollTop;
     state.autoFollowMessages = isMessagesElementNearBottom(messages);
   });
@@ -1567,11 +1597,23 @@ async function sendMessage(
   const selectedText = options.fullTextHighlight
     ? ""
     : getSelectedTextForPrompt(mount, state.itemID);
+  const selectionContext =
+    options.explainSelection && selectedText
+      ? await buildSelectionNearbyContext(selectedText, state.itemID)
+      : {};
   const userMessage: Message = {
     role: "user",
     content,
     ...(images.length ? { images } : {}),
-    ...(selectedText ? { context: { selectedText } } : {}),
+    ...(selectedText
+      ? {
+          context: {
+            selectedText,
+            explainSelection: options.explainSelection,
+            ...selectionContext,
+          },
+        }
+      : {}),
   };
   const snapshot = options.explainSelection
     ? cloneSelectionAnnotationDraft(getStoredSelectionAnnotation(state.itemID))
@@ -1591,6 +1633,55 @@ async function sendMessage(
     annotationSnapshot: snapshot,
     fullTextHighlight: options.fullTextHighlight,
   });
+}
+
+async function buildSelectionNearbyContext(
+  selectedText: string,
+  itemID: number | null,
+): Promise<Partial<NonNullable<Message["context"]>>> {
+  if (itemID == null) return {};
+  const query = selectionContextQuery(selectedText);
+  if (!query) return {};
+
+  try {
+    const pdfText = await zoteroContextSource.getFullText(itemID);
+    if (!pdfText) return {};
+    const matches = searchPdfPassages(
+      pdfText,
+      query,
+      contextPolicy.searchCandidateCount,
+      contextPolicy,
+    );
+    const best = matches[0];
+    if (!best) return {};
+
+    const range = extractPdfRange(
+      pdfText,
+      Math.max(0, best.start - SELECTION_CONTEXT_RADIUS_CHARS),
+      best.end + SELECTION_CONTEXT_RADIUS_CHARS,
+      contextPolicy,
+    );
+    if (!range) return {};
+
+    return {
+      query,
+      candidatePassageCount: matches.length,
+      selectedPassageNumbers: [1],
+      passageSelectorSource: "fallback",
+      passageSelectionReason:
+        "解释选区默认自动检索原文位置，并附带命中段落附近上下文",
+      retrievedPassages: [range],
+    };
+  } catch {
+    return {};
+  }
+}
+
+function selectionContextQuery(selectedText: string): string {
+  return selectedText
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, SELECTION_CONTEXT_QUERY_CHARS);
 }
 
 function cloneSelectionAnnotationDraft(
@@ -1659,11 +1750,14 @@ async function streamAssistant(
   try {
     const contextLedger = formatContextLedger(history);
     if (userMessage.context?.selectedText) {
+      const hasNearbyContext = !!userMessage.context.retrievedPassages?.length;
       userMessage.context = {
         ...userMessage.context,
         planMode: "selected_text",
         plannerSource: "selected",
-        planReason: "用户当前选中了 PDF 文本，直接作为显式上下文发送",
+        planReason: hasNearbyContext
+          ? "用户当前选中了 PDF 文本，并已自动附带命中位置附近上下文"
+          : "用户当前选中了 PDF 文本，直接作为显式上下文发送",
       };
     }
     const retainedStats = retainedContextStats(
@@ -2057,22 +2151,33 @@ function stopSelectionMonitor(win: Window, sidebar: WindowSidebarState) {
 }
 
 function updateSelectionIndicators(mount: HTMLElement, _itemID: number | null) {
-  const state = states.get(mount);
-  const prompts = mount.querySelector(".quick-prompts") as HTMLElement | null;
-  if (state && prompts) {
-    prompts.replaceWith(renderQuickPrompts(mount.ownerDocument!, mount, state));
-  }
-  const badge = mount.querySelector(".selection-badge") as HTMLElement | null;
-  if (state && badge) {
-    badge.replaceWith(renderSelectionBadge(mount.ownerDocument!, mount, state));
-  }
-  const input = mount.querySelector(
-    ".input-row textarea",
-  ) as HTMLTextAreaElement | null;
-  const status = mount.querySelector(".composer-status") as HTMLElement | null;
-  if (state && input && status) {
-    renderInputStatus(status, input, state);
-  }
+  // INVARIANT: only composer-area DOM is replaced here; messages-list scroll
+  // must NOT shift. The wrap defends against the same scroll-collapse seen
+  // on annotation-save (focused descendants in a sibling re-rendered subtree).
+  preserveMessagesScroll(mount, () => {
+    const state = states.get(mount);
+    const prompts = mount.querySelector(".quick-prompts") as HTMLElement | null;
+    if (state && prompts) {
+      prompts.replaceWith(
+        renderQuickPrompts(mount.ownerDocument!, mount, state),
+      );
+    }
+    const badge = mount.querySelector(".selection-badge") as HTMLElement | null;
+    if (state && badge) {
+      badge.replaceWith(
+        renderSelectionBadge(mount.ownerDocument!, mount, state),
+      );
+    }
+    const input = mount.querySelector(
+      ".input-row textarea",
+    ) as HTMLTextAreaElement | null;
+    const status = mount.querySelector(
+      ".composer-status",
+    ) as HTMLElement | null;
+    if (state && input && status) {
+      renderInputStatus(status, input, state);
+    }
+  });
 }
 
 function isFocusInside(root: HTMLElement): boolean {
@@ -2348,8 +2453,107 @@ function syncMessagesScrollState(mount: HTMLElement) {
   const state = states.get(mount);
   const messages = mount.querySelector(".messages") as HTMLElement | null;
   if (state && messages) {
+    const lockedScroll = activeMessagesScrollLock(state);
+    if (lockedScroll) {
+      state.messagesScrollTop = lockedScroll.top;
+      state.autoFollowMessages = lockedScroll.atBottom;
+      return;
+    }
     state.messagesScrollTop = messages.scrollTop;
   }
+}
+
+// Wraps a local DOM mutation (e.g. swapping a single bubble element) so the
+// messages-list scroll position is preserved across the swap.
+// WHY: Zotero/Firefox may collapse `.messages` scrollTop to 0 mid-mutation
+// when a focused descendant is replaced; without this guard the chat
+// visibly pages back to the top after operations like "save annotation".
+// We restore both synchronously and on the next animation frame to cover
+// async layout passes that arrive after the sync swap completes.
+function captureMessagesScrollSnapshot(
+  mount: HTMLElement,
+): MessagesScrollSnapshot | null {
+  const messages = mount.querySelector(".messages") as HTMLElement | null;
+  if (!messages) return null;
+  return {
+    top: messages.scrollTop,
+    atBottom: isMessagesElementNearBottom(messages),
+  };
+}
+
+function activeMessagesScrollLock(
+  state: PanelState | undefined,
+): MessagesScrollSnapshot | null {
+  if (!state?.messagesScrollLock) return null;
+  if (Date.now() <= state.messagesScrollLock.until) {
+    return state.messagesScrollLock.snapshot;
+  }
+  state.messagesScrollLock = undefined;
+  return null;
+}
+
+function lockMessagesScroll(
+  mount: HTMLElement,
+  snapshot: MessagesScrollSnapshot | null = captureMessagesScrollSnapshot(
+    mount,
+  ),
+  durationMs = 3000,
+): MessagesScrollSnapshot | null {
+  const state = states.get(mount);
+  if (state && snapshot) {
+    state.messagesScrollLock = {
+      snapshot,
+      until: Date.now() + durationMs,
+    };
+    const win = mount.ownerDocument?.defaultView;
+    win?.setTimeout(() => activeMessagesScrollLock(state), durationMs + 50);
+  }
+  return snapshot;
+}
+
+function restoreMessagesScrollSnapshot(
+  mount: HTMLElement,
+  snapshot: MessagesScrollSnapshot | null,
+) {
+  if (!snapshot) return;
+  const messages = mount.querySelector(".messages") as HTMLElement | null;
+  if (!messages) return;
+  const maxTop = Math.max(0, messages.scrollHeight - messages.clientHeight);
+  messages.scrollTop = snapshot.atBottom
+    ? maxTop
+    : Math.min(snapshot.top, maxTop);
+  const state = states.get(mount);
+  if (state) {
+    state.messagesScrollTop = messages.scrollTop;
+    state.autoFollowMessages = snapshot.atBottom;
+  }
+}
+
+function scheduleMessagesScrollRestore(
+  mount: HTMLElement,
+  snapshot: MessagesScrollSnapshot | null,
+) {
+  restoreMessagesScrollSnapshot(mount, snapshot);
+  const win = mount.ownerDocument?.defaultView;
+  if (!win) return;
+  win.requestAnimationFrame(() => {
+    restoreMessagesScrollSnapshot(mount, snapshot);
+    win.requestAnimationFrame(() =>
+      restoreMessagesScrollSnapshot(mount, snapshot),
+    );
+  });
+  win.setTimeout(() => restoreMessagesScrollSnapshot(mount, snapshot), 0);
+  win.setTimeout(() => restoreMessagesScrollSnapshot(mount, snapshot), 80);
+  win.setTimeout(() => restoreMessagesScrollSnapshot(mount, snapshot), 250);
+}
+
+function preserveMessagesScroll(
+  mount: HTMLElement,
+  mutate: () => void,
+  snapshot = captureMessagesScrollSnapshot(mount),
+) {
+  mutate();
+  scheduleMessagesScrollRestore(mount, snapshot);
 }
 
 function isMessagesNearBottom(mount: HTMLElement): boolean {
@@ -2472,12 +2676,12 @@ function bubble(
   if (message.role === "user") {
     renderMessageImages(doc, root, message.images);
   }
+  const sourceUser =
+    message.role === "assistant"
+      ? state.messages[findPreviousUserIndex(state.messages, index)]
+      : undefined;
   if (message.role === "assistant") {
-    renderAssistantProcess(
-      doc,
-      root,
-      state.messages[findPreviousUserIndex(state.messages, index)],
-    );
+    renderAssistantProcess(doc, root, sourceUser);
   }
   const progress = assistantProgressFor(state, index, message);
   if (progress) {
@@ -2560,6 +2764,7 @@ function renderAnnotationSuggestionActions(
   button.classList.add("annotation-save");
   applyAnnotationButtonState(button, draft);
   button.addEventListener("click", () => {
+    button.blur();
     void saveAnnotationDraftFromBubble(mount, state, index);
   });
   actions.append(button);
@@ -2707,24 +2912,33 @@ async function saveAnnotationDraftFromBubble(
   if (!message || !draft) return;
   if (draft.state.kind === "saving" || draft.state.kind === "saved") return;
 
+  const scrollSnapshot = lockMessagesScroll(mount);
   draft.state = { kind: "saving" };
-  refreshAnnotationSuggestion(mount, index);
+  refreshAnnotationSuggestion(mount, index, scrollSnapshot);
   try {
     const { id } = await saveSelectionAnnotation(draft.snapshot, {
       comment: draft.comment,
     });
+    lockMessagesScroll(mount, scrollSnapshot);
+    scheduleMessagesScrollRestore(mount, scrollSnapshot);
     draft.state = { kind: "saved", annotationID: id, savedAt: Date.now() };
   } catch (err) {
+    lockMessagesScroll(mount, scrollSnapshot);
+    scheduleMessagesScrollRestore(mount, scrollSnapshot);
     draft.state = {
       kind: "failed",
       error: err instanceof Error ? err.message : String(err),
     };
   }
   void saveChatMessages(state.itemID, state.messages);
-  refreshAnnotationSuggestion(mount, index);
+  refreshAnnotationSuggestion(mount, index, scrollSnapshot);
 }
 
-function refreshAnnotationSuggestion(mount: HTMLElement, index: number) {
+function refreshAnnotationSuggestion(
+  mount: HTMLElement,
+  index: number,
+  scrollSnapshot?: MessagesScrollSnapshot | null,
+) {
   const state = states.get(mount);
   if (!state) return;
   const message = state.messages[index];
@@ -2743,8 +2957,18 @@ function refreshAnnotationSuggestion(mount: HTMLElement, index: number) {
     index,
     message.annotationDraft,
   );
-  if (existing) existing.replaceWith(next);
-  else root.append(next);
+  // INVARIANT: this is a local in-bubble swap; messages-list scroll position
+  // must NOT shift. Without preservation, swapping in a slightly shorter
+  // suggestion (e.g. "✓ 已保存" replacing "💾 保存为注释") clamps scrollTop
+  // when the user is near the bottom and visually pages the chat backward.
+  preserveMessagesScroll(
+    mount,
+    () => {
+      if (existing) existing.replaceWith(next);
+      else root.append(next);
+    },
+    scrollSnapshot,
+  );
 }
 
 // Renders the "思考与上下文" collapsible block above an assistant bubble.

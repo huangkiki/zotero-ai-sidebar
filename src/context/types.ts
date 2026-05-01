@@ -41,6 +41,7 @@ export interface ItemAnnotation {
 
 export interface MessageContext {
   selectedText?: string;
+  explainSelection?: boolean;
   planMode?: ContextMode;
   planReason?: string;
   plannerSource?: ContextPlanSource;

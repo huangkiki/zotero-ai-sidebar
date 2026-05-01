@@ -86,7 +86,18 @@ export function contextSummaryLine(message: Message): string {
   const context = message.context;
   if (!context) return "";
   if (context.selectedText) {
-    return `已随本轮发送 PDF 选区 ${context.selectedText.length} 字`;
+    const passageChars =
+      context.retrievedPassages?.reduce(
+        (sum, passage) => sum + passage.text.length,
+        0,
+      ) ?? 0;
+    return [
+      `已随本轮发送 PDF 选区 ${context.selectedText.length} 字`,
+      passageChars ? `自动附带附近上下文 ${passageChars} 字` : "",
+      retainedContextSuffix(context),
+    ]
+      .filter(Boolean)
+      .join("；");
   }
   if (context.annotations?.length) {
     return `已随本轮发送 Zotero 标注 ${context.annotations.length} 条`;
@@ -141,6 +152,11 @@ export function contextSummaryLine(message: Message): string {
     return "本轮未发送论文正文";
   }
   return "";
+}
+
+function retainedContextSuffix(context: Message["context"]): string {
+  if (!context?.retainedContextCount) return "";
+  return `另保留最近上下文 ${context.retainedContextCount} 条 / ${context.retainedContextChars ?? 0} 字`;
 }
 
 export function formatContextMarkdown(message: Message): string[] {
