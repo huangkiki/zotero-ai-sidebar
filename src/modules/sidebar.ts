@@ -20,7 +20,13 @@ import { zoteroContextSource } from "../context/zotero-source";
 import { getProvider } from "../providers/factory";
 import type { AssistantAnnotationDraft, Message } from "../providers/types";
 import { loadChatMessages, saveChatMessages } from "../settings/chat-history";
+import { loadQuickPromptSettings } from "../settings/quick-prompts";
 import { loadPresets, savePresets, zoteroPrefs } from "../settings/storage";
+import {
+  loadToolSettings,
+  saveToolSettings,
+  type WebSearchMode,
+} from "../settings/tool-settings";
 import {
   DEFAULT_BASE_URLS,
   DEFAULT_MODELS,
@@ -34,6 +40,11 @@ import {
   type ReasoningEffort,
   type ReasoningSummary,
 } from "../settings/types";
+import {
+  expandSlashCommandMessage,
+  matchingSlashCommands,
+  type SlashCommand,
+} from "../ui/slash-commands";
 
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
 const COLUMN_ID = "zai-column";
@@ -55,60 +66,23 @@ const OPENAI_QUICK_MODELS = [
   "gpt-5.3-codex",
   "gpt-5.2",
 ];
-// "Annotate this paper" preset prompt.
-//
-// This is the user-facing instruction injected when the user clicks the
-// quick prompt for full-text highlighting. It is an explicit shortcut, not
-// local intent routing: ordinary typed requests still go through the same
-// always-visible tool manual and model-selected Zotero tools.
-//
-// Each numbered step matches a harness contract:
-//   1.   Read metadata/abstract so the paper's main thread is explicit.
-//   2-3. Read Reader text, not Zotero's full-text cache, because
-//        `zotero_annotate_passage` locates against the same Reader text
-//        layer. If truncated, top up with the same Reader-text tool range.
-//   4.   Limit to 5-10 highlights so we don't blow `maxFullTextHighlights`
-//        (default 10). Anti-noise guidance ("avoid summary spans,
-//        equations") matches what users actually want highlighted.
-//   5.   `text` must be VERBATIM — pdf-locator's exact-match path is fast,
-//        the fuzzy fallback (≥0.85 confidence) handles minor OCR drift.
-//        80-char comment cap matches `maxFullTextHighlightCommentChars`.
-//   6.   Forces a final summary turn so the model exits the tool loop.
-//
-// The retry-with-rewrite hint addresses the locator's known weakness on
-// dehyphenation / column-break artifacts; rewrites preserving ≥80% of the
-// original text usually push fuzzy-match confidence past threshold.
-const FULL_TEXT_HIGHLIGHT_PROMPT = [
-  "请执行以下流程，对当前 PDF 标注重点：",
-  "",
-  "1. 先调用 zotero_get_current_item，读取标题、作者、年份和摘要；用摘要建立论文主线（研究问题、方法、结果、结论）。",
-  "2. 再调用 zotero_get_reader_pdf_text，读取当前 Reader 的 PDF 文本层。注意：后续要高亮的 text 必须从这个工具输出中逐字复制，不要从 zotero_get_full_pdf 复制。",
-  "3. 如果工具输出显示全文被截断（Truncated: yes / sent chars < total chars），请继续调用 zotero_get_reader_pdf_text 并传入 start/end 补读未覆盖的关键范围。",
-  "4. 通读后，从 Reader 文本中选出 5–10 条最值得标注的重点句（论点、关键定义、核心结果、关键限制、贡献点等），优先选择能支撑摘要主线的正文原句；避免标摘要性的整段、避免标公式。如果摘要里有高度概括贡献/结论的关键句，最多标 1 条。",
-  "5. 对每一条调用 zotero_annotate_passage：",
-  "   - text 字段必须是 PDF 中的逐字原文，不要改写、不要翻译、不要省略标点。",
-  "   - comment 字段用中文，简洁说明“这句话为什么重要”，≤ 80 字。",
-  "   - color 字段不传，使用默认色。",
-  "6. 全部标注完成后，再用一段中文总结：摘要主线、标了哪几句、正文补充了什么、可能漏掉的角度。",
-  "",
-  "注意：",
-  "- 只有本次全文标注需要写入 PDF；不要调用与本任务无关的写工具。",
-  "- 如果达到工具返回的 highlight limit，请停止写入并总结已保存内容。",
-  '- 如果某句调用 zotero_annotate_passage 返回 "Passage not found"，可以稍微改写后重试（保持原句 80% 以上文字不变）；连续两次都找不到就放弃这句、继续下一条。',
-].join("\n");
-
+// Tool guidance injected into each turn. This documents available choices;
+// the model still decides which tool, if any, to call.
 const ZOTERO_TOOL_MANUAL = [
   "Zotero tool manual:",
   "- The model, not the local UI, decides which Zotero tool to call. The local harness only validates arguments, enforces budgets/permissions, executes tools, and returns visible tool traces.",
   "- Use zotero_get_current_item for title, authors, year, tags, and abstract. Prefer it before whole-paper summaries, contribution analysis, or full-paper annotation planning.",
-  "- Use zotero_get_full_pdf for ordinary whole-paper reading, summary, review, comparison, or analysis. This reads Zotero's full-text cache and is not the source for text that will be highlighted.",
-  "- Use zotero_search_pdf for targeted concepts, figures, experiments, equations, claims, definitions, and local evidence; use zotero_read_pdf_range only to expand cache-based ranges from prior tool output or the ledger.",
+  "- Context-size selection is part of the model's tool planning: choose metadata, search hits, exact ranges, or the full PDF according to the current question instead of relying on local intent routing.",
+  "- The ledger includes prior source identity, ranges, and tool summaries. Use it as structured memory to distinguish the current Zotero item from remote papers named by URLs and to choose the needed context size.",
+  "- Use chat_get_previous_context when the ledger says relevant snippets were already attached in this chat and the raw text is needed again. This is a read-only chat-history tool; it does not fetch Zotero, arXiv, or web content.",
+  "- Use zotero_get_full_pdf when the model decides the whole current Zotero PDF is needed for reading, summary, review, comparison, or analysis. Prior full-PDF sends appear in the ledger as source/range metadata so the model can choose between current history, targeted ranges, fresh full text, or asking the user for a resend.",
+  "- Use zotero_search_pdf for targeted concepts, figures, experiments, equations, claims, definitions, section/chapter headings, and local evidence; use zotero_read_pdf_range only to expand cache-based ranges from prior tool output or the ledger.",
   "- Use zotero_get_annotations when the user asks about existing Zotero highlights, notes, comments, annotations, or reading marks.",
   "- Use zotero_get_reader_pdf_text when the user explicitly asks to write PDF highlights/annotations or annotate the whole paper. Copy zotero_annotate_passage.text verbatim from zotero_get_reader_pdf_text output so the passage can be located in the Reader text layer.",
   "- Use zotero_add_annotation_to_selection only when the user explicitly asks to save a note/comment on the current PDF selection.",
   "- Use zotero_annotate_passage only when the user explicitly asks to write highlights/annotations into the PDF. Do not use write tools for ordinary requests like summarizing key points unless the user asks to write/highlight/annotate in Zotero.",
   "- PDF modification requires approval or YOLO mode. If a write tool is blocked, explain that the user must enable YOLO or approve the write, and do not pretend the PDF was modified.",
-  "- For paper-specific claims, rely only on currently attached context or Zotero tool outputs. If you have only caption/text and not an image, say so explicitly for visual questions.",
+  "- For paper-specific claims, rely on current context, prior assistant answers when the user is asking a continuation, chat_get_previous_context, or fresh Zotero/arXiv tool outputs. If you have only caption/text and not an image, say so explicitly for visual questions.",
 ].join("\n");
 
 let registered = false;
@@ -174,6 +148,7 @@ interface PanelState {
   skipNextDraftCapture?: boolean;
   activeAssistantIndex?: number;
   activeAssistantStage?: AssistantProgressStage;
+  activeAssistantDetail?: string;
   agentPermissionMode: AgentPermissionMode;
   pasteBlocks: PasteBlock[];
   draftImages: DraftImage[];
@@ -276,9 +251,6 @@ function renderPanel(mount: HTMLElement, state: PanelState) {
 
   const panel = el(doc, "div", "zai-app native-panel");
   panel.append(renderToolbar(doc, mount, state));
-  if (state.editing || state.presets.length === 0) {
-    panel.append(renderPresetEditor(doc, mount, state));
-  }
   panel.append(renderContextCard(doc, state.itemID));
   panel.append(renderMessages(doc, mount, state));
   panel.append(renderInput(doc, mount, state));
@@ -354,12 +326,8 @@ function captureDraftFromInput(
 }
 
 function renderToolbar(doc: Document, mount: HTMLElement, state: PanelState) {
-  const toolbarPresets = state.editing
-    ? state.presets
-    : configuredPresets(state);
-  const selectedForToolbar = state.editing
-    ? selectedPreset(state)
-    : selectedChatPreset(state);
+  const toolbarPresets = configuredPresets(state);
+  const selectedForToolbar = selectedChatPreset(state);
   const bar = el(
     doc,
     "div",
@@ -378,8 +346,7 @@ function renderToolbar(doc: Document, mount: HTMLElement, state: PanelState) {
     topRow.append(el(doc, "span", "", "未配置模型"));
     const button = buttonEl(doc, "添加模型");
     button.addEventListener("click", () => {
-      state.editing = true;
-      renderPanel(mount, state);
+      openAddonPreferences(doc);
     });
     bottomRow.append(button);
     bar.append(topRow, bottomRow);
@@ -404,10 +371,9 @@ function renderToolbar(doc: Document, mount: HTMLElement, state: PanelState) {
   });
   topRow.append(select);
 
-  const settings = buttonEl(doc, state.editing ? "收起" : "设置");
+  const settings = buttonEl(doc, "设置");
   settings.addEventListener("click", () => {
-    state.editing = !state.editing;
-    renderPanel(mount, state);
+    openAddonPreferences(doc);
   });
   if (state.messages.length > 0) {
     const copyAll = buttonEl(doc, "复制MD");
@@ -444,6 +410,50 @@ function renderToolbar(doc: Document, mount: HTMLElement, state: PanelState) {
   bottomRow.append(hide);
   bar.append(topRow, bottomRow);
   return bar;
+}
+
+export function refreshSidebarPreferences(): void {
+  for (const win of Zotero.getMainWindows()) {
+    const sidebar = windowSidebars.get(win);
+    if (!sidebar) continue;
+    const state = states.get(sidebar.mount);
+    if (!state) continue;
+    const presets = loadPresets(zoteroPrefs());
+    state.presets = presets;
+    if (!state.selectedId || !presets.some((p) => p.id === state.selectedId)) {
+      state.selectedId = configuredPresets(state)[0]?.id ?? presets[0]?.id ?? null;
+    }
+    state.agentPermissionMode = agentPermissionMode(
+      selectedChatPreset(state) ?? selectedPreset(state),
+    );
+    renderPanel(sidebar.mount, state);
+  }
+}
+
+function openAddonPreferences(doc: Document): void {
+  const paneID = `${addon.data.config.addonRef}-prefs`;
+  const zotero = Zotero as unknown as {
+    PreferencePanes?: { open?: (id?: string) => void };
+    Utilities?: { Internal?: { openPreferences?: (id?: string) => void } };
+  };
+  try {
+    if (typeof zotero.PreferencePanes?.open === "function") {
+      zotero.PreferencePanes.open(paneID);
+      return;
+    }
+  } catch {}
+  try {
+    if (typeof zotero.Utilities?.Internal?.openPreferences === "function") {
+      zotero.Utilities.Internal.openPreferences(paneID);
+      return;
+    }
+  } catch {}
+  doc.defaultView?.openDialog(
+    "chrome://zotero/content/preferences/preferences.xhtml",
+    "zotero-prefs",
+    "chrome,titlebar,toolbar,centerscreen",
+    paneID,
+  );
 }
 
 function renderPresetEditor(
@@ -817,6 +827,7 @@ function renderQuickPrompts(
   mount: HTMLElement,
   state: PanelState,
 ) {
+  const promptSettings = loadQuickPromptSettings(zoteroPrefs());
   const selectedText = getStoredSelectedText(state.itemID);
   const preset = selectedChatPreset(state);
   const fullTextHighlightDisabled = fullTextHighlightDisabledReason(
@@ -834,21 +845,19 @@ function renderQuickPrompts(
   }> = [
     {
       label: "总结论文",
-      prompt:
-        "请用中文总结这篇论文，包含：研究背景与问题、核心方法流程、关键公式或算法步骤、主要贡献和创新点、实验结果与主要结论、适用场景、局限性、可能反例与后续改进方向，最后给出一句话概括。",
+      prompt: promptSettings.builtIns.summary,
       disabled: false,
     },
     {
       label: "🔖 全文重点",
-      prompt: FULL_TEXT_HIGHLIGHT_PROMPT,
+      prompt: promptSettings.builtIns.fullTextHighlight,
       disabled: !!fullTextHighlightDisabled,
       disabledTitle: fullTextHighlightDisabled,
       fullTextHighlight: true,
     },
     {
       label: "解释选区",
-      prompt:
-        "请解释当前 PDF 选区的文字。默认结合本轮已附带的附近上下文分析：先说明选区本身在说什么，再说明它在上下文中的作用，以及为什么值得关注。如果当前选区是在提出观点、给出论据/证据、定义概念、说明方法细节、承接/转折、限制条件或结论，请明确说出它属于哪一类；如果是观点或论据，必须说清楚这句话在论证链条里的作用。\n\n如果已附带的附近上下文仍不足，且当前模型可以调用 Zotero 工具，请继续用 zotero_search_pdf 或 zotero_read_pdf_range 读取更多相邻内容后再判断；避免基于孤立句子作过度推断。凡现有证据不足以支持的判断，请明确标注为“基于当前上下文尚不能确定”。\n\n在解释正文之后，另起一段，以 `建议注释：` 开头，下面用 `- ` 列出 1-3 条简短要点（每条 ≤ 80 字），可以直接贴到 PDF 上当注释。建议注释只能写当前选区和已核对上下文支持的内容。如果当前没有可用 PDF 选区，请提示我先选中文本，并省略 `建议注释：` 段。",
+      prompt: promptSettings.builtIns.explainSelection,
       disabled: !selectedText,
       disabledTitle: "请先在 PDF 中选中需要注释的句子",
       explainSelection: true,
@@ -873,6 +882,22 @@ function renderQuickPrompts(
       });
     });
     box.append(button);
+  }
+  const customPrompts = promptSettings.customButtons.filter(
+    (button) => button.label.trim() && button.prompt.trim(),
+  );
+  if (customPrompts.length) {
+    box.append(el(doc, "span", "quick-prompts-break"));
+    for (const custom of customPrompts) {
+      const button = buttonEl(doc, custom.label);
+      button.className = "quick-prompt-custom";
+      button.disabled = state.sending;
+      button.title = "自定义提示词按钮";
+      button.addEventListener("click", () => {
+        void sendMessage(mount, state, custom.prompt);
+      });
+      box.append(button);
+    }
   }
   return box;
 }
@@ -940,8 +965,29 @@ function renderInput(doc: Document, mount: HTMLElement, state: PanelState) {
   input.disabled = !preset;
   input.value = state.draftText;
   input.style.height = "auto";
+  const slashMenu = el(doc, "div", "slash-command-menu");
+  slashMenu.style.display = "none";
 
   input.addEventListener("keydown", (event: KeyboardEvent) => {
+    const slashTarget = activeSlashCommandTarget(input);
+    const slashMatches = slashTarget
+      ? matchingSlashCommands(slashTarget.token)
+      : [];
+    if (
+      slashTarget &&
+      slashMatches.length > 0 &&
+      (event.key === "Enter" || event.key === "Tab")
+    ) {
+      event.preventDefault();
+      applySlashCommand(input, state, slashTarget, slashMatches[0]);
+      updateStatus();
+      return;
+    }
+    if (slashTarget && event.key === "Escape") {
+      slashMenu.style.display = "none";
+      event.preventDefault();
+      return;
+    }
     const shouldSend =
       !state.sending &&
       event.key === "Enter" &&
@@ -949,7 +995,7 @@ function renderInput(doc: Document, mount: HTMLElement, state: PanelState) {
       (!event.shiftKey || event.ctrlKey || event.metaKey);
     if (shouldSend) {
       event.preventDefault();
-      void sendMessage(mount, state, expandPasteMarkers(input.value, state));
+      void sendMessage(mount, state, composerMessageContent(input.value, state));
     }
   });
 
@@ -957,6 +1003,7 @@ function renderInput(doc: Document, mount: HTMLElement, state: PanelState) {
     captureDraftFromInput(input, state, captureFocus);
     autoResizeInput(input);
     renderInputStatus(status, input, state);
+    renderSlashCommandMenu(slashMenu, input, state);
   };
   for (const event of ["input", "select", "click", "keyup", "focus"]) {
     input.addEventListener(event, () => updateStatus());
@@ -983,8 +1030,8 @@ function renderInput(doc: Document, mount: HTMLElement, state: PanelState) {
   afterRender(mount, () => updateStatus(false));
 
   const inputStack = el(doc, "div", "input-stack");
-  inputStack.append(renderDraftImages(doc, mount, state, input), input);
-  row.append(inputStack);
+  inputStack.append(renderDraftImages(doc, mount, state, input), slashMenu, input);
+  row.append(inputStack, renderWebSearchSwitcher(doc, mount, state));
   const imageAttach = renderImageAttachButton(
     doc,
     mount,
@@ -1032,8 +1079,7 @@ function renderInput(doc: Document, mount: HTMLElement, state: PanelState) {
   send.setAttribute("aria-label", "发送");
   send.addEventListener(
     "click",
-    () =>
-      void sendMessage(mount, state, expandPasteMarkers(input.value, state)),
+    () => void sendMessage(mount, state, composerMessageContent(input.value, state)),
   );
   row.append(send, renderSelectionBadge(doc, mount, state));
   composer.append(
@@ -1049,6 +1095,102 @@ function renderInput(doc: Document, mount: HTMLElement, state: PanelState) {
     ),
   );
   return composer;
+}
+
+function composerMessageContent(raw: string, state: PanelState): string {
+  return expandSlashCommandMessage(expandPasteMarkers(raw, state));
+}
+
+interface SlashCommandTarget {
+  start: number;
+  end: number;
+  token: string;
+}
+
+function activeSlashCommandTarget(
+  input: HTMLTextAreaElement,
+): SlashCommandTarget | null {
+  const start = input.selectionStart ?? input.value.length;
+  const selectionEnd = input.selectionEnd ?? start;
+  if (start !== selectionEnd) return null;
+  const beforeCursor = input.value.slice(0, start);
+  const lineStart = beforeCursor.lastIndexOf("\n") + 1;
+  const linePrefix = beforeCursor.slice(lineStart);
+  if (!linePrefix.startsWith("/") || /\s/.test(linePrefix)) return null;
+  const afterToken = input.value.slice(start).match(/^[^\s]*/)?.[0] ?? "";
+  const end = start + afterToken.length;
+  return {
+    start: lineStart,
+    end,
+    token: input.value.slice(lineStart, end),
+  };
+}
+
+function renderSlashCommandMenu(
+  menu: HTMLElement,
+  input: HTMLTextAreaElement,
+  state: PanelState,
+) {
+  const target = activeSlashCommandTarget(input);
+  const matches = target ? matchingSlashCommands(target.token) : [];
+  if (matches.length === 0) {
+    menu.style.display = "none";
+    menu.replaceChildren();
+    return;
+  }
+
+  const doc = input.ownerDocument!;
+  menu.replaceChildren();
+  matches.forEach((command, index) => {
+    const button = doc.createElement("button");
+    button.type = "button";
+    button.className = "slash-command-item";
+    if (index === 0) button.classList.add("slash-command-item-selected");
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", () => {
+      const latest = activeSlashCommandTarget(input);
+      if (!latest) return;
+      applySlashCommand(input, state, latest, command);
+      captureDraftFromInput(input, state);
+      renderSlashCommandMenu(menu, input, state);
+      input.focus();
+    });
+    button.append(
+      el(doc, "span", "slash-command-name", command.name),
+      el(doc, "span", "slash-command-usage", command.usage),
+      el(doc, "span", "slash-command-desc", slashCommandDescription(command)),
+    );
+    menu.append(button);
+  });
+  menu.style.display = "";
+}
+
+function applySlashCommand(
+  input: HTMLTextAreaElement,
+  state: PanelState,
+  target: SlashCommandTarget,
+  command: SlashCommand,
+) {
+  const before = input.value.slice(0, target.start);
+  const after = input.value.slice(target.end);
+  const insertion = `${command.name} `;
+  input.value = `${before}${insertion}${after}`;
+  const cursor = before.length + insertion.length;
+  input.selectionStart = cursor;
+  input.selectionEnd = cursor;
+  captureDraftFromInput(input, state);
+  autoResizeInput(input);
+}
+
+function slashCommandDescription(command: SlashCommand): string {
+  const settings = loadToolSettings(zoteroPrefs());
+  if (command.name === "/arxiv-search") {
+    return `${command.description} 内置 arXiv 工具已可用；模型自行判断是否调用。`;
+  }
+  if (command.name === "/web-search" && settings.webSearchMode === "disabled") {
+    return `${command.description} 可先点击输入框左下角“联网”启用。`;
+  }
+  return command.description;
 }
 
 function renderImageAttachButton(
@@ -1217,15 +1359,116 @@ function renderComposerFooter(
   imageAttach: HTMLElement,
 ): HTMLElement {
   const footer = el(doc, "div", "composer-footer");
+  const left = el(doc, "div", "composer-footer-left");
   const actions = el(doc, "div", "composer-footer-actions");
+  left.append(status);
   actions.append(
     screenshotAttach,
     imageAttach,
     renderModelSwitcher(doc, mount, state),
+    renderReasoningSwitcher(doc, mount, state),
     renderYoloToggle(doc, mount, state),
   );
-  footer.append(status, actions);
+  footer.append(left, actions);
   return footer;
+}
+
+function renderWebSearchSwitcher(
+  doc: Document,
+  mount: HTMLElement,
+  state: PanelState,
+): HTMLElement {
+  const settings = loadToolSettings(zoteroPrefs());
+  const preset = selectedChatPreset(state);
+  const enabledForPreset = preset?.provider === "openai";
+  const mode = settings.webSearchMode;
+  const enabled = mode !== "disabled";
+  const wrap = el(doc, "div", `web-search-switcher web-search-${mode}`);
+  const trigger = doc.createElement("button");
+  trigger.type = "button";
+  trigger.className = "web-search-trigger";
+  trigger.textContent = enabled ? "🌐 联网" : "＋ 联网";
+  trigger.title = enabledForPreset
+    ? webSearchToggleTitle(mode)
+    : "联网工具目前仅对 OpenAI Responses 兼容配置生效";
+  trigger.disabled = !enabledForPreset || state.sending;
+  trigger.setAttribute("aria-haspopup", "menu");
+  trigger.setAttribute("aria-expanded", "false");
+
+  const popup = el(doc, "div", "web-search-popup");
+  popup.setAttribute("role", "menu");
+  popup.style.display = "none";
+
+  const closePopup = () => {
+    if (popup.style.display === "none") return;
+    popup.style.display = "none";
+    trigger.setAttribute("aria-expanded", "false");
+    doc.removeEventListener("mousedown", outsideHandler, true);
+    doc.removeEventListener("keydown", escapeHandler, true);
+  };
+  const openPopup = () => {
+    if (popup.style.display !== "none") return;
+    popup.style.display = "";
+    trigger.setAttribute("aria-expanded", "true");
+    doc.addEventListener("mousedown", outsideHandler, true);
+    doc.addEventListener("keydown", escapeHandler, true);
+  };
+  const outsideHandler = (event: Event) => {
+    if (!wrap.contains(event.target as Node)) closePopup();
+  };
+  const escapeHandler = (event: KeyboardEvent) => {
+    if (event.key === "Escape") {
+      closePopup();
+      trigger.focus();
+    }
+  };
+
+  const item = doc.createElement("button");
+  item.type = "button";
+  item.className = enabled
+    ? "web-search-item web-search-item-active"
+    : "web-search-item";
+  item.setAttribute("role", "menuitemcheckbox");
+  item.setAttribute("aria-checked", enabled ? "true" : "false");
+  item.addEventListener("click", () => {
+    closePopup();
+    saveToolSettings(zoteroPrefs(), {
+      ...settings,
+      webSearchMode: enabled ? "disabled" : "live",
+    });
+    renderPanel(mount, state);
+  });
+  item.append(
+    el(doc, "span", "web-search-item-icon", enabled ? "🌐" : "＋"),
+    el(doc, "span", "web-search-item-main", "联网"),
+    el(doc, "span", "web-search-item-check", enabled ? "✓" : ""),
+    el(
+      doc,
+      "span",
+      "web-search-item-detail",
+      enabled ? "已开启；模式在设置中修改" : "点击开启；模式在设置中修改",
+    ),
+  );
+  popup.append(item);
+
+  trigger.addEventListener("click", () => {
+    if (popup.style.display === "none") openPopup();
+    else closePopup();
+  });
+
+  wrap.append(trigger, popup);
+  return wrap;
+}
+
+function webSearchToggleTitle(mode: WebSearchMode): string {
+  switch (mode) {
+    case "cached":
+      return "联网已开启：Cached；点击可关闭";
+    case "live":
+      return "联网已开启：Live；点击可关闭";
+    default:
+      return "联网已关闭；点击可开启";
+  }
 }
 
 // Composer-footer model switcher (Claudian-style).
@@ -1307,6 +1550,84 @@ function renderModelSwitcher(
       upsertPreset(state, { ...preset, model: id });
       persist(state);
       updateToolbarOption(mount, { ...preset, model: id });
+      renderPanel(mount, state);
+    });
+    popup.append(item);
+  }
+
+  trigger.addEventListener("click", () => {
+    if (popup.style.display === "none") openPopup();
+    else closePopup();
+  });
+
+  wrap.append(trigger, popup);
+  return wrap;
+}
+
+function renderReasoningSwitcher(
+  doc: Document,
+  mount: HTMLElement,
+  state: PanelState,
+): HTMLElement {
+  const preset = selectedChatPreset(state) ?? selectedPreset(state);
+  const wrap = el(doc, "div", "reasoning-switcher");
+  if (!preset || preset.provider !== "openai") {
+    wrap.style.display = "none";
+    return wrap;
+  }
+
+  const active = preset.extras?.reasoningEffort ?? DEFAULT_REASONING_EFFORT;
+  const trigger = doc.createElement("button") as HTMLButtonElement;
+  trigger.type = "button";
+  trigger.className = "reasoning-switcher-trigger";
+  trigger.textContent = reasoningEffortShortLabel(active);
+  trigger.title = `推理等级：${reasoningEffortLabel(active)}`;
+  trigger.disabled = state.sending;
+  trigger.setAttribute("aria-haspopup", "menu");
+  trigger.setAttribute("aria-expanded", "false");
+
+  const popup = el(doc, "div", "reasoning-switcher-popup");
+  popup.setAttribute("role", "menu");
+  popup.style.display = "none";
+
+  const closePopup = () => {
+    if (popup.style.display === "none") return;
+    popup.style.display = "none";
+    trigger.setAttribute("aria-expanded", "false");
+    doc.removeEventListener("mousedown", outsideHandler, true);
+    doc.removeEventListener("keydown", escapeHandler, true);
+  };
+  const openPopup = () => {
+    if (popup.style.display !== "none") return;
+    popup.style.display = "";
+    trigger.setAttribute("aria-expanded", "true");
+    doc.addEventListener("mousedown", outsideHandler, true);
+    doc.addEventListener("keydown", escapeHandler, true);
+  };
+  const outsideHandler = (event: Event) => {
+    if (!wrap.contains(event.target as Node)) closePopup();
+  };
+  const escapeHandler = (event: KeyboardEvent) => {
+    if (event.key === "Escape") {
+      closePopup();
+      trigger.focus();
+    }
+  };
+
+  for (const [value, label] of REASONING_EFFORT_OPTIONS) {
+    const item = doc.createElement("button") as HTMLButtonElement;
+    item.type = "button";
+    item.className = "reasoning-switcher-item";
+    if (value === active) item.classList.add("reasoning-switcher-item-active");
+    item.textContent = label;
+    item.setAttribute("role", "menuitemradio");
+    item.setAttribute("aria-checked", value === active ? "true" : "false");
+    item.addEventListener("click", () => {
+      closePopup();
+      if (value === preset.extras?.reasoningEffort) return;
+      const next = withReasoningEffort(preset, value);
+      upsertPreset(state, next);
+      persist(state);
       renderPanel(mount, state);
     });
     popup.append(item);
@@ -1928,8 +2249,7 @@ async function sendMessage(
   await ensureHistoryLoaded(mount, state);
   if (states.get(mount) !== state) return;
   if (!preset.apiKey || !preset.model) {
-    state.editing = true;
-    renderPanel(mount, state);
+    openAddonPreferences(mount.ownerDocument!);
     return;
   }
 
@@ -2126,6 +2446,7 @@ async function streamAssistant(
       source: zoteroContextSource,
       itemID: state.itemID,
       policy: contextPolicy,
+      previousMessages: history,
       selectionAnnotation: () => getStoredSelectionAnnotation(state.itemID),
       fullTextHighlight: options.fullTextHighlight,
       getActiveReader: () =>
@@ -2152,24 +2473,33 @@ async function streamAssistant(
         tools: toolSession.tools,
         maxToolIterations: contextPolicy.maxToolIterations,
         permissionMode: state.agentPermissionMode,
+        toolSettings: loadToolSettings(zoteroPrefs()),
       },
     )) {
       if (chunk.type === "text_delta") {
         state.activeAssistantStage = "writing";
+        state.activeAssistantDetail = undefined;
         assistant.content += chunk.text;
         updateMessageBubble(mount, assistantIndex, assistant);
       } else if (chunk.type === "thinking_delta") {
         state.activeAssistantStage = "thinking";
+        state.activeAssistantDetail = undefined;
         assistant.thinking = `${assistant.thinking ?? ""}${chunk.text}`;
         updateMessageBubble(mount, assistantIndex, assistant);
       } else if (chunk.type === "tool_call") {
         state.activeAssistantStage =
           chunk.status === "started" ? "using_tool" : "waiting_model";
+        state.activeAssistantDetail = undefined;
         recordToolCall(userMessage, chunk);
         void saveChatMessages(state.itemID, state.messages);
         state.scrollToBottom = state.autoFollowMessages;
         renderPanel(mount, state);
+      } else if (chunk.type === "status") {
+        state.activeAssistantStage = "waiting_model";
+        state.activeAssistantDetail = chunk.message;
+        updateMessageBubble(mount, assistantIndex, assistant);
       } else if (chunk.type === "error") {
+        state.activeAssistantDetail = undefined;
         assistant.content += `\n[Error] ${chunk.message}`;
         updateMessageBubble(mount, assistantIndex, assistant);
         break;
@@ -2187,6 +2517,7 @@ async function streamAssistant(
     state.abort = undefined;
     state.activeAssistantIndex = undefined;
     state.activeAssistantStage = undefined;
+    state.activeAssistantDetail = undefined;
     void saveChatMessages(state.itemID, state.messages);
     state.scrollToBottom = state.autoFollowMessages;
     state.focusInput = true;
@@ -2243,7 +2574,7 @@ function contextAwareSystemPrompt(
   systemPrompt: string,
   contextLedger: string,
 ): string {
-  return `${systemPrompt}\n\n${ZOTERO_TOOL_MANUAL}\n\nThe ledger below records previous Zotero context that may no longer be visible; do not treat it as available source text.\n\nPreviously sent context ledger (not currently attached):\n${contextLedger}`;
+  return `${systemPrompt}\n\n${ZOTERO_TOOL_MANUAL}\n\nThe ledger below records previous context metadata that may no longer be visible. Use it as a planning map for tool choice, including source identity, ranges, and whether prior snippets can be reloaded with chat_get_previous_context. Do not treat the ledger itself as source text. The model decides whether to answer from current conversation, reload prior chat context, call targeted tools, or fetch fresh text.\n\nPreviously sent context ledger (not currently attached):\n${contextLedger}`;
 }
 
 // Tool-trace upsert. Each chunk that comes from the provider stream is
@@ -2286,13 +2617,47 @@ function recordToolCall(
       }
     }
   }
+  if (!replaced && chunk.status === "started") {
+    for (let index = nextTools.length - 1; index >= 0; index--) {
+      const tool = nextTools[index];
+      if (tool.name === chunk.name && tool.status === "started") {
+        nextTools[index] = trace;
+        replaced = true;
+        break;
+      }
+    }
+  }
   if (!replaced) nextTools.push(trace);
 
   message.context = {
-    ...message.context,
-    ...chunk.context,
+    ...mergeToolContext(message.context, chunk.context),
     toolCalls: nextTools,
   };
+}
+
+function mergeToolContext(
+  previous: Message["context"],
+  next: Message["context"],
+): Message["context"] {
+  if (!next) return previous;
+  const merged = {
+    ...previous,
+    ...next,
+  };
+  if (previous?.retrievedPassages?.length || next.retrievedPassages?.length) {
+    const passages = [
+      ...(previous?.retrievedPassages ?? []),
+      ...(next.retrievedPassages ?? []),
+    ];
+    const seen = new Set<string>();
+    merged.retrievedPassages = passages.filter((passage) => {
+      const key = `${passage.start}:${passage.end}:${passage.text}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+  return merged;
 }
 
 // Retry the last assistant turn. INVARIANT: we REUSE the existing user
@@ -4170,8 +4535,9 @@ function assistantProgressFor(
     state.messages[findPreviousUserIndex(state.messages, index)];
   const latestTool = latestToolTrace(sourceUser);
   if (latestTool?.status === "started") {
+    const localZoteroTool = latestTool.name.startsWith("zotero_");
     return {
-      label: "正在调用 Zotero 工具",
+      label: localZoteroTool ? "正在调用 Zotero 工具" : "正在使用联网工具",
       detail: latestTool.summary || latestTool.name,
     };
   }
@@ -4192,7 +4558,10 @@ function assistantProgressFor(
     case "waiting_model":
       return {
         label: hasThinking ? "模型仍在思考" : "等待模型响应",
-        detail: latestTool?.summary || "请求已发送，等待首个流式事件",
+        detail:
+          state.activeAssistantDetail ||
+          latestTool?.summary ||
+          "请求已发送，等待首个流式事件",
       };
     case "thinking":
       return {
@@ -4780,6 +5149,30 @@ function withAgentPermissionMode(
       agentPermissionMode: mode,
     },
   };
+}
+
+function withReasoningEffort(
+  preset: ModelPreset,
+  effort: ReasoningEffort,
+): ModelPreset {
+  return {
+    ...preset,
+    extras: {
+      ...preset.extras,
+      reasoningEffort: effort,
+    },
+  };
+}
+
+function reasoningEffortLabel(effort: ReasoningEffort): string {
+  return (
+    REASONING_EFFORT_OPTIONS.find(([value]) => value === effort)?.[1] ?? effort
+  );
+}
+
+function reasoningEffortShortLabel(effort: ReasoningEffort): string {
+  const label = reasoningEffortLabel(effort);
+  return label.split(" - ")[0] || label;
 }
 
 function persist(state: PanelState) {

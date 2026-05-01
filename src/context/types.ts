@@ -1,7 +1,8 @@
 // MessageContext schema for context-card display + ledger formatting.
 // Each `planMode` value below maps to one tool/UI path:
 //   none / metadata_only / annotations / search_pdf / pdf_range /
-//   selected_text / full_pdf / reader_pdf_text / annotation_write.
+//   selected_text / full_pdf / remote_paper / reader_pdf_text /
+//   annotation_write / previous_context.
 // INVARIANT: this is descriptive metadata captured AFTER the model picks
 // a tool — not a planner schema. The model's choice is the planner.
 export type ContextMode =
@@ -12,11 +13,14 @@ export type ContextMode =
   | "pdf_range"
   | "selected_text"
   | "full_pdf"
+  | "remote_paper"
   | "reader_pdf_text"
-  | "annotation_write";
+  | "annotation_write"
+  | "previous_context";
 
 export type ContextPlanSource = "selected" | "model" | "fallback";
 export type ContextSelectionSource = "model" | "fallback";
+export type ContextSourceKind = "zotero_item" | "arxiv";
 
 export interface ToolTrace {
   name: string;
@@ -41,6 +45,10 @@ export interface ItemAnnotation {
 }
 
 export interface MessageContext {
+  sourceKind?: ContextSourceKind;
+  sourceID?: string;
+  sourceTitle?: string;
+  sourceUrl?: string;
   selectedText?: string;
   explainSelection?: boolean;
   planMode?: ContextMode;

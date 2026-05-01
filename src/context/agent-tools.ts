@@ -1,9 +1,11 @@
-import type { AgentTool, ToolExecutionResult } from "../providers/types";
+import type { AgentTool, Message, ToolExecutionResult } from "../providers/types";
 import type { ContextSource, ItemMetadata } from "./builder";
 import { formatAnnotations, formatRetrievedPassages } from "./message-format";
+import { createPaperTools } from "./paper-tools";
 import { createPdfLocator, type PdfLocator } from "./pdf-locator";
 import { DEFAULT_CONTEXT_POLICY, type ContextPolicy } from "./policy";
 import { extractPdfRange, searchPdfPassages } from "./retrieval";
+import type { MessageContext } from "./types";
 
 // Codex-style local harness for Zotero. Each tool is a structured function
 // the model can call; the harness validates args, enforces policy budgets,
@@ -26,6 +28,7 @@ export interface ToolFactoryOptions {
   // manual/tools and decides what to call.
   fullTextHighlight?: boolean;
   getActiveReader?: () => unknown | null;
+  previousMessages?: Message[];
 }
 
 export interface ZoteroAgentToolSession {
@@ -69,7 +72,10 @@ export function createZoteroAgentToolSession(
         return {
           output: formatMetadata(metadata),
           summary: "读取当前条目题录",
-          context: { planMode: "metadata_only" },
+          context: {
+            planMode: "metadata_only",
+            ...zoteroSourceFromMetadata(itemID, metadata),
+          },
         };
       },
     },
@@ -84,20 +90,26 @@ export function createZoteroAgentToolSession(
           return errorResult("No Zotero item is currently selected.");
         const annotations =
           (await options.source.getAnnotations?.(itemID)) ?? [];
+        const sourceContext = await zoteroSourceContext(options, itemID);
         const limited = annotations.slice(0, policy.maxAnnotations);
         return {
           output: limited.length
             ? `[Zotero annotations]\n${formatAnnotations(limited)}`
             : "No Zotero PDF annotations were found for the current item.",
           summary: `读取 Zotero 标注 ${limited.length} 条`,
-          context: { planMode: "annotations", annotations: limited },
+          context: {
+            planMode: "annotations",
+            ...sourceContext,
+            annotations: limited,
+          },
         };
       },
     },
+    createPreviousContextTool(options, policy),
     {
       name: "zotero_search_pdf",
       description:
-        "Search the current PDF full-text cache using a query written by the model. Use this for targeted evidence, follow-up questions, definitions, figures, experiments, equations, claims, or local passages. The harness returns bounded passages with character ranges. For passages that will be written back as PDF highlights, use zotero_get_reader_pdf_text instead so the copied text matches the Reader text layer.",
+        "Search the current PDF full-text cache using a query written by the model. Use this for targeted evidence, follow-up questions, definitions, figures, experiments, equations, claims, section/chapter headings, or local passages. The harness returns bounded passages with character ranges so the model can decide whether to expand only a relevant section with zotero_read_pdf_range instead of reading the whole PDF. For passages that will be written back as PDF highlights, use zotero_get_reader_pdf_text instead so the copied text matches the Reader text layer.",
       parameters: objectSchema(
         {
           query: stringSchema("Search query for the current PDF full text."),
@@ -115,7 +127,10 @@ export function createZoteroAgentToolSession(
         const query = stringArg(parsed, "query");
         if (!query)
           return errorResult("zotero_search_pdf requires a non-empty query.");
-        const pdfText = await getToolPdfText(options, itemID);
+        const [pdfText, sourceContext] = await Promise.all([
+          getToolPdfText(options, itemID),
+          zoteroSourceContext(options, itemID),
+        ]);
         if (!pdfText) return errorResult(readablePdfTextError());
         const topK = numberArg(parsed, "topK") ?? policy.searchCandidateCount;
         const passages = searchPdfPassages(pdfText, query, topK, policy);
@@ -126,6 +141,7 @@ export function createZoteroAgentToolSession(
           summary: `检索 PDF: ${query}，返回 ${passages.length} 段`,
           context: {
             planMode: "search_pdf",
+            ...sourceContext,
             query,
             candidatePassageCount: passages.length,
             selectedPassageNumbers: passages.map((_, index) => index + 1),
@@ -138,7 +154,7 @@ export function createZoteroAgentToolSession(
     {
       name: "zotero_read_pdf_range",
       description:
-        "Read an exact character range from the current PDF full-text cache. Use only when a previous cache-based tool result or ledger gives useful start/end ranges. The harness validates and caps the range. For passages that will be written back as PDF highlights, use zotero_get_reader_pdf_text instead.",
+        "Read an exact character range from the current PDF full-text cache. Use only when a previous cache-based tool result or ledger gives useful start/end ranges, including section/chapter ranges chosen by the model. The harness validates and caps the range. For passages that will be written back as PDF highlights, use zotero_get_reader_pdf_text instead.",
       parameters: objectSchema(
         {
           start: numberSchema(
@@ -162,7 +178,10 @@ export function createZoteroAgentToolSession(
             "zotero_read_pdf_range requires numeric start and end.",
           );
         }
-        const pdfText = await getToolPdfText(options, itemID);
+        const [pdfText, sourceContext] = await Promise.all([
+          getToolPdfText(options, itemID),
+          zoteroSourceContext(options, itemID),
+        ]);
         if (!pdfText) return errorResult(readablePdfTextError());
         const range = extractPdfRange(pdfText, start, end, policy);
         if (!range)
@@ -172,6 +191,7 @@ export function createZoteroAgentToolSession(
           summary: `读取 PDF 范围 ${range.start}-${range.end}`,
           context: {
             planMode: "pdf_range",
+            ...sourceContext,
             rangeStart: range.start,
             rangeEnd: range.end,
             retrievedPassages: [range],
@@ -182,13 +202,16 @@ export function createZoteroAgentToolSession(
     {
       name: "zotero_get_full_pdf",
       description:
-        "Read the current PDF full-text cache for whole-paper synthesis. Use when the user asks to summarize, review, compare, or analyze the entire paper and smaller tools are insufficient. Do not copy highlight text from this tool for zotero_annotate_passage; use zotero_get_reader_pdf_text for PDF write workflows. The harness applies a full-PDF budget cap.",
+        "Read the current PDF full-text cache for whole-paper synthesis. Use when the model decides the entire current Zotero paper is needed and smaller tools are insufficient. Prior full-PDF sends appear in the context ledger as source/range metadata so the model can choose between current history, targeted ranges, fresh full text, or asking the user for a resend. Do not copy highlight text from this tool for zotero_annotate_passage; use zotero_get_reader_pdf_text for PDF write workflows. The harness applies a full-PDF budget cap.",
       parameters: objectSchema({}),
       execute: async () => {
         const itemID = currentItemID(options);
         if (itemID == null)
           return errorResult("No Zotero item is currently selected.");
-        const pdfText = await getToolPdfText(options, itemID);
+        const [pdfText, sourceContext] = await Promise.all([
+          getToolPdfText(options, itemID),
+          zoteroSourceContext(options, itemID),
+        ]);
         if (!pdfText) return errorResult(readablePdfTextError());
         const text = truncateByTokenBudget(pdfText, policy.fullPdfTokenBudget);
         const truncated = text.length < pdfText.length;
@@ -204,6 +227,7 @@ export function createZoteroAgentToolSession(
           summary: `读取 PDF 全文 ${text.length}/${pdfText.length} 字`,
           context: {
             planMode: "full_pdf",
+            ...sourceContext,
             fullTextChars: text.length,
             fullTextTotalChars: pdfText.length,
             fullTextTruncated: truncated,
@@ -213,6 +237,7 @@ export function createZoteroAgentToolSession(
         };
       },
     },
+    ...createPaperTools(policy),
     createGetReaderPdfTextTool(policy, highlightSession),
     {
       name: "zotero_add_annotation_to_selection",
@@ -558,8 +583,215 @@ function numberSchema(description: string): { [key: string]: unknown } {
   return { type: "number", description };
 }
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
 function currentItemID(options: ToolFactoryOptions): number | null {
   return options.itemID;
+}
+
+interface PreviousContextCandidate {
+  turn: number;
+  sourceKind?: string;
+  sourceID?: string;
+  sourceTitle?: string;
+  sourceUrl?: string;
+  passage: {
+    text: string;
+    score: number;
+    start: number;
+    end: number;
+  };
+}
+
+function createPreviousContextTool(
+  options: ToolFactoryOptions,
+  policy: ContextPolicy,
+): AgentTool {
+  return {
+    name: "chat_get_previous_context",
+    description:
+      "Read snippets that were already attached earlier in this chat history. Use when the context ledger shows useful prior source/range metadata and the model wants to reuse prior context instead of querying Zotero/arXiv again. This tool only returns locally retained prior snippets; it does not read the live PDF, fetch URLs, or infer which snippet is needed.",
+    parameters: objectSchema({
+      sourceKind: stringSchema(
+        "Optional source kind from the ledger, for example zotero_item or arxiv.",
+      ),
+      sourceID: stringSchema(
+        "Optional source ID from the ledger, for example a Zotero item ID or arXiv ID.",
+      ),
+      start: numberSchema(
+        "Optional start offset; when provided with end, only overlapping prior PDF ranges are returned.",
+      ),
+      end: numberSchema(
+        "Optional end offset; when provided with start, only overlapping prior PDF ranges are returned.",
+      ),
+      query: stringSchema(
+        "Optional literal text filter for prior snippets. Leave empty to rely on source/range filters.",
+      ),
+      maxChars: numberSchema(
+        "Optional character budget for returned prior snippets. The harness clamps this to a safe limit.",
+      ),
+    }),
+    execute: async (args) => {
+      const parsed = objectArgs(args);
+      const sourceKind = stringArg(parsed, "sourceKind");
+      const sourceID = stringArg(parsed, "sourceID");
+      const start = numberArg(parsed, "start");
+      const end = numberArg(parsed, "end");
+      const query = stringArg(parsed, "query")?.toLowerCase();
+      const maxChars = clamp(
+        Math.floor(numberArg(parsed, "maxChars") ?? policy.retainedContextCharBudget),
+        1000,
+        policy.retainedContextCharBudget * 4,
+      );
+      if ((start == null) !== (end == null)) {
+        return errorResult(
+          "chat_get_previous_context requires both start and end when filtering by range.",
+        );
+      }
+      const candidates = previousContextCandidates(options.previousMessages ?? []);
+      const matches = candidates.filter((candidate) => {
+        if (sourceKind && candidate.sourceKind !== sourceKind) return false;
+        if (sourceID && candidate.sourceID !== sourceID) return false;
+        if (
+          start != null &&
+          end != null &&
+          (candidate.passage.end <= start || candidate.passage.start >= end)
+        ) {
+          return false;
+        }
+        if (query && !candidate.passage.text.toLowerCase().includes(query)) {
+          return false;
+        }
+        return true;
+      });
+      const selected = takePreviousContextWithinBudget(matches, maxChars);
+      if (!selected.length) {
+        return {
+          output:
+            "No prior retained context matched those filters. The model can choose another tool or answer from conversation history.",
+          summary: "未找到可复用历史上下文",
+          context: { planMode: "previous_context" },
+        };
+      }
+      const passages = selected.map((candidate) => candidate.passage);
+      const chars = passages.reduce((sum, passage) => sum + passage.text.length, 0);
+      const source = selected[0];
+      return {
+        output: [
+          "[Previous chat context]",
+          ...selected.map((candidate, index) =>
+            [
+              `#${index + 1} turn ${candidate.turn}`,
+              candidate.sourceKind ? `Source kind: ${candidate.sourceKind}` : "",
+              candidate.sourceID ? `Source ID: ${candidate.sourceID}` : "",
+              candidate.sourceTitle ? `Source title: ${candidate.sourceTitle}` : "",
+              candidate.sourceUrl ? `Source URL: ${candidate.sourceUrl}` : "",
+              `Range: ${candidate.passage.start}-${candidate.passage.end}`,
+              "",
+              candidate.passage.text,
+            ]
+              .filter((line) => line !== "")
+              .join("\n"),
+          ),
+        ].join("\n\n"),
+        summary: `复用历史上下文 ${selected.length} 段 / ${chars} 字`,
+        context: {
+          planMode: "previous_context",
+          sourceKind:
+            source.sourceKind === "zotero_item" || source.sourceKind === "arxiv"
+              ? source.sourceKind
+              : undefined,
+          sourceID: source.sourceID,
+          sourceTitle: source.sourceTitle,
+          sourceUrl: source.sourceUrl,
+          retrievedPassages: passages,
+        },
+      };
+    },
+  };
+}
+
+function previousContextCandidates(messages: Message[]): PreviousContextCandidate[] {
+  const candidates: PreviousContextCandidate[] = [];
+  const seen = new Set<string>();
+  messages.forEach((message, index) => {
+    if (message.role !== "user" || !message.context?.retrievedPassages?.length) {
+      return;
+    }
+    for (const passage of message.context.retrievedPassages) {
+      const key = [
+        message.context.sourceKind ?? "",
+        message.context.sourceID ?? "",
+        passage.start,
+        passage.end,
+        passage.text,
+      ].join("\u0000");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push({
+        turn: index + 1,
+        sourceKind: message.context.sourceKind,
+        sourceID: message.context.sourceID,
+        sourceTitle: message.context.sourceTitle,
+        sourceUrl: message.context.sourceUrl,
+        passage,
+      });
+    }
+  });
+  return candidates;
+}
+
+function takePreviousContextWithinBudget(
+  candidates: PreviousContextCandidate[],
+  maxChars: number,
+): PreviousContextCandidate[] {
+  const selected: PreviousContextCandidate[] = [];
+  let remaining = maxChars;
+  for (const candidate of candidates) {
+    if (remaining <= 0) break;
+    if (candidate.passage.text.length <= remaining) {
+      selected.push(candidate);
+      remaining -= candidate.passage.text.length;
+      continue;
+    }
+    if (!selected.length) {
+      selected.push({
+        ...candidate,
+        passage: {
+          ...candidate.passage,
+          text: candidate.passage.text.slice(0, remaining),
+          end: candidate.passage.start + remaining,
+        },
+      });
+    }
+    break;
+  }
+  return selected;
+}
+
+async function zoteroSourceContext(
+  options: ToolFactoryOptions,
+  itemID: number,
+): Promise<Pick<MessageContext, "sourceKind" | "sourceID" | "sourceTitle">> {
+  try {
+    const metadata = await options.source.getItem(itemID);
+    return zoteroSourceFromMetadata(itemID, metadata ?? undefined);
+  } catch {
+    return zoteroSourceFromMetadata(itemID);
+  }
+}
+
+function zoteroSourceFromMetadata(
+  itemID: number,
+  metadata?: ItemMetadata | null,
+): Pick<MessageContext, "sourceKind" | "sourceID" | "sourceTitle"> {
+  return {
+    sourceKind: "zotero_item",
+    sourceID: String(itemID),
+    ...(metadata?.title ? { sourceTitle: metadata.title } : {}),
+  };
 }
 
 function errorResult(output: string): ToolExecutionResult {

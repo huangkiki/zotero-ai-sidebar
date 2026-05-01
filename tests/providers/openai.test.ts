@@ -1,9 +1,15 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { OpenAIProvider, toOpenAIInput } from '../../src/providers/openai';
+import {
+  OpenAIProvider,
+  openAIHostedToolSpecs,
+  toOpenAIInput,
+} from '../../src/providers/openai';
 import type { ModelPreset } from '../../src/settings/types';
 import type { StreamChunk } from '../../src/providers/types';
 
-const requestLog = vi.hoisted(() => ({ requests: [] as Array<{ input?: unknown; tools?: unknown[] }> }));
+const requestLog = vi.hoisted(() => ({
+  requests: [] as Array<{ input?: unknown; tools?: unknown[] }>,
+}));
 
 vi.mock('openai', () => {
   const fakeStream = async function* () {
@@ -23,8 +29,51 @@ vi.mock('openai', () => {
   class FakeOpenAI {
     toolCallCount = 0;
     responses = {
-      create: async (params: { stream?: boolean; tools?: unknown[]; input?: unknown }) => {
+      create: async (params: {
+        stream?: boolean;
+        tools?: unknown[];
+        input?: unknown;
+      }) => {
         requestLog.requests.push(params);
+        const hasFunctionTool = params.tools?.some(
+          (tool) =>
+            typeof tool === 'object' &&
+            tool != null &&
+            (tool as { type?: unknown }).type === 'function',
+        );
+        if (params.tools?.length && !hasFunctionTool) {
+          return (async function* () {
+            yield {
+              type: 'response.web_search_call.in_progress',
+              item_id: 'ws_1',
+            };
+            yield {
+              type: 'response.web_search_call.searching',
+              item_id: 'ws_1',
+            };
+            yield {
+              type: 'response.web_search_call.completed',
+              item_id: 'ws_1',
+            };
+            yield {
+              type: 'response.output_item.done',
+              item: {
+                type: 'mcp_list_tools',
+                id: 'mcp_list_1',
+                server_label: 'arxiv',
+                tools: [{ name: 'search' }],
+              },
+            };
+            yield {
+              type: 'response.output_text.delta',
+              delta: 'Web result',
+            };
+            yield {
+              type: 'response.completed',
+              response: { usage: { input_tokens: 11, output_tokens: 3 } },
+            };
+          })();
+        }
         if (params.tools?.length) {
           this.toolCallCount++;
           return this.toolCallCount === 1
@@ -58,7 +107,9 @@ vi.mock('openai', () => {
                   item: {
                     type: 'message',
                     role: 'assistant',
-                    content: [{ type: 'output_text', text: 'Summary from tool output' }],
+                    content: [
+                      { type: 'output_text', text: 'Summary from tool output' },
+                    ],
                   },
                 };
                 yield {
@@ -205,29 +256,149 @@ describe('OpenAIProvider', () => {
     });
   });
 
-  it('converts screenshot attachments into Responses image inputs', () => {
-    expect(toOpenAIInput([
+  it('passes hosted web and MCP tools to OpenAI without local execution', async () => {
+    const p = new OpenAIProvider();
+    const got: StreamChunk[] = [];
+
+    for await (const c of p.stream(
+      [{ role: 'user', content: '查一下这篇 arXiv 后续工作' }],
+      'be helpful',
+      preset,
+      new AbortController().signal,
       {
-        role: 'user',
-        content: '分析这张图',
-        images: [
+        toolSettings: {
+          webSearchMode: 'live',
+          mcpServers: [],
+          arxivMcp: {
+            enabled: true,
+            serverLabel: 'arxiv',
+            serverUrl: 'https://example.test/mcp',
+            allowedTools: ['search'],
+            requireApproval: 'never',
+          },
+        },
+      },
+    )) {
+      got.push(c);
+    }
+
+    expect(requestLog.requests[0].tools).toEqual([
+      { type: 'web_search', search_context_size: 'high' },
+      {
+        type: 'mcp',
+        server_label: 'arxiv',
+        server_url: 'https://example.test/mcp',
+        allowed_tools: ['search'],
+        require_approval: 'never',
+        server_description:
+          'Configurable arXiv MCP search server. Let the model decide when to search or fetch paper metadata.',
+      },
+    ]);
+    expect(got).toEqual([
+      {
+        type: 'tool_call',
+        name: 'web_search',
+        status: 'started',
+        summary: '正在使用内置联网搜索',
+      },
+      {
+        type: 'tool_call',
+        name: 'web_search',
+        status: 'completed',
+        summary: '内置联网搜索完成',
+      },
+      {
+        type: 'tool_call',
+        name: 'mcp:arxiv/list_tools',
+        status: 'completed',
+        summary: 'MCP 工具列表已获取: 1 个工具',
+      },
+      { type: 'text_delta', text: 'Web result' },
+      { type: 'usage', input: 11, output: 3, cacheRead: 0 },
+    ]);
+  });
+
+  it('builds hosted tool specs from tool settings', () => {
+    expect(openAIHostedToolSpecs(undefined)).toEqual([]);
+    expect(
+      openAIHostedToolSpecs({
+        webSearchMode: 'cached',
+        mcpServers: [],
+        arxivMcp: {
+          enabled: false,
+          serverLabel: 'arxiv',
+          serverUrl: '',
+          allowedTools: ['search'],
+          requireApproval: 'never',
+        },
+      }),
+    ).toEqual([{ type: 'web_search', search_context_size: 'medium' }]);
+  });
+
+  it('builds hosted MCP specs from generic MCP settings', () => {
+    expect(
+      openAIHostedToolSpecs({
+        webSearchMode: 'disabled',
+        mcpServers: [
           {
-            id: 'img-1',
-            marker: '[Image #1]',
-            name: 'shot.png',
-            mediaType: 'image/png',
-            dataUrl: 'data:image/png;base64,abc',
-            size: 3,
+            id: 'docs',
+            enabled: true,
+            serverLabel: 'docs',
+            serverUrl: 'https://docs.example/mcp',
+            allowedTools: ['search'],
+            requireApproval: 'never',
           },
         ],
+        arxivMcp: {
+          enabled: false,
+          serverLabel: 'arxiv',
+          serverUrl: '',
+          allowedTools: ['search'],
+          requireApproval: 'never',
+        },
+      }),
+    ).toEqual([
+      {
+        type: 'mcp',
+        server_label: 'docs',
+        server_url: 'https://docs.example/mcp',
+        allowed_tools: ['search'],
+        require_approval: 'never',
+        server_description:
+          'User-configured MCP server "docs". Let the model decide when to call its allowed tools.',
       },
-    ])).toEqual([
+    ]);
+  });
+
+  it('converts screenshot attachments into Responses image inputs', () => {
+    expect(
+      toOpenAIInput([
+        {
+          role: 'user',
+          content: '分析这张图',
+          images: [
+            {
+              id: 'img-1',
+              marker: '[Image #1]',
+              name: 'shot.png',
+              mediaType: 'image/png',
+              dataUrl: 'data:image/png;base64,abc',
+              size: 3,
+            },
+          ],
+        },
+      ]),
+    ).toEqual([
       {
         role: 'user',
         content: [
           { type: 'input_text', text: '分析这张图' },
           { type: 'input_text', text: '<image name=[Image #1]>' },
-          { type: 'input_image', image_url: 'data:image/png;base64,abc', detail: 'high' },
+          {
+            type: 'input_image',
+            image_url: 'data:image/png;base64,abc',
+            detail: 'high',
+          },
           { type: 'input_text', text: '</image>' },
         ],
       },

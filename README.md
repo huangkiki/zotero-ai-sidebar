@@ -118,6 +118,7 @@ The UI direction follows Claudian-style readability:
 - copyable assistant output
 
 See `CLAUDE.md` for project-specific modification guidance.
+See `docs/TOOLS_AND_MCP.md` for when to use local tools, Web Search, or MCP.
 
 ## License
 

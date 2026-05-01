@@ -5,25 +5,100 @@
   onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window })"
 >
   <label><html:h2 data-l10n-id="pref-title"></html:h2></label>
-  <checkbox
-    id="zotero-prefpane-__addonRef__-enable"
-    preference="enable"
-    data-l10n-id="pref-enable"
-  />
-  <hbox>
-    <html:label
-      for="zotero-prefpane-__addonRef__-input"
-      data-l10n-id="pref-input"
-    ></html:label>
-    <html:input
-      type="text"
-      id="zotero-prefpane-__addonRef__-input"
-      preference="input"
-    ></html:input>
-  </hbox>
-  <hbox class="virtualized-table-container" flex="1" height="300px">
-    <html:div id="__addonRef__-table-container" />
-  </hbox>
+  <html:div id="zotero-ai-sidebar-tool-settings">
+    <html:style>
+      #zotero-ai-sidebar-tool-settings { max-width: 860px; }
+      #zotero-ai-sidebar-tool-settings .zai-pref-card { border: 1px solid rgba(80, 70, 55, 0.18); border-radius: 10px; margin: 10px 0; padding: 12px; background: rgba(255,255,255,0.44); }
+      #zotero-ai-sidebar-tool-settings .zai-pref-title { font-weight: 700; margin-bottom: 4px; }
+      #zotero-ai-sidebar-tool-settings .zai-pref-help { opacity: 0.78; margin: 0 0 10px; }
+      #zotero-ai-sidebar-tool-settings .zai-pref-grid { display: grid; grid-template-columns: 140px minmax(260px, 1fr); gap: 8px 12px; align-items: center; }
+      #zotero-ai-sidebar-tool-settings input[type="text"], #zotero-ai-sidebar-tool-settings input[type="password"], #zotero-ai-sidebar-tool-settings input[type="number"], #zotero-ai-sidebar-tool-settings select, #zotero-ai-sidebar-tool-settings textarea { box-sizing: border-box; width: 100%; }
+      #zotero-ai-sidebar-tool-settings textarea { min-height: 84px; resize: vertical; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      #zotero-ai-sidebar-tool-settings .zai-pref-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+      #zotero-ai-sidebar-tool-settings .zai-pref-status { flex: 1 0 100%; min-height: 20px; opacity: 0.9; padding: 6px 8px; border-radius: 7px; background: rgba(63, 132, 88, 0.10); color: #2f7046; }
+      #zotero-ai-sidebar-tool-settings .zai-pref-status:empty { display: none; }
+      #zotero-ai-sidebar-tool-settings .zai-list { display: grid; gap: 10px; }
+      #zotero-ai-sidebar-tool-settings .zai-subcard { border: 1px solid rgba(80, 70, 55, 0.14); border-radius: 8px; padding: 10px; background: rgba(255,255,255,0.6); }
+      #zotero-ai-sidebar-tool-settings details.zai-subcard:not([open]) { padding: 0; }
+      #zotero-ai-sidebar-tool-settings .zai-subcard-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; font-weight: 700; }
+      #zotero-ai-sidebar-tool-settings details.zai-subcard:not([open]) .zai-subcard-title { margin-bottom: 0; padding: 10px; }
+      #zotero-ai-sidebar-tool-settings .zai-preset-summary { cursor: pointer; list-style: none; }
+      #zotero-ai-sidebar-tool-settings .zai-preset-summary::-webkit-details-marker { display: none; }
+      #zotero-ai-sidebar-tool-settings .zai-preset-summary::before { content: "▸"; flex: 0 0 auto; color: #777; }
+      #zotero-ai-sidebar-tool-settings details[open] > .zai-preset-summary::before { content: "▾"; }
+      #zotero-ai-sidebar-tool-settings .zai-preset-summary-main { display: grid; gap: 2px; min-width: 0; flex: 1; }
+      #zotero-ai-sidebar-tool-settings .zai-preset-summary-meta { overflow: hidden; color: #666; font-size: 12px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+      #zotero-ai-sidebar-tool-settings .zai-model-control { display: grid; grid-template-columns: minmax(240px, 1fr) 220px; gap: 10px; align-items: start; }
+      #zotero-ai-sidebar-tool-settings .zai-model-selected { display: flex; flex-wrap: wrap; gap: 6px; min-height: 36px; padding: 6px; border: 1px solid rgba(80, 70, 55, 0.18); border-radius: 7px; background: rgba(255,255,255,0.65); }
+      #zotero-ai-sidebar-tool-settings .zai-model-chip { display: inline-flex; align-items: center; max-width: 100%; border: 1px solid rgba(80, 70, 55, 0.18); border-radius: 999px; background: rgba(246,246,246,0.95); overflow: hidden; }
+      #zotero-ai-sidebar-tool-settings .zai-model-chip-input { width: 13ch; min-width: 9ch; padding: 4px 3px 4px 9px; border: 0; background: transparent; font: 12px/18px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      #zotero-ai-sidebar-tool-settings .zai-model-chip-remove { border: 0; border-left: 1px solid rgba(80, 70, 55, 0.12); border-radius: 0; padding: 3px 7px; background: transparent; }
+      #zotero-ai-sidebar-tool-settings .zai-model-side { display: grid; gap: 6px; }
+      #zotero-ai-sidebar-tool-settings .zai-model-side-title { color: #666; font-size: 12px; font-weight: 700; }
+      #zotero-ai-sidebar-tool-settings .zai-model-suggestions { display: flex; flex-wrap: wrap; gap: 5px; }
+      #zotero-ai-sidebar-tool-settings .zai-model-suggestions button { padding: 3px 7px; font-size: 12px; }
+      #zotero-ai-sidebar-tool-settings .zai-model-custom-row { display: flex; gap: 6px; }
+      #zotero-ai-sidebar-tool-settings .zai-model-custom-row input { min-width: 0; }
+      #zotero-ai-sidebar-tool-settings .zai-model-custom-row button { flex: 0 0 auto; }
+      #zotero-ai-sidebar-tool-settings .zai-model-hidden { display: none; }
+      @media (max-width: 760px) { #zotero-ai-sidebar-tool-settings .zai-model-control { grid-template-columns: 1fr; } }
+      #zotero-ai-sidebar-tool-settings .zai-inline { display: flex; align-items: center; gap: 8px; }
+      #zotero-ai-sidebar-tool-settings .zai-prompt-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0 4px; font-weight: 700; }
+      #zotero-ai-sidebar-tool-settings .zai-danger { background: rgba(170, 51, 51, 0.10); color: #a33; }
+    </html:style>
+
+    <html:div class="zai-pref-card">
+      <html:div class="zai-pref-title">账号与模型</html:div>
+      <html:p class="zai-pref-help">
+        在 Zotero 设置里统一管理 Provider、API Key、Base URL、模型列表和推理参数。保存后侧边栏立即刷新。
+      </html:p>
+      <html:div id="zai-preset-list" class="zai-list"></html:div>
+      <html:div class="zai-pref-actions">
+        <html:button id="zai-preset-add-openai" type="button">+ OpenAI</html:button>
+        <html:button id="zai-preset-add-anthropic" type="button">+ Anthropic</html:button>
+        <html:button id="zai-preset-save" type="button">保存账号配置</html:button>
+        <html:span id="zai-preset-status" class="zai-pref-status"></html:span>
+      </html:div>
+    </html:div>
+
+    <html:div class="zai-pref-card">
+      <html:div class="zai-pref-title">快捷提示词按钮</html:div>
+      <html:p class="zai-pref-help">
+        可编辑“总结论文 / 全文重点 / 解释选区”的提示词，也可以新增自定义按钮。按钮必须同时有名称和提示词。
+      </html:p>
+      <html:div id="zai-built-in-prompts"></html:div>
+      <html:div class="zai-pref-title" style="margin-top: 12px;">自定义按钮</html:div>
+      <html:div id="zai-custom-prompts" class="zai-list"></html:div>
+      <html:div class="zai-pref-actions">
+        <html:button id="zai-custom-prompt-add" type="button">+ 新增按钮</html:button>
+        <html:button id="zai-prompt-save" type="button">保存提示词</html:button>
+        <html:button id="zai-prompt-reset" type="button">Reset 默认提示词</html:button>
+        <html:span id="zai-prompt-status" class="zai-pref-status"></html:span>
+      </html:div>
+    </html:div>
+
+    <html:div class="zai-pref-card">
+      <html:div class="zai-pref-title">联网与 MCP</html:div>
+      <html:p class="zai-pref-help">
+        聊天区只做“联网”开关；Cached/Live 和 MCP 在这里配置。内置 arXiv 论文读取不是 MCP，不需要 Server URL。
+      </html:p>
+      <html:div class="zai-pref-grid">
+        <html:label for="zai-tool-web-search">Web search 模式</html:label>
+        <html:select id="zai-tool-web-search">
+          <html:option value="disabled">关闭</html:option>
+          <html:option value="cached">Cached - OpenAI 托管搜索</html:option>
+          <html:option value="live">Live - OpenAI 托管搜索，高上下文</html:option>
+        </html:select>
+      </html:div>
+      <html:div class="zai-pref-title" style="margin-top: 12px;">MCP Servers</html:div>
+      <html:div id="zai-mcp-list" class="zai-list"></html:div>
+      <html:div class="zai-pref-actions">
+        <html:button id="zai-mcp-add" type="button">+ MCP Server</html:button>
+        <html:button id="zai-tool-save" type="button">保存联网/MCP配置</html:button>
+        <html:span id="zai-tool-status" class="zai-pref-status"></html:span>
+      </html:div>
+    </html:div>
+  </html:div>
 </groupbox>
 <vbox>
   <html:label

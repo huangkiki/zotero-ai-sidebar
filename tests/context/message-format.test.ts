@@ -184,6 +184,9 @@ describe('formatContextLedger', () => {
         content: '总结',
         context: {
           planMode: 'full_pdf',
+          sourceKind: 'zotero_item',
+          sourceID: '1117',
+          sourceTitle: 'Rethinking Range View Representation for LiDAR Segmentation',
           fullTextChars: 12000,
           selectedText: 'secret selected text',
           annotations: [
@@ -202,11 +205,52 @@ describe('formatContextLedger', () => {
     const ledger = formatContextLedger(messages);
 
     expect(ledger).toContain('full_pdf_chars=12000');
+    expect(ledger).toContain('source_kind=zotero_item');
+    expect(ledger).toContain('source_id="1117"');
+    expect(ledger).toContain(
+      'source_title="Rethinking Range View Representation for LiDAR Segmentation"',
+    );
     expect(ledger).toContain('selected_text_chars=20');
     expect(ledger).toContain('annotations=1');
     expect(ledger).toContain('pdf_ranges=10-30');
+    expect(ledger).toContain('previous_context_tool=chat_get_previous_context');
     expect(ledger).not.toContain('secret selected text');
     expect(ledger).not.toContain('secret annotation text');
     expect(ledger).not.toContain('secret passage text');
+  });
+
+  it('keeps tool summaries in the ledger so the model can see prior ranges', () => {
+    const messages: Message[] = [
+      {
+        role: 'user',
+        content: '总结第三章',
+        context: {
+          planMode: 'pdf_range',
+          rangeStart: 11800,
+          rangeEnd: 15000,
+          toolCalls: [
+            {
+              name: 'zotero_read_pdf_range',
+              status: 'completed',
+              summary: '读取 PDF 范围 11800-20800',
+            },
+            {
+              name: 'zotero_read_pdf_range',
+              status: 'completed',
+              summary: '读取 PDF 范围 20800-29800',
+            },
+          ],
+        },
+      },
+    ];
+
+    const ledger = formatContextLedger(messages);
+
+    expect(ledger).toContain(
+      'zotero_read_pdf_range:completed (读取 PDF 范围 11800-20800)',
+    );
+    expect(ledger).toContain(
+      'zotero_read_pdf_range:completed (读取 PDF 范围 20800-29800)',
+    );
   });
 });

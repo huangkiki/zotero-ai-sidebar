@@ -107,6 +107,9 @@ export function contextSummaryLine(message: Message): string {
       (sum, passage) => sum + passage.text.length,
       0,
     );
+    if (context.planMode === "previous_context") {
+      return `模型复用历史上下文 ${context.retrievedPassages.length} 段 / ${chars} 字`;
+    }
     if (context.planMode === "pdf_range") {
       return `模型请求 PDF 字符范围 ${context.retrievedPassages.length} 段 / ${chars} 字`;
     }
@@ -130,6 +133,9 @@ export function contextSummaryLine(message: Message): string {
         : " 字";
     if (context.planMode === "reader_pdf_text") {
       return `模型请求 Reader PDF 文本 ${context.fullTextChars}${suffix}`;
+    }
+    if (context.planMode === "remote_paper") {
+      return `模型请求远程 arXiv 论文文本 ${context.fullTextChars}${suffix}`;
     }
     return `已随本轮发送 PDF 全文 ${context.fullTextChars}${suffix}`;
   }
@@ -225,27 +231,38 @@ export function formatContextLedger(messages: Message[]): string {
       `turn ${index + 1}`,
       `mode=${context.planMode ?? "unknown"}`,
     ];
+    if (context.sourceKind) parts.push(`source_kind=${context.sourceKind}`);
+    if (context.sourceID) parts.push(`source_id=${JSON.stringify(context.sourceID)}`);
+    if (context.sourceTitle)
+      parts.push(`source_title=${JSON.stringify(context.sourceTitle)}`);
+    if (context.sourceUrl) parts.push(`source_url=${JSON.stringify(context.sourceUrl)}`);
     if (context.selectedText)
       parts.push(`selected_text_chars=${context.selectedText.length}`);
     if (context.fullTextChars) {
       parts.push(
         context.planMode === "reader_pdf_text"
           ? `reader_pdf_text_chars=${context.fullTextChars}`
-          : `full_pdf_chars=${context.fullTextChars}`,
+          : context.planMode === "remote_paper"
+            ? `remote_paper_chars=${context.fullTextChars}`
+            : `full_pdf_chars=${context.fullTextChars}`,
       );
     }
     if (context.fullTextTotalChars) {
       parts.push(
         context.planMode === "reader_pdf_text"
           ? `reader_pdf_text_total_chars=${context.fullTextTotalChars}`
-          : `full_pdf_total_chars=${context.fullTextTotalChars}`,
+          : context.planMode === "remote_paper"
+            ? `remote_paper_total_chars=${context.fullTextTotalChars}`
+            : `full_pdf_total_chars=${context.fullTextTotalChars}`,
       );
     }
     if (context.fullTextTruncated) {
       parts.push(
         context.planMode === "reader_pdf_text"
           ? "reader_pdf_text_truncated=true"
-          : "full_pdf_truncated=true",
+          : context.planMode === "remote_paper"
+            ? "remote_paper_truncated=true"
+            : "full_pdf_truncated=true",
       );
     }
     if (context.retrievedPassages?.length) {
@@ -259,6 +276,7 @@ export function formatContextLedger(messages: Message[]): string {
       parts.push(`pdf_passages=${context.retrievedPassages.length}`);
       parts.push(`pdf_passage_chars=${chars}`);
       parts.push(`pdf_ranges=${ranges}`);
+      parts.push("previous_context_tool=chat_get_previous_context");
     }
     if (context.candidatePassageCount) {
       parts.push(`candidate_passages=${context.candidatePassageCount}`);
@@ -282,9 +300,7 @@ export function formatContextLedger(messages: Message[]): string {
       parts.push(`retained_context_chars=${context.retainedContextChars ?? 0}`);
     }
     if (context.toolCalls?.length) {
-      parts.push(
-        `tool_calls=${context.toolCalls.map((tool) => `${tool.name}:${tool.status}`).join(",")}`,
-      );
+      parts.push(`tool_calls=${formatToolTraceInline(context.toolCalls)}`);
     }
     lines.push(`- ${parts.join("; ")}`);
   });

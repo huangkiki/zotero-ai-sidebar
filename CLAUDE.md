@@ -89,6 +89,7 @@ Use these files as the first reference points before changing behavior:
 - PDF retrieval/ranges: `src/context/retrieval.ts`; tests in `tests/context/retrieval.test.ts`.
 - Prompt assembly, context ledger, exports: `src/context/message-format.ts`; tests in `tests/context/message-format.test.ts`.
 - Harness design contract: `docs/HARNESS_ENGINEERING.md`.
+- Tool/Web Search/MCP decision guide: `docs/TOOLS_AND_MCP.md`.
 - Release flow: `scripts/release-xpi.sh`, `scripts/release-tag.sh`, `.github/workflows/release.yml`, `docs/RELEASE.md`, `zotero-plugin.config.ts`.
 
 ## External Reference Map

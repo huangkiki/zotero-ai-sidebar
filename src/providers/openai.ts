@@ -12,7 +12,11 @@ import type {
   ReasoningEffort,
   ReasoningSummary,
 } from '../settings/types';
+import type { ToolSettings } from '../settings/tool-settings';
 import { DEFAULT_CONTEXT_POLICY } from '../context/policy';
+
+const OPENAI_REQUEST_TIMEOUT_MS = 120_000;
+const OPENAI_FIRST_EVENT_TIMEOUT_MS = 60_000;
 
 // OpenAI Responses-API tool loop. Three load-bearing decisions, all aligned
 // with OpenAI Codex's harness model:
@@ -42,6 +46,7 @@ interface ResponseUsage {
 type ResponseEvent = {
   type?: string;
   delta?: string;
+  item_id?: string;
   message?: string;
   item?: ResponseOutputItemLike;
   response?: {
@@ -53,7 +58,10 @@ type ResponseEvent = {
 type ResponseOutputItemLike =
   | ResponseFunctionCallLike
   | ResponseMessageLike
-  | ResponseReasoningLike;
+  | ResponseReasoningLike
+  | ResponseMcpCallLike
+  | ResponseMcpListToolsLike
+  | ResponseMcpApprovalRequestLike;
 
 export interface ResponseFunctionCallLike {
   type: 'function_call';
@@ -73,6 +81,30 @@ interface ResponseReasoningLike {
   summary?: Array<{ text?: string }>;
 }
 
+interface ResponseMcpCallLike {
+  type: 'mcp_call';
+  id: string;
+  server_label: string;
+  name: string;
+  status?: 'in_progress' | 'completed' | 'incomplete' | 'calling' | 'failed';
+  error?: string | null;
+}
+
+interface ResponseMcpListToolsLike {
+  type: 'mcp_list_tools';
+  id: string;
+  server_label: string;
+  tools?: Array<{ name?: string }>;
+  error?: string | null;
+}
+
+interface ResponseMcpApprovalRequestLike {
+  type: 'mcp_approval_request';
+  id: string;
+  server_label: string;
+  name: string;
+}
+
 interface FunctionCallOutputItem {
   type: 'function_call_output';
   call_id: string;
@@ -90,11 +122,21 @@ export class OpenAIProvider implements Provider {
     const client = new OpenAI({
       apiKey: preset.apiKey,
       ...(preset.baseUrl ? { baseURL: preset.baseUrl } : {}),
+      timeout: OPENAI_REQUEST_TIMEOUT_MS,
+      maxRetries: 0,
       dangerouslyAllowBrowser: true,
     });
 
-    if (options.tools?.length) {
-      yield* this.streamWithTools(client, messages, systemPrompt, preset, signal, options);
+    const hostedTools = openAIHostedToolSpecs(options.toolSettings);
+    if (options.tools?.length || hostedTools.length) {
+      yield* this.streamWithTools(
+        client,
+        messages,
+        systemPrompt,
+        preset,
+        signal,
+        options,
+      );
       return;
     }
 
@@ -118,7 +160,10 @@ export class OpenAIProvider implements Provider {
     }
 
     try {
-      for await (const event of stream) {
+      for await (const event of streamEventsWithFirstEventTimeout(
+        stream,
+        signal,
+      )) {
         const chunk = responseEventToChunk(event as ResponseEvent);
         if (chunk) yield chunk;
       }
@@ -136,6 +181,10 @@ export class OpenAIProvider implements Provider {
     options: ProviderStreamOptions,
   ): AsyncIterable<StreamChunk> {
     const tools = options.tools ?? [];
+    const openAITools = [
+      ...tools.map(openAIToolSpec),
+      ...openAIHostedToolSpecs(options.toolSettings),
+    ];
     const toolMap = new Map(tools.map((tool) => [tool.name, tool]));
     // `input` accumulates across iterations: original messages, then each
     // function_call we replay, then each function_call_output we synthesize
@@ -147,21 +196,21 @@ export class OpenAIProvider implements Provider {
     for (let iteration = 0; iteration <= maxIterations; iteration++) {
       let stream: AsyncIterable<unknown>;
       try {
-        stream = await client.responses.create(
+        stream = (await client.responses.create(
           {
             model: preset.model,
             instructions: systemPrompt,
             input,
             ...maxOutputTokensParam(preset),
             reasoning: reasoningOptions(preset),
-            tools: tools.map(openAIToolSpec),
+            tools: openAITools,
             tool_choice: 'auto',
             parallel_tool_calls: false,
             stream: true,
             store: false,
           } as never,
           { signal },
-        ) as unknown as AsyncIterable<unknown>;
+        )) as unknown as AsyncIterable<unknown>;
       } catch (err) {
         yield { type: 'error', message: errMsg(err) };
         return;
@@ -173,9 +222,24 @@ export class OpenAIProvider implements Provider {
       let failed = false;
 
       try {
-        for await (const event of stream) {
+        for await (const event of streamEventsWithFirstEventTimeout(
+          stream,
+          signal,
+        )) {
           const e = event as ResponseEvent;
           switch (e.type) {
+            case 'response.created':
+              yield {
+                type: 'status',
+                message: 'OpenAI 已接收请求，等待模型开始处理',
+              };
+              break;
+            case 'response.in_progress':
+              yield {
+                type: 'status',
+                message: hostedToolsStatus(options.toolSettings),
+              };
+              break;
             case 'response.output_text.delta':
               if (e.delta) yield { type: 'text_delta', text: e.delta };
               break;
@@ -187,7 +251,27 @@ export class OpenAIProvider implements Provider {
               if (e.item) {
                 output.push(e.item);
                 if (isFunctionCall(e.item)) calls.push(e.item);
+                const hostedChunk = hostedOutputItemToChunk(e.item);
+                if (hostedChunk) yield hostedChunk;
               }
+              break;
+            case 'response.web_search_call.in_progress':
+              yield {
+                type: 'tool_call',
+                name: 'web_search',
+                status: 'started',
+                summary: '正在使用内置联网搜索',
+              };
+              break;
+            case 'response.web_search_call.searching':
+              break;
+            case 'response.web_search_call.completed':
+              yield {
+                type: 'tool_call',
+                name: 'web_search',
+                status: 'completed',
+                summary: '内置联网搜索完成',
+              };
               break;
             case 'response.completed':
               usage = e.response?.usage;
@@ -200,7 +284,10 @@ export class OpenAIProvider implements Provider {
               failed = true;
               break;
             case 'error':
-              yield { type: 'error', message: e.message || 'OpenAI stream error' };
+              yield {
+                type: 'error',
+                message: e.message || 'OpenAI stream error',
+              };
               failed = true;
               break;
             default:
@@ -258,7 +345,8 @@ export class OpenAIProvider implements Provider {
     // so the user can see the loop bound was the limiter, not the model.
     yield {
       type: 'error',
-      message: 'Tool loop stopped because the model exceeded the local tool iteration limit.',
+      message:
+        'Tool loop stopped because the model exceeded the local tool iteration limit.',
     };
   }
 }
@@ -281,7 +369,10 @@ async function executeToolCall(
   permissionMode: 'default' | 'yolo',
 ): Promise<{ status: 'completed' | 'error'; result: ToolExecutionResult }> {
   if (signal.aborted) {
-    return { status: 'error', result: { output: 'Tool call aborted.', summary: '工具调用已停止' } };
+    return {
+      status: 'error',
+      result: { output: 'Tool call aborted.', summary: '工具调用已停止' },
+    };
   }
 
   const tool = toolMap.get(call.name);
@@ -346,6 +437,82 @@ function openAIToolSpec(tool: AgentTool): Record<string, unknown> {
   };
 }
 
+export function openAIHostedToolSpecs(
+  settings: ToolSettings | undefined,
+): Record<string, unknown>[] {
+  if (!settings) return [];
+  const specs: Record<string, unknown>[] = [];
+  if (settings.webSearchMode !== 'disabled') {
+    specs.push({
+      type: 'web_search',
+      search_context_size:
+        settings.webSearchMode === 'live' ? 'high' : 'medium',
+    });
+  }
+  for (const server of settings.mcpServers ?? []) {
+    if (!server.enabled || !server.serverUrl) continue;
+    specs.push({
+      type: 'mcp',
+      server_label: server.serverLabel,
+      server_url: server.serverUrl,
+      ...(server.allowedTools.length
+        ? { allowed_tools: server.allowedTools }
+        : {}),
+      require_approval: server.requireApproval,
+      server_description:
+        `User-configured MCP server "${server.serverLabel}". Let the model decide when to call its allowed tools.`,
+    });
+  }
+  const arxiv = settings.arxivMcp;
+  if (arxiv.enabled && arxiv.serverUrl) {
+    specs.push({
+      type: 'mcp',
+      server_label: arxiv.serverLabel,
+      server_url: arxiv.serverUrl,
+      allowed_tools: arxiv.allowedTools,
+      require_approval: arxiv.requireApproval,
+      server_description:
+        'Configurable arXiv MCP search server. Let the model decide when to search or fetch paper metadata.',
+    });
+  }
+  return specs;
+}
+
+function hostedOutputItemToChunk(
+  item: ResponseOutputItemLike,
+): StreamChunk | null {
+  if (isMcpCall(item)) {
+    return {
+      type: 'tool_call',
+      name: `mcp:${item.server_label}/${item.name}`,
+      status: item.error || item.status === 'failed' ? 'error' : 'completed',
+      summary: item.error
+        ? `MCP 调用失败: ${item.error}`
+        : `MCP 调用完成: ${item.server_label}/${item.name}`,
+    };
+  }
+  if (isMcpListTools(item)) {
+    return {
+      type: 'tool_call',
+      name: `mcp:${item.server_label}/list_tools`,
+      status: item.error ? 'error' : 'completed',
+      summary: item.error
+        ? `MCP 工具列表获取失败: ${item.error}`
+        : `MCP 工具列表已获取: ${item.tools?.length ?? 0} 个工具`,
+    };
+  }
+  if (isMcpApprovalRequest(item)) {
+    return {
+      type: 'tool_call',
+      name: `mcp:${item.server_label}/${item.name}`,
+      status: 'error',
+      summary:
+        'MCP 请求人工审批；当前插件暂不支持审批回传，请在设置中改为 never 后重试。',
+    };
+  }
+  return null;
+}
+
 export function toOpenAIInput(messages: Message[]): unknown[] {
   return messages.map((message) => {
     if (!message.images?.length) {
@@ -379,11 +546,41 @@ export function toOpenAIInput(messages: Message[]): unknown[] {
   });
 }
 
-function isFunctionCall(item: ResponseOutputItemLike): item is ResponseFunctionCallLike {
-  return item.type === 'function_call' &&
+function isFunctionCall(
+  item: ResponseOutputItemLike,
+): item is ResponseFunctionCallLike {
+  return (
+    item.type === 'function_call' &&
     typeof item.call_id === 'string' &&
     typeof item.name === 'string' &&
-    typeof item.arguments === 'string';
+    typeof item.arguments === 'string'
+  );
+}
+
+function isMcpCall(item: ResponseOutputItemLike): item is ResponseMcpCallLike {
+  return (
+    item.type === 'mcp_call' &&
+    typeof item.server_label === 'string' &&
+    typeof item.name === 'string'
+  );
+}
+
+function isMcpListTools(
+  item: ResponseOutputItemLike,
+): item is ResponseMcpListToolsLike {
+  return (
+    item.type === 'mcp_list_tools' && typeof item.server_label === 'string'
+  );
+}
+
+function isMcpApprovalRequest(
+  item: ResponseOutputItemLike,
+): item is ResponseMcpApprovalRequestLike {
+  return (
+    item.type === 'mcp_approval_request' &&
+    typeof item.server_label === 'string' &&
+    typeof item.name === 'string'
+  );
 }
 
 function reasoningOptions(preset: ModelPreset): {
@@ -400,9 +597,9 @@ function reasoningOptions(preset: ModelPreset): {
   };
 }
 
-function maxOutputTokensParam(
-  preset: ModelPreset,
-): { max_output_tokens?: number } {
+function maxOutputTokensParam(preset: ModelPreset): {
+  max_output_tokens?: number;
+} {
   return preset.extras?.omitMaxOutputTokens === true
     ? {}
     : { max_output_tokens: preset.maxTokens };
@@ -410,6 +607,13 @@ function maxOutputTokensParam(
 
 function responseEventToChunk(event: ResponseEvent): StreamChunk | null {
   switch (event.type) {
+    case 'response.created':
+      return {
+        type: 'status',
+        message: 'OpenAI 已接收请求，等待模型开始处理',
+      };
+    case 'response.in_progress':
+      return { type: 'status', message: '模型正在处理请求' };
     case 'response.output_text.delta':
       return event.delta ? { type: 'text_delta', text: event.delta } : null;
     case 'response.reasoning_text.delta':
@@ -442,4 +646,86 @@ function usageChunk(usage: ResponseUsage): StreamChunk {
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+async function* streamEventsWithFirstEventTimeout<T>(
+  stream: AsyncIterable<T>,
+  signal: AbortSignal,
+): AsyncIterable<T> {
+  const iterator = stream[Symbol.asyncIterator]();
+  let first = true;
+  try {
+    while (true) {
+      const next = first
+        ? await nextWithFirstEventTimeout(iterator, signal)
+        : await iterator.next();
+      first = false;
+      if (next.done) return;
+      yield next.value;
+    }
+  } finally {
+    await iterator.return?.();
+  }
+}
+
+function nextWithFirstEventTimeout<T>(
+  iterator: AsyncIterator<T>,
+  signal: AbortSignal,
+): Promise<IteratorResult<T>> {
+  if (signal.aborted) return Promise.reject(new Error('Request was aborted.'));
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timeout);
+      signal.removeEventListener('abort', onAbort);
+    };
+    const settleResolve = (
+      value: IteratorResult<T> | PromiseLike<IteratorResult<T>>,
+    ) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    const settleReject = (err: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err);
+    };
+    const onAbort = () => {
+      settleReject(new Error('Request was aborted.'));
+    };
+    const timeout = setTimeout(() => {
+      settleReject(
+        new Error(
+          `OpenAI 流式响应在 ${Math.round(
+            OPENAI_FIRST_EVENT_TIMEOUT_MS / 1000,
+          )} 秒内没有返回任何事件。通常是当前 Base URL 不支持 hosted web_search/MCP 流式事件，或上游联网检索被卡住。`,
+        ),
+      );
+    }, OPENAI_FIRST_EVENT_TIMEOUT_MS);
+    signal.addEventListener('abort', onAbort, { once: true });
+    iterator.next().then(
+      (value) => settleResolve(value),
+      (err) => settleReject(err),
+    );
+  });
+}
+
+function hostedToolsStatus(settings: ToolSettings | undefined): string {
+  if (!settings) return '模型正在处理请求';
+  if (settings.webSearchMode === 'live') {
+    return '模型正在处理请求；Live 联网会搜索网页，但不保证下载/解析 PDF 全文';
+  }
+  if (settings.webSearchMode === 'cached') {
+    return '模型正在处理请求；联网搜索已启用，但不保证下载/解析 PDF 全文';
+  }
+  if (settings.mcpServers?.some((server) => server.enabled && server.serverUrl)) {
+    return '模型正在处理请求；MCP 工具已作为可用工具提供';
+  }
+  if (settings.arxivMcp.enabled && settings.arxivMcp.serverUrl) {
+    return '模型正在处理请求；arXiv MCP 已作为可用工具提供';
+  }
+  return '模型正在处理请求';
 }

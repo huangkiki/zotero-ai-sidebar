@@ -1,5 +1,6 @@
 import type { AgentPermissionMode, ModelPreset } from '../settings/types';
 import type { MessageContext } from '../context/types';
+import type { ToolSettings } from '../settings/tool-settings';
 
 export type MessageRole = 'user' | 'assistant';
 
@@ -53,12 +54,20 @@ export interface ProviderStreamOptions {
   tools?: AgentTool[];
   maxToolIterations?: number;
   permissionMode?: AgentPermissionMode;
+  toolSettings?: ToolSettings;
 }
 
 export type StreamChunk =
+  | { type: 'status'; message: string }
   | { type: 'text_delta'; text: string }
   | { type: 'thinking_delta'; text: string }
-  | { type: 'tool_call'; name: string; status: 'started' | 'completed' | 'error'; summary?: string; context?: MessageContext }
+  | {
+      type: 'tool_call';
+      name: string;
+      status: 'started' | 'completed' | 'error';
+      summary?: string;
+      context?: MessageContext;
+    }
   | { type: 'usage'; input: number; output: number; cacheRead?: number }
   | { type: 'error'; message: string };
 

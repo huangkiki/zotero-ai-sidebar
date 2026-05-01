@@ -187,9 +187,12 @@ describe("createZoteroAgentTools", () => {
     expect(session.tools.map((tool) => tool.name)).toEqual([
       "zotero_get_current_item",
       "zotero_get_annotations",
+      "chat_get_previous_context",
       "zotero_search_pdf",
       "zotero_read_pdf_range",
       "zotero_get_full_pdf",
+      "paper_search_arxiv",
+      "paper_fetch_arxiv_fulltext",
       "zotero_get_reader_pdf_text",
       "zotero_add_annotation_to_selection",
       "zotero_annotate_passage",
@@ -222,11 +225,67 @@ describe("createZoteroAgentTools", () => {
     expect(result.output).toContain("Truncated: yes");
     expect(result.context).toMatchObject({
       planMode: "full_pdf",
+      sourceKind: "zotero_item",
+      sourceID: "1",
       fullTextChars: 8,
       fullTextTotalChars: 20,
       fullTextTruncated: true,
       rangeStart: 0,
       rangeEnd: 8,
+    });
+  });
+
+  it("lets the model reuse prior retained snippets without reading the PDF again", async () => {
+    const session = createZoteroAgentToolSession({
+      source,
+      itemID: 1,
+      previousMessages: [
+        {
+          role: "user",
+          content: "解释第三章",
+          context: {
+            planMode: "pdf_range",
+            sourceKind: "zotero_item",
+            sourceID: "1",
+            sourceTitle: "Range View Paper",
+            retrievedPassages: [
+              {
+                text: "Chapter 3 method text.",
+                start: 12000,
+                end: 13000,
+                score: 1,
+              },
+            ],
+          },
+        },
+      ],
+    });
+    const tool = session.tools.find(
+      (candidate) => candidate.name === "chat_get_previous_context",
+    );
+
+    const result = await tool!.execute({
+      sourceKind: "zotero_item",
+      sourceID: "1",
+      start: 11800,
+      end: 14000,
+    });
+
+    expect(result.output).toContain("[Previous chat context]");
+    expect(result.output).toContain("Chapter 3 method text.");
+    expect(result.summary).toBe("复用历史上下文 1 段 / 22 字");
+    expect(result.context).toMatchObject({
+      planMode: "previous_context",
+      sourceKind: "zotero_item",
+      sourceID: "1",
+      sourceTitle: "Range View Paper",
+      retrievedPassages: [
+        {
+          text: "Chapter 3 method text.",
+          start: 12000,
+          end: 13000,
+        },
+      ],
     });
   });
 

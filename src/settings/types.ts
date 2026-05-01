@@ -40,7 +40,7 @@ export const DEFAULT_MODELS: Record<ProviderKind, string> = {
 
 export const MODEL_SUGGESTIONS: Record<ProviderKind, string[]> = {
   anthropic: [],
-  openai: [],
+  openai: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2'],
 };
 
 export const DEFAULT_REASONING_EFFORT: ReasoningEffort = 'xhigh';
