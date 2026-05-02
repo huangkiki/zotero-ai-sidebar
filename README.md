@@ -49,14 +49,17 @@ flowchart TB
 - **Configurable providers**: supports Anthropic, OpenAI, and OpenAI-compatible endpoints through local Zotero preferences. Model presets include connectivity tests and a per-preset model list with a footer switcher.
 - **Model-driven Zotero tools**: follows a Codex-style tool loop; no local keyword/regex intent planner decides what PDF content to send.
 - **PDF context tools**: current item metadata, annotations, PDF search, PDF range reading, full PDF reading, and selected-text context.
+- **Customizable annotation color guide**: edit the natural-language rubric the model uses when picking PDF highlight colors, with a default that maps Zotero's six preset hexes to common review categories (background, problem, method, dataset, results, etc.).
 - **Image context**: attach screenshots/images so the model can analyze figures, UI states, or PDF screenshots.
 - **Quick prompts & slash commands**: customizable prompt buttons next to the composer plus built-in slash commands (`/arxiv-search`, `/web-search`) that expand into explicit instructions for the model.
 - **arXiv paper tools**: `paper_search_arxiv` and `paper_fetch_arxiv_fulltext` let the model search arXiv and fetch full text on demand.
 - **In-pane note editor**: open a note column alongside the chat to edit Zotero's rich note in place, with an assistant-to-note write tool.
+- **Model-driven note writes**: the model can also call `zotero_append_to_note` on its own to append assistant output to the current item's child note, auto-creating one when none exists.
 - **Markdown output**: renders headings, lists, code blocks, quotes, links, thinking/context blocks, and tool-call traces.
 - **Customizable chat UI**: nickname and avatar (emoji or image URL) for both user and AI, plus configurable position and layout for the per-message action buttons.
 - **Clean / debug copy modes**: copy the conversation as Markdown with just the paper introduction and dialogue, or include tool context, PDF snippets, and thinking summaries for debugging.
 - **Config backup & restore**: export/import account presets, UI settings, quick prompts, and tool/MCP settings as a single JSON file.
+- **WebDAV cloud sync**: push and pull chats, settings, quick prompts, and selected paper annotations to a WebDAV endpoint (e.g. Nutstore) via a single `state.json` snapshot, with portable thread keys so conversations follow you across machines.
 - **Local-first config**: API keys, base URLs, model names, and private provider settings stay in Zotero prefs, not in source code.
 
 ## Install
