@@ -462,6 +462,32 @@ button:disabled,
   margin-bottom: 5px;
 }
 
+.bubble-identity {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.bubble-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(116, 107, 96, 0.1);
+  color: var(--zai-muted);
+  font: 700 12px/1 var(--zai-font);
+  overflow: hidden;
+}
+
+.bubble-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .bubble-role {
   display: inline-flex;
   align-items: center;
@@ -483,10 +509,6 @@ button:disabled,
   background: linear-gradient(135deg, #eaf5f9, #f8fbfc);
   border: 1px solid #cde4ec;
   box-shadow: 0 8px 20px rgba(45, 111, 143, 0.08);
-}
-
-.bubble-user .bubble-head {
-  justify-content: flex-end;
 }
 
 .bubble-assistant {
@@ -548,10 +570,67 @@ button:disabled,
 
 .bubble-actions {
   display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
   gap: 4px;
   margin-left: auto;
   opacity: 0;
+  white-space: nowrap;
   transition: opacity 120ms ease;
+}
+
+.bubble-actions-inside.bubble-actions-bottom-right {
+  padding-bottom: 26px;
+}
+
+.bubble-user.bubble-actions-inside.bubble-actions-bottom-right {
+  min-width: 132px;
+  padding-bottom: 30px;
+}
+
+.bubble-actions-inside.bubble-actions-bottom-right .bubble-actions {
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  margin-left: 0;
+}
+
+.bubble-assistant.bubble-actions-inside.bubble-actions-bottom-right .bubble-actions {
+  right: 0;
+  bottom: 2px;
+}
+
+.bubble-actions-edge.bubble-actions-top-right {
+  margin-top: 8px;
+}
+
+.bubble-actions-edge.bubble-actions-bottom-right {
+  margin-bottom: 16px;
+}
+
+.bubble-actions-edge .bubble-actions {
+  position: absolute;
+  z-index: 3;
+  margin-left: 0;
+  padding: 2px;
+  border: 1px solid rgba(205, 190, 172, 0.8);
+  border-radius: 999px;
+  background: rgba(255, 253, 248, 0.94);
+  box-shadow: 0 5px 14px rgba(64, 46, 30, 0.12);
+}
+
+.bubble-actions-edge.bubble-actions-top-right .bubble-actions {
+  top: -10px;
+  right: 6px;
+}
+
+.bubble-actions-edge.bubble-actions-bottom-right .bubble-actions {
+  right: 6px;
+  bottom: -12px;
+}
+
+.bubble-assistant.bubble-actions-edge .bubble-actions {
+  right: 0;
 }
 
 .bubble:hover .bubble-actions {
@@ -559,10 +638,12 @@ button:disabled,
 }
 
 .bubble-actions button {
+  flex: 0 0 auto;
   padding: 2px 6px;
   border-radius: 999px;
   color: var(--zai-muted);
   font-size: 10px;
+  white-space: nowrap;
 }
 
 .bubble-context-chip {
@@ -1638,11 +1719,18 @@ button:disabled,
   display: inline-flex;
   align-items: center;
   gap: 7px;
+  flex: 0 0 auto;
   color: #7e4a2e;
   font: 700 12px/18px var(--zai-font);
   cursor: pointer;
   -moz-user-select: none;
   user-select: none;
+}
+
+.copy-debug-toggle {
+  color: var(--zai-text);
+  font-weight: 400;
+  margin-left: 2px;
 }
 
 .yolo-toggle input {

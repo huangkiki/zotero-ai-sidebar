@@ -13,7 +13,9 @@
       #zotero-ai-sidebar-tool-settings .zai-pref-help { opacity: 0.78; margin: 0 0 10px; }
       #zotero-ai-sidebar-tool-settings .zai-pref-grid { display: grid; grid-template-columns: 140px minmax(260px, 1fr); gap: 8px 12px; align-items: center; }
       #zotero-ai-sidebar-tool-settings input[type="text"], #zotero-ai-sidebar-tool-settings input[type="password"], #zotero-ai-sidebar-tool-settings input[type="number"], #zotero-ai-sidebar-tool-settings select, #zotero-ai-sidebar-tool-settings textarea { box-sizing: border-box; width: 100%; }
-      #zotero-ai-sidebar-tool-settings textarea { min-height: 84px; resize: vertical; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      #zotero-ai-sidebar-tool-settings textarea { min-height: 84px; max-height: 45vh; resize: vertical; overflow: auto; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      #zotero-ai-sidebar-tool-settings .zai-built-in-prompt textarea { min-height: 180px; }
+      #zotero-ai-sidebar-tool-settings .zai-built-in-prompt textarea:focus { min-height: 220px; }
       #zotero-ai-sidebar-tool-settings .zai-pref-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
       #zotero-ai-sidebar-tool-settings .zai-pref-status { flex: 1 0 100%; min-height: 20px; opacity: 0.9; padding: 6px 8px; border-radius: 7px; background: rgba(63, 132, 88, 0.10); color: #2f7046; }
       #zotero-ai-sidebar-tool-settings .zai-pref-status:empty { display: none; }
@@ -44,6 +46,7 @@
       @media (max-width: 760px) { #zotero-ai-sidebar-tool-settings .zai-model-control { grid-template-columns: 1fr; } }
       #zotero-ai-sidebar-tool-settings .zai-inline { display: flex; align-items: center; gap: 8px; }
       #zotero-ai-sidebar-tool-settings .zai-prompt-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0 4px; font-weight: 700; }
+      #zotero-ai-sidebar-tool-settings .zai-config-json { min-height: 140px; }
       #zotero-ai-sidebar-tool-settings .zai-danger { background: rgba(170, 51, 51, 0.10); color: #a33; }
     </html:style>
 
@@ -58,6 +61,37 @@
         <html:button id="zai-preset-add-anthropic" type="button">+ Anthropic</html:button>
         <html:button id="zai-preset-save" type="button">保存账号配置</html:button>
         <html:span id="zai-preset-status" class="zai-pref-status"></html:span>
+      </html:div>
+    </html:div>
+
+    <html:div class="zai-pref-card">
+      <html:div class="zai-pref-title">显示设置</html:div>
+      <html:p class="zai-pref-help">
+        配置消息昵称、头像和消息按钮。头像可以填写 emoji、短文本，或图片 URL / data:image。
+      </html:p>
+      <html:div class="zai-pref-grid">
+        <html:label for="zai-ui-user-label">我的昵称</html:label>
+        <html:input id="zai-ui-user-label" type="text" />
+        <html:label for="zai-ui-user-avatar">我的头像</html:label>
+        <html:input id="zai-ui-user-avatar" type="text" placeholder="例如：🙂 或 https://.../avatar.png" />
+        <html:label for="zai-ui-assistant-label">AI 昵称</html:label>
+        <html:input id="zai-ui-assistant-label" type="text" />
+        <html:label for="zai-ui-assistant-avatar">AI 头像</html:label>
+        <html:input id="zai-ui-assistant-avatar" type="text" placeholder="例如：🤖 或 data:image/png;base64,..." />
+        <html:label for="zai-ui-actions-position">消息按钮位置</html:label>
+        <html:select id="zai-ui-actions-position">
+          <html:option value="top-right">右上角</html:option>
+          <html:option value="bottom-right">右下角</html:option>
+        </html:select>
+        <html:label for="zai-ui-actions-layout">消息按钮样式</html:label>
+        <html:select id="zai-ui-actions-layout">
+          <html:option value="edge">边缘浮层</html:option>
+          <html:option value="inside">气泡里</html:option>
+        </html:select>
+      </html:div>
+      <html:div class="zai-pref-actions">
+        <html:button id="zai-ui-save" type="button">保存显示设置</html:button>
+        <html:span id="zai-ui-status" class="zai-pref-status"></html:span>
       </html:div>
     </html:div>
 
@@ -91,12 +125,40 @@
         </html:select>
       </html:div>
       <html:div class="zai-pref-title" style="margin-top: 12px;">MCP Servers</html:div>
+      <html:p class="zai-pref-help">
+        MCP 配置功能正在开发中
+      </html:p>
       <html:div id="zai-mcp-list" class="zai-list"></html:div>
       <html:div class="zai-pref-actions">
         <html:button id="zai-mcp-add" type="button">+ MCP Server</html:button>
         <html:button id="zai-tool-save" type="button">保存联网/MCP配置</html:button>
         <html:span id="zai-tool-status" class="zai-pref-status"></html:span>
       </html:div>
+    </html:div>
+
+    <html:div class="zai-pref-card">
+      <html:div class="zai-pref-title">配置备份</html:div>
+      <html:p class="zai-pref-help">
+        备份/恢复账号、快捷提示词和联网/MCP 配置。备份文件可能包含 API Key，请保存在可信位置。
+      </html:p>
+      <html:div class="zai-pref-actions">
+        <html:button id="zai-config-export-file" type="button">导出配置文件</html:button>
+        <html:button id="zai-config-import-file" type="button">导入配置文件</html:button>
+        <html:span id="zai-config-status" class="zai-pref-status"></html:span>
+      </html:div>
+      <html:details>
+        <html:summary class="zai-pref-title">手动备份/恢复</html:summary>
+        <html:p class="zai-pref-help">
+          用于手动复制、检查或粘贴配置 JSON。内容可能包含 API Key，请勿公开分享。
+        </html:p>
+        <html:textarea id="zai-config-json" class="zai-config-json" placeholder="点击“生成配置 JSON”后复制；需要手动恢复时，把备份 JSON 粘贴到这里再导入。"></html:textarea>
+        <html:div class="zai-pref-actions">
+          <html:button id="zai-config-generate" type="button">生成配置 JSON</html:button>
+          <html:button id="zai-config-copy" type="button">复制配置 JSON</html:button>
+          <html:button id="zai-config-import-text" type="button">从文本导入</html:button>
+          <html:button id="zai-config-clear" type="button">清空</html:button>
+        </html:div>
+      </html:details>
     </html:div>
   </html:div>
 </groupbox>

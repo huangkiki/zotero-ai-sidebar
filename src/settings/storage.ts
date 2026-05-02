@@ -33,17 +33,20 @@ export function loadPresets(prefs: PrefsStore): ModelPreset[] {
   const raw = prefs.get(KEY);
   if (!raw) return [];
   try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed)
-      ? parsed.map(normalizePreset).filter((p): p is ModelPreset => p != null)
-      : [];
+    return normalizePresetList(JSON.parse(raw));
   } catch {
     return [];
   }
 }
 
 export function savePresets(prefs: PrefsStore, presets: ModelPreset[]): void {
-  prefs.set(KEY, JSON.stringify(presets));
+  prefs.set(KEY, JSON.stringify(normalizePresetList(presets)));
+}
+
+export function normalizePresetList(value: unknown): ModelPreset[] {
+  return Array.isArray(value)
+    ? value.map(normalizePreset).filter((p): p is ModelPreset => p != null)
+    : [];
 }
 
 export function zoteroPrefs(): PrefsStore {

@@ -61,7 +61,7 @@ export function saveToolSettings(
   prefs.set(KEY, JSON.stringify(normalizeToolSettings(settings)));
 }
 
-function normalizeToolSettings(value: unknown): ToolSettings {
+export function normalizeToolSettings(value: unknown): ToolSettings {
   const input =
     value && typeof value === 'object' ? (value as Partial<ToolSettings>) : {};
   const rawArxiv =

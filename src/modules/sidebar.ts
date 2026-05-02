@@ -28,6 +28,11 @@ import {
   type WebSearchMode,
 } from "../settings/tool-settings";
 import {
+  loadUiSettings,
+  type ChatProfileSettings,
+  type UiSettings,
+} from "../settings/ui-settings";
+import {
   DEFAULT_BASE_URLS,
   DEFAULT_MODELS,
   DEFAULT_REASONING_EFFORT,
@@ -150,6 +155,8 @@ interface PanelState {
   activeAssistantStage?: AssistantProgressStage;
   activeAssistantDetail?: string;
   agentPermissionMode: AgentPermissionMode;
+  copyDebugContext: boolean;
+  uiSettings: UiSettings;
   pasteBlocks: PasteBlock[];
   draftImages: DraftImage[];
   nextPasteID: number;
@@ -218,6 +225,8 @@ function renderMount(mount: HTMLElement, itemID: number | null) {
       messagesScrollTop: 0,
       autoFollowMessages: true,
       agentPermissionMode: agentPermissionMode(presets[0]),
+      copyDebugContext: false,
+      uiSettings: loadUiSettings(zoteroPrefs()),
       pasteBlocks: [],
       draftImages: [],
       nextPasteID: 1,
@@ -238,6 +247,7 @@ function renderMount(mount: HTMLElement, itemID: number | null) {
     state.agentPermissionMode = agentPermissionMode(
       selectedChatPreset(state) ?? selectedPreset(state),
     );
+    state.uiSettings = loadUiSettings(zoteroPrefs());
   }
 
   renderPanel(mount, state);
@@ -377,9 +387,14 @@ function renderToolbar(doc: Document, mount: HTMLElement, state: PanelState) {
   });
   if (state.messages.length > 0) {
     const copyAll = buttonEl(doc, "复制MD");
-    copyAll.title = "复制当前对话为 Markdown";
+    copyAll.title = state.copyDebugContext
+      ? "复制当前对话为 Markdown（含工具上下文和 PDF 片段）"
+      : "复制当前对话为 Markdown（只含论文介绍和对话）";
     copyAll.addEventListener("click", () => {
-      void copyToClipboard(doc, formatConversationMarkdown(state));
+      void copyToClipboard(
+        doc,
+        formatConversationMarkdown(state, state.copyDebugContext),
+      );
       flashButton(copyAll, "已复制");
     });
     topRow.append(copyAll);
@@ -408,6 +423,9 @@ function renderToolbar(doc: Document, mount: HTMLElement, state: PanelState) {
   hide.title = "隐藏 AI 对话列";
   hide.addEventListener("click", () => hideCurrentSidebar(mount));
   bottomRow.append(hide);
+  if (state.messages.length > 0) {
+    bottomRow.append(renderCopyDebugToggle(doc, mount, state));
+  }
   bar.append(topRow, bottomRow);
   return bar;
 }
@@ -426,6 +444,7 @@ export function refreshSidebarPreferences(): void {
     state.agentPermissionMode = agentPermissionMode(
       selectedChatPreset(state) ?? selectedPreset(state),
     );
+    state.uiSettings = loadUiSettings(zoteroPrefs());
     renderPanel(sidebar.mount, state);
   }
 }
@@ -1672,6 +1691,30 @@ function renderYoloToggle(
     state.agentPermissionMode === "yolo"
       ? "YOLO：本地工具无需审批直接执行"
       : "Default：需要审批的本地工具会被拦截";
+  return label;
+}
+
+function renderCopyDebugToggle(
+  doc: Document,
+  mount: HTMLElement,
+  state: PanelState,
+): HTMLElement {
+  const label = el(doc, "label", "copy-debug-toggle yolo-toggle");
+  const input = doc.createElement("input");
+  input.type = "checkbox";
+  input.checked = state.copyDebugContext;
+  input.addEventListener("change", () => {
+    state.copyDebugContext = input.checked;
+    renderPanel(mount, state);
+  });
+  label.append(
+    el(doc, "span", "yolo-toggle-text", "调试"),
+    input,
+    el(doc, "span", "yolo-toggle-track"),
+  );
+  label.title = state.copyDebugContext
+    ? "调试复制：包含工具上下文、PDF 片段和思考过程；关闭后只复制论文介绍和对话"
+    : "纯净复制：只复制论文介绍和对话；开启后包含工具上下文、PDF 片段和思考过程";
   return label;
 }
 
@@ -3329,6 +3372,41 @@ function restoreChatInput(
   }
 }
 
+function renderBubbleIdentity(
+  doc: Document,
+  role: Message["role"],
+  settings: UiSettings,
+): HTMLElement {
+  const profile =
+    role === "user" ? settings.userProfile : settings.assistantProfile;
+  const wrap = el(doc, "div", "bubble-identity");
+  if (profile.avatar) {
+    wrap.append(renderBubbleAvatar(doc, profile));
+  }
+  wrap.append(el(doc, "div", "bubble-role", profile.label));
+  return wrap;
+}
+
+function renderBubbleAvatar(
+  doc: Document,
+  profile: ChatProfileSettings,
+): HTMLElement {
+  const avatar = el(doc, "span", "bubble-avatar");
+  if (isAvatarImageSource(profile.avatar)) {
+    const image = doc.createElement("img");
+    image.src = profile.avatar;
+    image.alt = profile.label;
+    avatar.append(image);
+  } else {
+    avatar.textContent = profile.avatar;
+  }
+  return avatar;
+}
+
+function isAvatarImageSource(value: string): boolean {
+  return /^(data:image\/|https?:\/\/|file:\/\/|chrome:\/\/)/i.test(value);
+}
+
 function bubble(
   doc: Document,
   mount: HTMLElement,
@@ -3336,17 +3414,27 @@ function bubble(
   message: Message,
   index: number,
 ) {
-  const root = el(doc, "div", `bubble bubble-${message.role}`);
+  const root = el(
+    doc,
+    "div",
+    [
+      "bubble",
+      `bubble-${message.role}`,
+      `bubble-actions-${state.uiSettings.messageActionsPosition}`,
+      `bubble-actions-${state.uiSettings.messageActionsLayout}`,
+    ].join(" "),
+  );
   root.dataset.messageIndex = String(index);
   const head = el(doc, "div", "bubble-head");
-  head.append(
-    el(doc, "div", "bubble-role", message.role === "user" ? "You" : "AI"),
-  );
+  head.append(renderBubbleIdentity(doc, message.role, state.uiSettings));
 
   const actions = el(doc, "div", "bubble-actions");
   const copy = buttonEl(doc, "复制");
   copy.addEventListener("click", () => {
-    void copyToClipboard(doc, messageToClipboard(message));
+    void copyToClipboard(
+      doc,
+      messageToClipboard(message, state.copyDebugContext),
+    );
     flashButton(copy, "已复制");
   });
   actions.append(copy);
@@ -5055,20 +5143,24 @@ function flashButton(button: HTMLButtonElement, text: string) {
   }, 900);
 }
 
-function messageToClipboard(message: Message): string {
-  if (message.role === "user") {
-    return [
-      formatUserMessageForApi(message),
-      formatImageAttachmentSummary(message),
-    ]
-      .filter(Boolean)
-      .join("\n\n");
+function messageToClipboard(message: Message, includeDebugContext: boolean): string {
+  if (!includeDebugContext) return message.content;
+
+  const lines = [`## ${message.role === "user" ? "You" : "AI"}`, ""];
+  lines.push(...formatContextMarkdown(message));
+  const imageSummary = formatImageAttachmentSummary(message);
+  if (imageSummary) lines.push(imageSummary, "");
+  if (message.thinking) {
+    lines.push("### 思考过程", "", message.thinking, "");
   }
-  if (!message.thinking) return message.content;
-  return `## 思考过程\n${message.thinking}\n\n## 回答\n${message.content}`;
+  lines.push(message.content, "");
+  return lines.join("\n");
 }
 
-function formatConversationMarkdown(state: PanelState): string {
+function formatConversationMarkdown(
+  state: PanelState,
+  includeDebugContext: boolean,
+): string {
   const item = state.itemID == null ? null : Zotero.Items.get(state.itemID);
   const title = item?.getField("title") || "未选择条目";
   const lines = [
@@ -5077,20 +5169,63 @@ function formatConversationMarkdown(state: PanelState): string {
     `- Item ID: ${state.itemID ?? "none"}`,
     `- Exported: ${new Date().toISOString()}`,
     "",
+    ...formatItemIntroductionMarkdown(state.itemID, item),
   ];
 
   for (const message of state.messages) {
     lines.push(`## ${message.role === "user" ? "You" : "AI"}`, "");
-    lines.push(...formatContextMarkdown(message));
-    const imageSummary = formatImageAttachmentSummary(message);
-    if (imageSummary) lines.push(imageSummary, "");
-    if (message.thinking) {
-      lines.push("### 思考过程", "", message.thinking, "");
+    if (includeDebugContext) {
+      lines.push(...formatContextMarkdown(message));
+      const imageSummary = formatImageAttachmentSummary(message);
+      if (imageSummary) lines.push(imageSummary, "");
+      if (message.thinking) {
+        lines.push("### 思考过程", "", message.thinking, "");
+      }
     }
     lines.push(message.content, "");
   }
 
   return lines.join("\n");
+}
+
+function formatItemIntroductionMarkdown(
+  itemID: number | null,
+  item: Zotero.Item | false | null | undefined,
+): string[] {
+  if (itemID == null || !item) return [];
+  const authors = item
+    .getCreators()
+    .map((creator) =>
+      [creator.firstName, creator.lastName].filter(Boolean).join(" "),
+    )
+    .filter(Boolean);
+  const fields = [
+    ["标题", item.getField("title")],
+    ["作者", authors.join(", ")],
+    ["年份", parseYearString(item.getField("date"))],
+    ["期刊/会议", item.getField("publicationTitle") || item.getField("conferenceName")],
+    ["DOI", item.getField("DOI")],
+    ["URL", item.getField("url")],
+  ].filter(([, value]) => String(value ?? "").trim().length > 0);
+  const tags = item
+    .getTags()
+    .map((tag) => tag.tag)
+    .filter(Boolean);
+  const abstract = item.getField("abstractNote")?.trim();
+  const lines = ["## PDF 介绍", ""];
+  for (const [label, value] of fields) {
+    lines.push(`- ${label}: ${value}`);
+  }
+  if (tags.length) lines.push(`- 标签: ${tags.join(", ")}`);
+  if (abstract) {
+    lines.push("", "### 摘要", "", abstract);
+  }
+  lines.push("", "## 对话记录", "");
+  return lines;
+}
+
+function parseYearString(date: string): string {
+  return date.match(/\b(18|19|20|21)\d{2}\b/)?.[0] ?? "";
 }
 
 function formatImageAttachmentSummary(message: Message): string {

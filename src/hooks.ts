@@ -16,12 +16,19 @@ import type { Message } from './providers/types';
 import {
   DEFAULT_QUICK_PROMPT_SETTINGS,
   loadQuickPromptSettings,
+  normalizeQuickPromptSettings,
   saveQuickPromptSettings,
   type QuickPromptSettings,
 } from './settings/quick-prompts';
-import { loadPresets, savePresets, zoteroPrefs } from './settings/storage';
+import {
+  loadPresets,
+  normalizePresetList,
+  savePresets,
+  zoteroPrefs,
+} from './settings/storage';
 import {
   loadToolSettings,
+  normalizeToolSettings,
   saveToolSettings,
   type McpApprovalMode,
   type McpServerSettings,
@@ -40,6 +47,12 @@ import {
   type ReasoningEffort,
   type ReasoningSummary,
 } from './settings/types';
+import {
+  loadUiSettings,
+  normalizeUiSettings,
+  saveUiSettings,
+  type UiSettings,
+} from './settings/ui-settings';
 
 // Plugin lifecycle hooks invoked by `addon/bootstrap.js`.
 //
@@ -117,6 +130,7 @@ function setupPreferencesPane(win: Window): void {
   if (!root) return;
 
   renderPresetSettings(doc);
+  renderUiSettings(doc);
   renderPromptSettings(doc);
   renderToolSettings(doc);
 
@@ -148,6 +162,13 @@ function setupPreferencesPane(win: Window): void {
   byID<HTMLButtonElement>(doc, 'zai-preset-save')?.addEventListener('click', () => {
     void savePresetControlsWithConnectivity(doc);
   });
+  byID<HTMLButtonElement>(doc, 'zai-ui-save')?.addEventListener('click', () => {
+    saveUiSettings(zoteroPrefs(), readUiSettingsControls(doc));
+    renderUiSettings(doc);
+    refreshSidebarPreferences();
+    setStatus(doc, 'zai-ui-status', '显示设置已保存，侧边栏已刷新。');
+    flashButton(byID<HTMLButtonElement>(doc, 'zai-ui-save'), '已保存');
+  });
 
   byID<HTMLButtonElement>(doc, 'zai-custom-prompt-add')?.addEventListener(
     'click',
@@ -178,12 +199,306 @@ function setupPreferencesPane(win: Window): void {
     refreshSidebarPreferences();
     setStatus(doc, 'zai-tool-status', '联网/MCP配置已保存，下一次请求立即使用。');
   });
+  byID<HTMLButtonElement>(doc, 'zai-config-export-file')?.addEventListener('click', () => {
+    void exportConfigBackupFile(doc);
+  });
+  byID<HTMLButtonElement>(doc, 'zai-config-import-file')?.addEventListener('click', () => {
+    void importConfigBackupFile(doc);
+  });
+  byID<HTMLButtonElement>(doc, 'zai-config-generate')?.addEventListener('click', () => {
+    generateConfigBackupJson(doc);
+  });
+  byID<HTMLButtonElement>(doc, 'zai-config-copy')?.addEventListener('click', () => {
+    void copyConfigBackupJson(doc);
+  });
+  byID<HTMLButtonElement>(doc, 'zai-config-import-text')?.addEventListener('click', () => {
+    importConfigBackupFromText(doc);
+  });
+  byID<HTMLButtonElement>(doc, 'zai-config-clear')?.addEventListener('click', () => {
+    const area = byID<HTMLTextAreaElement>(doc, 'zai-config-json');
+    if (area) area.value = '';
+    setStatus(doc, 'zai-config-status', '手动备份文本已清空。');
+  });
+}
+
+const CONFIG_BACKUP_SCHEMA = 'zotero-ai-sidebar.config.v1';
+
+interface ConfigBackup {
+  schema: typeof CONFIG_BACKUP_SCHEMA;
+  exportedAt: string;
+  presets: ModelPreset[];
+  uiSettings: UiSettings;
+  quickPrompts: QuickPromptSettings;
+  toolSettings: ToolSettings;
+}
+
+interface ParsedConfigBackup {
+  presets?: ModelPreset[];
+  uiSettings?: UiSettings;
+  quickPrompts?: QuickPromptSettings;
+  toolSettings?: ToolSettings;
+  sections: string[];
+}
+
+function buildConfigBackup(): ConfigBackup {
+  return {
+    schema: CONFIG_BACKUP_SCHEMA,
+    exportedAt: new Date().toISOString(),
+    presets: loadPresets(zoteroPrefs()),
+    uiSettings: loadUiSettings(zoteroPrefs()),
+    quickPrompts: loadQuickPromptSettings(zoteroPrefs()),
+    toolSettings: loadToolSettings(zoteroPrefs()),
+  };
+}
+
+function configBackupJson(): string {
+  return JSON.stringify(buildConfigBackup(), null, 2);
+}
+
+function configBackupFileName(): string {
+  return `zotero-ai-sidebar-config-${new Date().toISOString().slice(0, 10)}.json`;
+}
+
+async function exportConfigBackupFile(doc: Document): Promise<void> {
+  try {
+    const path = await pickConfigBackupFile(doc, 'save');
+    if (!path) {
+      setStatus(doc, 'zai-config-status', '已取消导出。');
+      return;
+    }
+    await Zotero.File.putContentsAsync(path, configBackupJson());
+    setStatus(doc, 'zai-config-status', `配置备份已保存：${path}`);
+    flashButton(byID<HTMLButtonElement>(doc, 'zai-config-export-file'), '已导出');
+  } catch (err) {
+    setStatus(doc, 'zai-config-status', fileErrorMessage('导出失败', err), true);
+  }
+}
+
+async function importConfigBackupFile(doc: Document): Promise<void> {
+  try {
+    const path = await pickConfigBackupFile(doc, 'open');
+    if (!path) {
+      setStatus(doc, 'zai-config-status', '已取消导入。');
+      return;
+    }
+    const contents = await Zotero.File.getContentsAsync(path, 'utf-8');
+    if (typeof contents !== 'string') throw new Error('配置文件不是文本内容');
+    const raw = contents;
+    importConfigBackupRaw(doc, raw, '配置文件', 'zai-config-import-file');
+  } catch (err) {
+    setStatus(doc, 'zai-config-status', fileErrorMessage('导入失败', err), true);
+  }
+}
+
+function generateConfigBackupJson(doc: Document): void {
+  const area = byID<HTMLTextAreaElement>(doc, 'zai-config-json');
+  if (!area) return;
+  const backup = buildConfigBackup();
+  area.value = JSON.stringify(backup, null, 2);
+  area.focus();
+  area.select();
+  setStatus(
+    doc,
+    'zai-config-status',
+    `已生成配置 JSON：账号 ${backup.presets.length} 个，自定义按钮 ${backup.quickPrompts.customButtons.length} 个。内容可能包含 API Key。`,
+  );
+  flashButton(byID<HTMLButtonElement>(doc, 'zai-config-generate'), '已生成');
+}
+
+async function copyConfigBackupJson(doc: Document): Promise<void> {
+  const area = byID<HTMLTextAreaElement>(doc, 'zai-config-json');
+  if (!area) return;
+  if (!area.value.trim()) generateConfigBackupJson(doc);
+  await writeTextToClipboard(doc, area.value);
+  setStatus(doc, 'zai-config-status', '配置 JSON 已复制。内容可能包含 API Key。');
+  flashButton(byID<HTMLButtonElement>(doc, 'zai-config-copy'), '已复制');
+}
+
+function importConfigBackupFromText(doc: Document): void {
+  const area = byID<HTMLTextAreaElement>(doc, 'zai-config-json');
+  const raw = area?.value.trim() ?? '';
+  if (!raw) {
+    setStatus(doc, 'zai-config-status', '请先粘贴配置 JSON。', true);
+    return;
+  }
+  importConfigBackupRaw(doc, raw, '文本', 'zai-config-import-text');
+}
+
+function importConfigBackupRaw(
+  doc: Document,
+  raw: string,
+  source: string,
+  buttonID?: string,
+): void {
+  const parsed = parseConfigBackup(raw);
+  if (typeof parsed === 'string') {
+    setStatus(doc, 'zai-config-status', parsed, true);
+    return;
+  }
+  const ok = doc.defaultView?.confirm(
+    `导入会覆盖当前已保存的 ${parsed.sections.join('、')} 配置，确定继续？`,
+  ) ?? true;
+  if (!ok) return;
+
+  if (parsed.presets) savePresets(zoteroPrefs(), parsed.presets);
+  if (parsed.uiSettings) saveUiSettings(zoteroPrefs(), parsed.uiSettings);
+  if (parsed.quickPrompts) {
+    saveQuickPromptSettings(zoteroPrefs(), parsed.quickPrompts);
+  }
+  if (parsed.toolSettings) saveToolSettings(zoteroPrefs(), parsed.toolSettings);
+
+  renderPresetSettings(doc);
+  renderUiSettings(doc);
+  renderPromptSettings(doc);
+  renderToolSettings(doc);
+  refreshSidebarPreferences();
+  setStatus(
+    doc,
+    'zai-config-status',
+    `已从${source}导入：${parsed.sections.join('、')}。侧边栏已刷新。`,
+  );
+  if (buttonID) flashButton(byID<HTMLButtonElement>(doc, buttonID), '已导入');
+}
+
+async function pickConfigBackupFile(
+  doc: Document,
+  mode: 'open' | 'save',
+): Promise<string | null> {
+  const win = doc.defaultView;
+  if (!win?.browsingContext) {
+    throw new Error('当前窗口不支持文件选择器');
+  }
+  const nsFilePicker = Components.interfaces.nsIFilePicker;
+  const filePickerClass = (
+    Components.classes as unknown as Record<
+      string,
+      { createInstance(iid: typeof nsFilePicker): nsIFilePicker }
+    >
+  )['@mozilla.org/filepicker;1'];
+  const picker = filePickerClass.createInstance(nsFilePicker);
+  picker.init(
+    win.browsingContext,
+    mode === 'save' ? '导出配置文件' : '导入配置文件',
+    mode === 'save' ? nsFilePicker.modeSave : nsFilePicker.modeOpen,
+  );
+  picker.appendFilter('JSON 配置文件', '*.json');
+  picker.appendFilters(nsFilePicker.filterAll ?? 1);
+  picker.defaultExtension = 'json';
+  if (mode === 'save') picker.defaultString = configBackupFileName();
+
+  const result = await new Promise<nsIFilePicker.ResultCode>((resolve) => {
+    picker.open({ done: resolve });
+  });
+  if (result === nsFilePicker.returnCancel) return null;
+  if (mode === 'save') {
+    if (result !== nsFilePicker.returnOK && result !== nsFilePicker.returnReplace) {
+      return null;
+    }
+  } else if (result !== nsFilePicker.returnOK) {
+    return null;
+  }
+  return picker.file?.path ?? null;
+}
+
+async function writeTextToClipboard(doc: Document, text: string): Promise<void> {
+  const clipboard = doc.defaultView?.navigator.clipboard;
+  if (clipboard?.writeText) {
+    await clipboard.writeText(text);
+    return;
+  }
+  const area = doc.createElement('textarea');
+  area.value = text;
+  area.style.position = 'fixed';
+  area.style.opacity = '0';
+  const root = doc.body ?? doc.documentElement;
+  if (!root) return;
+  root.append(area);
+  area.select();
+  doc.execCommand('copy');
+  area.remove();
+}
+
+function fileErrorMessage(prefix: string, err: unknown): string {
+  const detail = err instanceof Error ? err.message : String(err);
+  return `${prefix}：${detail}`;
+}
+
+function parseConfigBackup(raw: string): ParsedConfigBackup | string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return '配置 JSON 解析失败，请检查是否完整复制。';
+  }
+  if (!isRecord(parsed)) return '配置 JSON 顶层必须是对象。';
+
+  const sections: string[] = [];
+  const result: ParsedConfigBackup = { sections };
+  if (hasOwn(parsed, 'presets')) {
+    if (!Array.isArray(parsed.presets)) return '配置里的 presets 必须是数组。';
+    result.presets = normalizePresetList(parsed.presets);
+    sections.push('账号');
+  }
+  if (hasOwn(parsed, 'uiSettings')) {
+    if (!isRecord(parsed.uiSettings)) return '配置里的 uiSettings 必须是对象。';
+    result.uiSettings = normalizeUiSettings(parsed.uiSettings);
+    sections.push('显示');
+  }
+  if (hasOwn(parsed, 'quickPrompts')) {
+    if (!isRecord(parsed.quickPrompts)) return '配置里的 quickPrompts 必须是对象。';
+    result.quickPrompts = normalizeQuickPromptSettings(parsed.quickPrompts);
+    sections.push('提示词');
+  }
+  if (hasOwn(parsed, 'toolSettings')) {
+    if (!isRecord(parsed.toolSettings)) return '配置里的 toolSettings 必须是对象。';
+    result.toolSettings = normalizeToolSettings(parsed.toolSettings);
+    sections.push('联网/MCP');
+  }
+  if (sections.length === 0) {
+    return '没有找到可导入的配置段：presets / quickPrompts / toolSettings。';
+  }
+  return result;
 }
 
 function renderPresetSettings(doc: Document): void {
   renderPresetRows(doc, loadPresets(zoteroPrefs()));
   updatePresetSaveButton(doc);
   setStatus(doc, 'zai-preset-status', '已加载账号配置。');
+}
+
+function renderUiSettings(doc: Document): void {
+  const settings = loadUiSettings(zoteroPrefs());
+  setInputValue(doc, 'zai-ui-user-label', settings.userProfile.label);
+  setInputValue(doc, 'zai-ui-user-avatar', settings.userProfile.avatar);
+  setInputValue(doc, 'zai-ui-assistant-label', settings.assistantProfile.label);
+  setInputValue(doc, 'zai-ui-assistant-avatar', settings.assistantProfile.avatar);
+  const position = byID<HTMLSelectElement>(doc, 'zai-ui-actions-position');
+  if (position) position.value = settings.messageActionsPosition;
+  const layout = byID<HTMLSelectElement>(doc, 'zai-ui-actions-layout');
+  if (layout) layout.value = settings.messageActionsLayout;
+  setStatus(doc, 'zai-ui-status', '已加载显示设置。');
+}
+
+function readUiSettingsControls(doc: Document): UiSettings {
+  const position = byID<HTMLSelectElement>(doc, 'zai-ui-actions-position');
+  const layout = byID<HTMLSelectElement>(doc, 'zai-ui-actions-layout');
+  return normalizeUiSettings({
+    userProfile: {
+      label: byID<HTMLInputElement>(doc, 'zai-ui-user-label')?.value,
+      avatar: byID<HTMLInputElement>(doc, 'zai-ui-user-avatar')?.value,
+    },
+    assistantProfile: {
+      label: byID<HTMLInputElement>(doc, 'zai-ui-assistant-label')?.value,
+      avatar: byID<HTMLInputElement>(doc, 'zai-ui-assistant-avatar')?.value,
+    },
+    messageActionsPosition: position?.value,
+    messageActionsLayout: layout?.value,
+  });
+}
+
+function setInputValue(doc: Document, id: string, value: string): void {
+  const inputNode = byID<HTMLInputElement>(doc, id);
+  if (inputNode) inputNode.value = value;
 }
 
 function renderPresetRows(doc: Document, presets: ModelPreset[]): void {
@@ -1029,6 +1344,17 @@ function makeId(prefix: string): string {
 
 function byID<T extends HTMLElement>(doc: Document, id: string): T | null {
   return doc.getElementById(id) as T | null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasOwn(
+  value: Record<string, unknown>,
+  key: string,
+): value is Record<string, unknown> {
+  return Object.prototype.hasOwnProperty.call(value, key);
 }
 
 function onShortcuts(_type: string) {}
