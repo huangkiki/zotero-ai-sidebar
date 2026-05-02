@@ -27,6 +27,7 @@ describe('tool settings storage', () => {
     saveToolSettings(prefs, {
       webSearchMode: 'live',
       mcpServers: [],
+      annotationColorGuide: 'custom guide',
       arxivMcp: {
         enabled: true,
         serverLabel: 'arxiv-search',
@@ -38,6 +39,7 @@ describe('tool settings storage', () => {
     expect(loadToolSettings(prefs)).toEqual({
       webSearchMode: 'live',
       mcpServers: [],
+      annotationColorGuide: 'custom guide',
       arxivMcp: {
         enabled: true,
         serverLabel: 'arxiv-search',
@@ -66,6 +68,7 @@ describe('tool settings storage', () => {
     expect(loadToolSettings(prefs)).toEqual({
       webSearchMode: 'disabled',
       mcpServers: [],
+      annotationColorGuide: DEFAULT_TOOL_SETTINGS.annotationColorGuide,
       arxivMcp: {
         enabled: true,
         serverLabel: 'arxiv-search',
@@ -80,6 +83,7 @@ describe('tool settings storage', () => {
     const prefs = memPrefs();
     saveToolSettings(prefs, {
       webSearchMode: 'disabled',
+      annotationColorGuide: DEFAULT_TOOL_SETTINGS.annotationColorGuide,
       mcpServers: [
         {
           id: 'papers',
@@ -103,5 +107,25 @@ describe('tool settings storage', () => {
         requireApproval: 'never',
       },
     ]);
+  });
+
+  it('normalizes configurable PDF annotation color guide', () => {
+    const prefs = memPrefs();
+    saveToolSettings(prefs, {
+      ...DEFAULT_TOOL_SETTINGS,
+      annotationColorGuide: 'Use #ffd400 for motivation.',
+    });
+
+    expect(loadToolSettings(prefs).annotationColorGuide).toBe(
+      'Use #ffd400 for motivation.',
+    );
+
+    prefs.set(
+      'extensions.zotero-ai-sidebar.toolSettings',
+      JSON.stringify({ annotationColorGuide: '' }),
+    );
+    expect(loadToolSettings(prefs).annotationColorGuide).toBe(
+      DEFAULT_TOOL_SETTINGS.annotationColorGuide,
+    );
   });
 });

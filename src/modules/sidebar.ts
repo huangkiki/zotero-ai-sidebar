@@ -2494,6 +2494,19 @@ async function streamAssistant(
       fullTextHighlight: options.fullTextHighlight,
       getActiveReader: () =>
         getActiveReaderForItem(mount.ownerDocument!.defaultView, state.itemID),
+      // Curry the live document and itemID so the model writes to whatever
+      // is selected at call time (not at session-creation time). Refresh
+      // the visible note panel after the write so the user sees the
+      // append immediately, matching the manual button's UX.
+      appendToChildNote: async (content) => {
+        const result = await appendAssistantContentToItemNote(
+          mount.ownerDocument!,
+          state.itemID,
+          content,
+        );
+        refreshVisibleNoteWindow(mount.ownerDocument!, result.noteID);
+        return result;
+      },
     });
     state.scrollToBottom = state.autoFollowMessages;
     state.activeAssistantStage = "waiting_model";
@@ -2617,7 +2630,14 @@ function contextAwareSystemPrompt(
   systemPrompt: string,
   contextLedger: string,
 ): string {
-  return `${systemPrompt}\n\n${ZOTERO_TOOL_MANUAL}\n\nThe ledger below records previous context metadata that may no longer be visible. Use it as a planning map for tool choice, including source identity, ranges, and whether prior snippets can be reloaded with chat_get_previous_context. Do not treat the ledger itself as source text. The model decides whether to answer from current conversation, reload prior chat context, call targeted tools, or fetch fresh text.\n\nPreviously sent context ledger (not currently attached):\n${contextLedger}`;
+  const toolManual = toolManualWithConfiguredGuides();
+  return `${systemPrompt}\n\n${toolManual}\n\nThe ledger below records previous context metadata that may no longer be visible. Use it as a planning map for tool choice, including source identity, ranges, and whether prior snippets can be reloaded with chat_get_previous_context. Do not treat the ledger itself as source text. The model decides whether to answer from current conversation, reload prior chat context, call targeted tools, or fetch fresh text.\n\nPreviously sent context ledger (not currently attached):\n${contextLedger}`;
+}
+
+function toolManualWithConfiguredGuides(): string {
+  const guide = loadToolSettings(zoteroPrefs()).annotationColorGuide.trim();
+  if (!guide) return ZOTERO_TOOL_MANUAL;
+  return `${ZOTERO_TOOL_MANUAL}\n\nConfigured PDF annotation color presets:\n${guide}`;
 }
 
 // Tool-trace upsert. Each chunk that comes from the provider stream is

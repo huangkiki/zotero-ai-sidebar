@@ -18,7 +18,6 @@ const policy: ContextPolicy = {
   fullTextCacheReadCharLimit: 400_000,
   maxToolIterations: 100,
   maxAnnotationCommentChars: 4000,
-  maxFullTextHighlights: 10,
   maxFullTextHighlightCommentChars: 80,
   minLocateConfidence: 0.85,
 };

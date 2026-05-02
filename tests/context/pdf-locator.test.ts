@@ -71,6 +71,39 @@ describe("pdf locator", () => {
     ]);
   });
 
+  it("keeps column-break matches as separate precise rects", async () => {
+    const locator = await createPdfLocator(
+      readerWithPages([
+        [
+          item("unrelated left top", 0, 720),
+          item("autonomous driving. Extensive experiments are con-", 0, 100, {
+            hasEOL: true,
+            width: 240,
+          }),
+          item(
+            "ducted with Waymo-4DSeg and unseen dataset under dif-",
+            300,
+            720,
+            { hasEOL: true, width: 240 },
+          ),
+          item("ferent challenging settings.", 300, 700, { width: 180 }),
+        ],
+      ]),
+    );
+
+    const result = await locator.locate(
+      "Extensive experiments are conducted with Waymo-4DSeg and unseen dataset under different challenging settings.",
+    );
+
+    expect(result?.rects).toHaveLength(3);
+    // No returned rect may span from the left column into the right column.
+    expect(result?.rects.some((rect) => rect[0] < 200 && rect[2] > 280)).toBe(
+      false,
+    );
+    expect(result?.rects.every((rect) => rect[2] - rect[0] < 260)).toBe(true);
+    expect(result?.matchedText).toContain("Extensive experiments");
+  });
+
   it("uses normalized substring matching for full-width text", async () => {
     const locator = await createPdfLocator(
       readerWithPages([[item("Ｆｉｅｌｄ result", 0, 100)]]),

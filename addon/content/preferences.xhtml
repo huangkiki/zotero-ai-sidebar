@@ -65,6 +65,19 @@
     </html:div>
 
     <html:div class="zai-pref-card">
+      <html:div class="zai-pref-title">PDF 注释颜色预设</html:div>
+      <html:p class="zai-pref-help">
+        配置 AI 写入 PDF 注释时允许使用的颜色分类。保存后会追加到 Zotero tool manual；Reset 可恢复默认预设。
+      </html:p>
+      <html:textarea id="zai-tool-annotation-color-guide" placeholder="配置写入 PDF 注释时传给模型的颜色预设；保存后会追加到 Zotero tool manual。"></html:textarea>
+      <html:div class="zai-pref-actions">
+        <html:button id="zai-color-save" type="button">保存颜色预设</html:button>
+        <html:button id="zai-tool-reset-color-guide" type="button">Reset 颜色预设</html:button>
+        <html:span id="zai-tool-status" class="zai-pref-status"></html:span>
+      </html:div>
+    </html:div>
+
+    <html:div class="zai-pref-card">
       <html:div class="zai-pref-title">显示设置</html:div>
       <html:p class="zai-pref-help">
         配置消息昵称、头像和消息按钮。头像可以填写 emoji、短文本，或图片 URL / data:image。
@@ -159,6 +172,34 @@
           <html:button id="zai-config-clear" type="button">清空</html:button>
         </html:div>
       </html:details>
+    </html:div>
+
+    <html:div class="zai-pref-card">
+      <html:div class="zai-pref-title">云同步（WebDAV）</html:div>
+      <html:p class="zai-pref-help">
+        把账号预设、快捷提示词、联网/MCP 设置、显示设置和对话历史同步到 WebDAV
+        云盘（坚果云 / NextCloud / ownCloud / Synology 等）。论文 PDF 和元数据请继续使用
+        Zotero 自带的同步（设置 → 同步 → 文件同步 → WebDAV，可指向同一个 WebDAV 账号）。
+      </html:p>
+      <html:div class="zai-pref-grid">
+        <html:label for="zai-sync-url">WebDAV URL</html:label>
+        <html:input id="zai-sync-url" type="text" placeholder="例如：https://dav.jianguoyun.com/dav/" />
+        <html:label for="zai-sync-username">用户名</html:label>
+        <html:input id="zai-sync-username" type="text" placeholder="坚果云：你的注册邮箱" />
+        <html:label for="zai-sync-password">密码 / 应用密码</html:label>
+        <html:input id="zai-sync-password" type="password" placeholder="坚果云需在网页端「安全选项」生成应用密码" />
+        <html:label for="zai-sync-folder">云端目录</html:label>
+        <html:input id="zai-sync-folder" type="text" placeholder="zotero-ai-sidebar" />
+      </html:div>
+      <html:div class="zai-pref-actions">
+        <html:button id="zai-sync-test" type="button">测试连接</html:button>
+        <html:button id="zai-sync-push" type="button">上传到云端</html:button>
+        <html:button id="zai-sync-pull" type="button">从云端下载</html:button>
+        <html:button id="zai-sync-save" type="button">保存账号</html:button>
+        <html:span id="zai-sync-status" class="zai-pref-status"></html:span>
+      </html:div>
+      <html:p id="zai-sync-meta" class="zai-pref-help"></html:p>
+
     </html:div>
   </html:div>
 </groupbox>

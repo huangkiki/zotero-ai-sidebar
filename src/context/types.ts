@@ -16,6 +16,7 @@ export type ContextMode =
   | "remote_paper"
   | "reader_pdf_text"
   | "annotation_write"
+  | "note_write"
   | "previous_context";
 
 export type ContextPlanSource = "selected" | "model" | "fallback";

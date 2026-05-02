@@ -1,0 +1,195 @@
+import { beforeEach, describe, expect, it } from 'vitest';
+import type { PrefsStore } from '../../src/settings/storage';
+import { savePresets } from '../../src/settings/storage';
+import { saveQuickPromptSettings } from '../../src/settings/quick-prompts';
+import { saveToolSettings } from '../../src/settings/tool-settings';
+import { saveUiSettings } from '../../src/settings/ui-settings';
+import {
+  applySyncSnapshot,
+  buildSyncSnapshot,
+  parseSyncSnapshot,
+  SYNC_SCHEMA,
+} from '../../src/sync/state';
+import { loadPresets } from '../../src/settings/storage';
+import { loadQuickPromptSettings } from '../../src/settings/quick-prompts';
+import { loadToolSettings } from '../../src/settings/tool-settings';
+import { loadUiSettings } from '../../src/settings/ui-settings';
+import { loadChatMessages, saveChatMessages } from '../../src/settings/chat-history';
+
+function memPrefs(): PrefsStore {
+  const map = new Map<string, string>();
+  return {
+    get: (key) => map.get(key),
+    set: (key, value) => map.set(key, value),
+  };
+}
+
+let storedThreads = '{}';
+
+beforeEach(() => {
+  storedThreads = '{}';
+  Object.defineProperty(globalThis, 'Zotero', {
+    configurable: true,
+    value: {
+      Profile: { dir: '/tmp/zotero-profile' },
+      File: {
+        getContentsAsync: async () => storedThreads,
+        putContentsAsync: async (_path: string, contents: string) => {
+          storedThreads = contents;
+        },
+      },
+      Items: {
+        get: (id: number) =>
+          id === 42
+            ? { key: 'AAAA1111', libraryID: 1, id: 42 }
+            : id === 99
+              ? { key: 'BBBB2222', libraryID: 1, id: 99 }
+              : false,
+        getByLibraryAndKey: (libraryID: number, key: string) => {
+          if (libraryID !== 1) return false;
+          if (key === 'AAAA1111') return { key, libraryID, id: 42 };
+          if (key === 'BBBB2222') return { key, libraryID, id: 99 };
+          return false;
+        },
+        // Empty library by default — annotation tests live in their own
+        // file with their own Zotero stub.
+        getAll: () => [],
+        getAsync: async () => null,
+      },
+      Libraries: {
+        get: (libraryID: number) =>
+          libraryID === 1 ? { libraryType: 'user', id: 1 } : undefined,
+        userLibraryID: 1,
+      },
+      Groups: {
+        get: () => false,
+        getAll: () => [],
+      },
+      Annotations: {
+        saveFromJSON: async () => ({ id: 0, key: '' }),
+      },
+    },
+  });
+});
+
+describe('sync snapshot round trip', () => {
+  it('builds a snapshot with all settings sections and chat threads', async () => {
+    const prefs = memPrefs();
+    savePresets(prefs, [
+      {
+        id: 'preset-1',
+        label: 'GPT',
+        provider: 'openai',
+        apiKey: 'sk-xxx',
+        baseUrl: 'https://api.openai.com/v1',
+        model: 'gpt-5.1',
+        models: ['gpt-5.1'],
+        maxTokens: 8192,
+        extras: {
+          reasoningEffort: 'medium',
+          reasoningSummary: 'auto',
+          agentPermissionMode: 'default',
+        },
+      },
+    ]);
+    saveUiSettings(prefs, {
+      messageActionsPosition: 'bottom-right',
+      messageActionsLayout: 'edge',
+      userProfile: { label: 'me', avatar: '🙂' },
+      assistantProfile: { label: 'ai', avatar: '🤖' },
+    });
+    saveQuickPromptSettings(prefs, {
+      builtIns: {
+        summary: 'sum',
+        fullTextHighlight: 'highlight',
+        explainSelection: 'explain',
+      },
+      customButtons: [{ id: 'a', label: 'A', prompt: 'do A' }],
+    });
+    saveToolSettings(prefs, {
+      webSearchMode: 'live',
+      mcpServers: [],
+      arxivMcp: {
+        enabled: false,
+        serverLabel: 'arxiv',
+        serverUrl: '',
+        allowedTools: ['search'],
+        requireApproval: 'never',
+      },
+    });
+    await saveChatMessages(42, [
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: 'hi there' },
+    ]);
+
+    const snapshot = await buildSyncSnapshot(prefs);
+    expect(snapshot.schema).toBe(SYNC_SCHEMA);
+    expect(snapshot.presets).toHaveLength(1);
+    expect(snapshot.uiSettings.messageActionsPosition).toBe('bottom-right');
+    expect(snapshot.quickPrompts.customButtons).toHaveLength(1);
+    expect(snapshot.toolSettings.webSearchMode).toBe('live');
+    expect(snapshot.threads).toHaveLength(1);
+    expect(snapshot.threads[0]).toMatchObject({
+      libraryType: 'user',
+      itemKey: 'AAAA1111',
+    });
+    expect(snapshot.threads[0].messages).toHaveLength(2);
+    expect(snapshot.annotations).toEqual([]);
+  });
+
+  it('parses, applies, and re-loads the same state on a fresh prefs store', async () => {
+    const sourcePrefs = memPrefs();
+    saveUiSettings(sourcePrefs, {
+      messageActionsPosition: 'top-right',
+      messageActionsLayout: 'inside',
+      userProfile: { label: 'YOU', avatar: '' },
+      assistantProfile: { label: 'AI', avatar: '' },
+    });
+    await saveChatMessages(42, [{ role: 'user', content: 'first device' }]);
+    const snapshot = await buildSyncSnapshot(sourcePrefs);
+    const json = JSON.stringify(snapshot);
+
+    storedThreads = '{}';
+    const targetPrefs = memPrefs();
+    const parsed = parseSyncSnapshot(json);
+    const result = await applySyncSnapshot(targetPrefs, parsed);
+
+    expect(result.threads.imported).toBe(1);
+    expect(loadUiSettings(targetPrefs).messageActionsPosition).toBe('top-right');
+    expect(loadPresets(targetPrefs)).toEqual([]);
+    expect(loadQuickPromptSettings(targetPrefs).builtIns.summary).toBeTruthy();
+    expect(loadToolSettings(targetPrefs).webSearchMode).toBe('disabled');
+    expect(await loadChatMessages(42)).toHaveLength(1);
+  });
+
+  it('rejects a snapshot with the wrong schema', () => {
+    expect(() => parseSyncSnapshot('{"schema":"other"}')).toThrow(/schema/);
+  });
+
+  it('rejects unparseable JSON', () => {
+    expect(() => parseSyncSnapshot('not json')).toThrow(/解析/);
+  });
+
+  it('counts unresolved threads when the local item key is missing', async () => {
+    const json = JSON.stringify({
+      schema: SYNC_SCHEMA,
+      exportedAt: '2026-05-02T00:00:00Z',
+      presets: [],
+      uiSettings: {},
+      quickPrompts: {},
+      toolSettings: {},
+      threads: [
+        {
+          libraryType: 'user',
+          itemKey: 'ZZZZ9999',
+          updatedAt: '2026-05-02T00:00:00Z',
+          messages: [{ role: 'user', content: 'orphan' }],
+        },
+      ],
+    });
+    const prefs = memPrefs();
+    const result = await applySyncSnapshot(prefs, parseSyncSnapshot(json));
+    expect(result.threads.unresolved).toBe(1);
+    expect(result.threads.imported).toBe(0);
+  });
+});

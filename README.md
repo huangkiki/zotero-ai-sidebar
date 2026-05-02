@@ -4,6 +4,45 @@
 
 Zotero AI Sidebar is a Zotero 7/8/9 plugin that adds an AI chat panel to the Zotero item pane / PDF reading workflow. It is designed as a lightweight research agent: the model decides when to inspect the current Zotero item, annotations, PDF snippets, full PDF text, screenshots, or write annotations through exposed Zotero tools.
 
+📖 **[Full usage guide (HTML, Chinese)](docs/usage.html)** — step-by-step install, config, slash commands, cloud sync, and disaster backup.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph Zotero[Zotero main window]
+        PDF[PDF Reader]
+        Note[Note editor]
+        Side[AI sidebar]
+    end
+    User([You]) -->|prompt / selection / screenshot| Side
+    Side -->|tool calls| Tools[Local AgentTool]
+    Tools -->|read / write| Zotero
+    Side <-->|HTTPS| Provider[OpenAI / Anthropic /<br/>OpenAI-compatible]
+    Side -.chat / settings / annotations.-> WebDAV[(WebDAV cloud<br/>e.g. Nutstore)]
+    Zotero -.PDF files.-> WebDAV
+    Zotero -.library metadata.-> ZoteroOrg[(zotero.org)]
+```
+
+## Three-layer cloud-sync split
+
+```mermaid
+flowchart TB
+    subgraph Local[Local machine]
+        Lib[(Zotero library + annotations)]
+        Storage[storage/*.pdf]
+        Plugin[Plugin state<br/>chats / settings / prompts]
+    end
+    subgraph Cloud[Cloud]
+        ZS[zotero.org<br/>free 300MB tier]
+        WD1[WebDAV<br/>Zotero File Sync writes]
+        WD2[WebDAV<br/>this plugin writes]
+    end
+    Lib <-->|metadata sync| ZS
+    Storage <-->|file sync| WD1
+    Plugin <-->|push / pull| WD2
+```
+
 ## Features
 
 - **AI chat inside Zotero**: open a dedicated sidebar and discuss the current paper without leaving Zotero.

@@ -4,6 +4,45 @@
 
 Zotero AI Sidebar 是一个适配 Zotero 7/8/9 的插件，会在条目面板 / PDF 阅读流程旁边加上一个 AI 对话面板。它被设计成一个轻量的论文研究 agent：由模型自己决定何时去查看当前 Zotero 条目、批注、PDF 片段、PDF 全文、截图，或通过插件暴露的 Zotero 工具写入批注。
 
+📖 **[完整使用指南（HTML 网页）](docs/usage.html)** —— 含安装、配置、Slash 命令、云同步、灾备的分步说明
+
+## 总体架构
+
+```mermaid
+flowchart LR
+    subgraph Zotero[Zotero 主窗口]
+        PDF[PDF Reader]
+        Note[笔记编辑器]
+        Side[AI 侧边栏]
+    end
+    User([你]) -->|提问 / 选区 / 截图| Side
+    Side -->|工具调用| Tools[本地 AgentTool]
+    Tools -->|读 / 写| Zotero
+    Side <-->|HTTPS| Provider[OpenAI / Anthropic /<br/>OpenAI 兼容端点]
+    Side -.对话 / 设置 / 注释.-> WebDAV[(坚果云 WebDAV)]
+    Zotero -.PDF 文件.-> WebDAV
+    Zotero -.题录元数据.-> ZoteroOrg[(zotero.org)]
+```
+
+## 三层云同步分工
+
+```mermaid
+flowchart TB
+    subgraph Local[本机]
+        Lib[(Zotero 库 + 注释)]
+        Storage[storage/*.pdf]
+        Plugin[插件状态<br/>对话 / 设置 / 提示词]
+    end
+    subgraph Cloud[云端]
+        ZS[zotero.org<br/>免费 300MB]
+        WD1[坚果云 WebDAV<br/>Zotero File Sync 写入]
+        WD2[坚果云 WebDAV<br/>本插件写入]
+    end
+    Lib <-->|metadata sync| ZS
+    Storage <-->|file sync| WD1
+    Plugin <-->|push / pull| WD2
+```
+
 ## 功能特性
 
 - **Zotero 内置 AI 对话**：直接在专属侧边栏与当前论文对话，无需离开 Zotero。

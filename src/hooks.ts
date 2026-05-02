@@ -27,6 +27,7 @@ import {
   zoteroPrefs,
 } from './settings/storage';
 import {
+  DEFAULT_TOOL_SETTINGS,
   loadToolSettings,
   normalizeToolSettings,
   saveToolSettings,
@@ -53,6 +54,12 @@ import {
   saveUiSettings,
   type UiSettings,
 } from './settings/ui-settings';
+import { pullFromCloud, pushToCloud, testSyncConnection } from './sync';
+import {
+  loadSyncAccount,
+  saveSyncAccount,
+  type SyncAccount,
+} from './sync/account';
 
 // Plugin lifecycle hooks invoked by `addon/bootstrap.js`.
 //
@@ -133,6 +140,7 @@ function setupPreferencesPane(win: Window): void {
   renderUiSettings(doc);
   renderPromptSettings(doc);
   renderToolSettings(doc);
+  renderSyncSettings(doc);
 
   if (root.dataset.bound === 'true') return;
   root.dataset.bound = 'true';
@@ -199,6 +207,25 @@ function setupPreferencesPane(win: Window): void {
     refreshSidebarPreferences();
     setStatus(doc, 'zai-tool-status', '联网/MCP配置已保存，下一次请求立即使用。');
   });
+  byID<HTMLButtonElement>(doc, 'zai-color-save')?.addEventListener('click', () => {
+    const settings = readToolSettingsControls(doc);
+    saveToolSettings(zoteroPrefs(), settings);
+    renderToolSettings(doc);
+    refreshSidebarPreferences();
+    setStatus(doc, 'zai-tool-status', 'PDF 注释颜色预设已保存，下一次请求立即使用。');
+    flashButton(byID<HTMLButtonElement>(doc, 'zai-color-save'), '已保存');
+  });
+  byID<HTMLButtonElement>(doc, 'zai-tool-reset-color-guide')?.addEventListener('click', () => {
+    const settings = readToolSettingsControls(doc);
+    saveToolSettings(zoteroPrefs(), {
+      ...settings,
+      annotationColorGuide: DEFAULT_TOOL_SETTINGS.annotationColorGuide,
+    });
+    renderToolSettings(doc);
+    refreshSidebarPreferences();
+    setStatus(doc, 'zai-tool-status', 'PDF 注释颜色预设已恢复默认并立即生效。');
+    flashButton(byID<HTMLButtonElement>(doc, 'zai-tool-reset-color-guide'), '已重置');
+  });
   byID<HTMLButtonElement>(doc, 'zai-config-export-file')?.addEventListener('click', () => {
     void exportConfigBackupFile(doc);
   });
@@ -219,6 +246,72 @@ function setupPreferencesPane(win: Window): void {
     if (area) area.value = '';
     setStatus(doc, 'zai-config-status', '手动备份文本已清空。');
   });
+  byID<HTMLButtonElement>(doc, 'zai-sync-save')?.addEventListener('click', () => {
+    const account = readSyncAccountControls(doc);
+    saveSyncAccount(zoteroPrefs(), account);
+    renderSyncSettings(doc);
+    setStatus(doc, 'zai-sync-status', 'WebDAV 账号已保存。');
+    flashButton(byID<HTMLButtonElement>(doc, 'zai-sync-save'), '已保存');
+  });
+  byID<HTMLButtonElement>(doc, 'zai-sync-test')?.addEventListener('click', () => {
+    void runSyncTest(doc);
+  });
+  byID<HTMLButtonElement>(doc, 'zai-sync-push')?.addEventListener('click', () => {
+    void runSyncPush(doc);
+  });
+  byID<HTMLButtonElement>(doc, 'zai-sync-pull')?.addEventListener('click', () => {
+    void runSyncPull(doc);
+  });
+}
+
+async function runSyncTest(doc: Document): Promise<void> {
+  // Reading from controls (not prefs) lets the user test without first
+  // clicking "Save account" — common path for first-time setup.
+  const account = readSyncAccountControls(doc);
+  setStatus(doc, 'zai-sync-status', '正在测试 WebDAV 连接…');
+  const result = await testSyncConnection(account);
+  setStatus(doc, 'zai-sync-status', result.message, !result.ok);
+  if (result.ok) {
+    saveSyncAccount(zoteroPrefs(), account);
+    renderSyncSettings(doc);
+    flashButton(byID<HTMLButtonElement>(doc, 'zai-sync-test'), '已连接');
+  }
+}
+
+async function runSyncPush(doc: Document): Promise<void> {
+  const account = readSyncAccountControls(doc);
+  saveSyncAccount(zoteroPrefs(), account);
+  setStatus(doc, 'zai-sync-status', '正在打包并上传到云端…');
+  const result = await pushToCloud(zoteroPrefs(), account);
+  setStatus(doc, 'zai-sync-status', result.message, !result.ok);
+  if (result.ok) {
+    renderSyncSettings(doc);
+    flashButton(byID<HTMLButtonElement>(doc, 'zai-sync-push'), '已上传');
+  }
+}
+
+async function runSyncPull(doc: Document): Promise<void> {
+  const account = readSyncAccountControls(doc);
+  saveSyncAccount(zoteroPrefs(), account);
+  const ok = doc.defaultView?.confirm(
+    '从云端下载会按时间戳合并对话历史，并直接覆盖本地账号、显示、提示词、联网/MCP 配置。继续？',
+  ) ?? true;
+  if (!ok) {
+    setStatus(doc, 'zai-sync-status', '已取消下载。');
+    return;
+  }
+  setStatus(doc, 'zai-sync-status', '正在从云端下载并应用配置…');
+  const result = await pullFromCloud(zoteroPrefs(), account);
+  setStatus(doc, 'zai-sync-status', result.message, !result.ok);
+  if (result.ok) {
+    renderPresetSettings(doc);
+    renderUiSettings(doc);
+    renderPromptSettings(doc);
+    renderToolSettings(doc);
+    renderSyncSettings(doc);
+    refreshSidebarPreferences();
+    flashButton(byID<HTMLButtonElement>(doc, 'zai-sync-pull'), '已下载');
+  }
 }
 
 const CONFIG_BACKUP_SCHEMA = 'zotero-ai-sidebar.config.v1';
@@ -499,6 +592,37 @@ function readUiSettingsControls(doc: Document): UiSettings {
 function setInputValue(doc: Document, id: string, value: string): void {
   const inputNode = byID<HTMLInputElement>(doc, id);
   if (inputNode) inputNode.value = value;
+}
+
+function renderSyncSettings(doc: Document): void {
+  const account = loadSyncAccount(zoteroPrefs());
+  setInputValue(doc, 'zai-sync-url', account.webdavUrl);
+  setInputValue(doc, 'zai-sync-username', account.username);
+  setInputValue(doc, 'zai-sync-password', account.password);
+  setInputValue(doc, 'zai-sync-folder', account.remoteFolder);
+  const meta = byID<HTMLElement>(doc, 'zai-sync-meta');
+  if (meta) meta.textContent = formatSyncMeta(account);
+}
+
+function readSyncAccountControls(doc: Document): SyncAccount {
+  const existing = loadSyncAccount(zoteroPrefs());
+  return {
+    ...existing,
+    webdavUrl: byID<HTMLInputElement>(doc, 'zai-sync-url')?.value ?? existing.webdavUrl,
+    username:
+      byID<HTMLInputElement>(doc, 'zai-sync-username')?.value ?? existing.username,
+    password:
+      byID<HTMLInputElement>(doc, 'zai-sync-password')?.value ?? existing.password,
+    remoteFolder:
+      byID<HTMLInputElement>(doc, 'zai-sync-folder')?.value ?? existing.remoteFolder,
+  };
+}
+
+function formatSyncMeta(account: SyncAccount): string {
+  const parts: string[] = [];
+  parts.push(account.lastPushAt ? `上次上传：${account.lastPushAt}` : '上次上传：未上传');
+  parts.push(account.lastPullAt ? `上次下载：${account.lastPullAt}` : '上次下载：未下载');
+  return parts.join(' · ');
 }
 
 function renderPresetRows(doc: Document, presets: ModelPreset[]): void {
@@ -1101,6 +1225,11 @@ function renderToolSettings(doc: Document): void {
   const settings = loadToolSettings(zoteroPrefs());
   const webSearch = byID<HTMLSelectElement>(doc, 'zai-tool-web-search');
   if (webSearch) webSearch.value = settings.webSearchMode;
+  const colorGuide = byID<HTMLTextAreaElement>(
+    doc,
+    'zai-tool-annotation-color-guide',
+  );
+  if (colorGuide) colorGuide.value = settings.annotationColorGuide;
   const list = byID<HTMLElement>(doc, 'zai-mcp-list');
   list?.replaceChildren();
   for (const server of settings.mcpServers ?? []) addMcpRow(doc, server);
@@ -1167,6 +1296,9 @@ function readToolSettingsControls(doc: Document): ToolSettings {
   return {
     ...existing,
     webSearchMode: webSearchModeValue(webSearch?.value ?? 'disabled'),
+    annotationColorGuide:
+      byID<HTMLTextAreaElement>(doc, 'zai-tool-annotation-color-guide')?.value ??
+      existing.annotationColorGuide,
     mcpServers,
   };
 }

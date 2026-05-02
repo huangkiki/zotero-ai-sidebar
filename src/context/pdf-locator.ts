@@ -952,103 +952,101 @@ function rectsForRange(
   matchStart: number,
   matchEnd: number,
 ): PdfRect[] {
-  const overlapping = anchors.filter(
-    (anchor) => anchor.startOffset < matchEnd && anchor.endOffset > matchStart,
-  );
-  if (!overlapping.length) return [];
-
-  if (overlapping.every((anchor) => anchor.source === "processed")) {
-    return processedRectsForAnchors(overlapping);
-  }
-
-  return groupAnchorsByY(overlapping)
-    .map((line) => lineRect(line, matchStart, matchEnd))
-    .filter((rect): rect is PdfRect => !!rect);
+  const parts = anchors
+    .map((anchor) => {
+      const rect = anchorPartialRect(anchor, matchStart, matchEnd);
+      return rect ? { rect, itemIndex: anchor.itemIndex } : null;
+    })
+    .filter((part): part is RectPart => !!part);
+  if (!parts.length) return [];
+  return mergeRectParts(parts);
 }
 
-// Build per-line rectangles from char-level "processed" anchors.
-// Approach: walk anchors in stream order, expanding the current rect
-// (union of bounding boxes) until we hit a `lineBreakAfter` flag — flush,
-// then start a new rect. WHY: Zotero highlights look right when each
-// visual line is its own rectangle (matches how the PDF text is laid out);
-// one giant union rect would fill the page gutter on multi-line passages.
-function processedRectsForAnchors(anchors: ItemAnchor[]): PdfRect[] {
-  const rects: PdfRect[] = [];
-  let current: PdfRect | null = null;
-  const sorted = anchors.slice().sort((a, b) => a.itemIndex - b.itemIndex);
+interface RectPart {
+  rect: PdfRect;
+  itemIndex: number;
+}
 
-  for (const anchor of sorted) {
-    const rect: PdfRect = [
-      anchor.x,
-      anchor.y,
-      anchor.x + anchor.width,
-      anchor.y + anchor.height,
-    ];
-    current = current
-      ? [
-          Math.min(current[0], rect[0]),
-          Math.min(current[1], rect[1]),
-          Math.max(current[2], rect[2]),
-          Math.max(current[3], rect[3]),
-        ]
-      : rect;
-    if (anchor.lineBreakAfter) {
-      rects.push(roundRect(current));
-      current = null;
+// Build rectangles for the exact text segments, not a single min/max block.
+// This matters for two-column PDFs: a sentence can wrap from the bottom of
+// the left column to the top of the right column, and one union rectangle
+// would cover unrelated text between those two visual positions.
+function mergeRectParts(parts: RectPart[]): PdfRect[] {
+  const rows = groupRectPartsByY(parts);
+  const rects: PdfRect[] = [];
+
+  for (const row of rows) {
+    const sorted = row
+      .slice()
+      .sort((a, b) => a.rect[0] - b.rect[0] || a.itemIndex - b.itemIndex);
+    let current: PdfRect | null = null;
+
+    for (const part of sorted) {
+      if (current && shouldMergeInline(current, part.rect)) {
+        current = unionRect(current, part.rect);
+        continue;
+      }
+      if (current) rects.push(roundRect(current));
+      current = part.rect;
+    }
+
+    if (current) rects.push(roundRect(current));
+  }
+
+  return rects;
+}
+
+function groupRectPartsByY(parts: RectPart[]): RectPart[][] {
+  const sorted = parts
+    .slice()
+    .sort(
+      (a, b) =>
+        rectMidY(b.rect) - rectMidY(a.rect) ||
+        a.rect[0] - b.rect[0] ||
+        a.itemIndex - b.itemIndex,
+    );
+  const rows: Array<{ y: number; parts: RectPart[] }> = [];
+
+  for (const part of sorted) {
+    const y = rectMidY(part.rect);
+    const row = rows.find(
+      (candidate) => Math.abs(candidate.y - y) <= LINE_Y_TOLERANCE,
+    );
+    if (row) {
+      row.parts.push(part);
+    } else {
+      rows.push({ y, parts: [part] });
     }
   }
 
-  if (current) rects.push(roundRect(current));
-  return rects;
+  return rows.map((row) => row.parts);
+}
+
+function shouldMergeInline(left: PdfRect, right: PdfRect): boolean {
+  const gap = right[0] - left[2];
+  const height = Math.max(rectHeight(left), rectHeight(right), 1);
+  return gap <= Math.max(2, height * 1.5);
+}
+
+function unionRect(a: PdfRect, b: PdfRect): PdfRect {
+  return [
+    Math.min(a[0], b[0]),
+    Math.min(a[1], b[1]),
+    Math.max(a[2], b[2]),
+    Math.max(a[3], b[3]),
+  ];
+}
+
+function rectMidY(rect: PdfRect): number {
+  return (rect[1] + rect[3]) / 2;
+}
+
+function rectHeight(rect: PdfRect): number {
+  return Math.abs(rect[3] - rect[1]);
 }
 
 function roundRect(rect: PdfRect): PdfRect {
   return rect.map((value) => Number(value.toFixed(3))) as PdfRect;
-}
-
-// textContent fallback path: anchors only have line-level transforms (one
-// (x,y) per text item, not per char), so we cluster anchors into visual
-// lines by Y proximity. PDF Y axis grows UPWARD, hence the `b.y - a.y`
-// descending sort. INVARIANT: tolerance is `LINE_Y_TOLERANCE` units —
-// anchors within that vertical band are the same visual line.
-// GOTCHA: this is O(N²) — fine for a single passage's anchors (dozens),
-// not for whole-page clustering.
-function groupAnchorsByY(anchors: ItemAnchor[]): ItemAnchor[][] {
-  const sorted = anchors
-    .slice()
-    .sort((a, b) => b.y - a.y || a.x - b.x || a.itemIndex - b.itemIndex);
-  const groups: Array<{ y: number; anchors: ItemAnchor[] }> = [];
-
-  for (const anchor of sorted) {
-    const group = groups.find(
-      (candidate) => Math.abs(candidate.y - anchor.y) <= LINE_Y_TOLERANCE,
-    );
-    if (group) {
-      group.anchors.push(anchor);
-    } else {
-      groups.push({ y: anchor.y, anchors: [anchor] });
-    }
-  }
-
-  return groups.map((group) => group.anchors.sort((a, b) => a.x - b.x));
-}
-
-function lineRect(
-  anchors: ItemAnchor[],
-  matchStart: number,
-  matchEnd: number,
-): PdfRect | null {
-  const parts = anchors
-    .map((anchor) => anchorPartialRect(anchor, matchStart, matchEnd))
-    .filter((rect): rect is PdfRect => !!rect);
-  if (!parts.length) return null;
-
-  return [
-    Math.min(...parts.map((rect) => rect[0])),
-    Math.min(...parts.map((rect) => rect[1])),
-    Math.max(...parts.map((rect) => rect[2])),
-    Math.max(...parts.map((rect) => rect[3])),
-  ];
 }
 
 // Cuts a partial rect out of one item-level anchor by linearly

@@ -56,10 +56,6 @@ export interface ContextPolicy {
   // --- Annotation write tools ------------------------------------------
   // Char cap on user-selection annotation comments.
   maxAnnotationCommentChars: number;
-  // Per-turn cap on highlights created via `zotero_annotate_passage`. WHY:
-  // bound a model that goes annotation-crazy on a long PDF; the tool returns
-  // a stop-and-summarize error once this is hit.
-  maxFullTextHighlights: number;
   // Char cap on each highlight comment (Chinese reading note ≤ 80 chars).
   maxFullTextHighlightCommentChars: number;
   // Confidence threshold for `pdfLocator.locate` to accept a fuzzy passage
@@ -83,7 +79,6 @@ export const DEFAULT_CONTEXT_POLICY: ContextPolicy = {
   fullTextCacheReadCharLimit: 400_000,
   maxToolIterations: 100,
   maxAnnotationCommentChars: 4000,
-  maxFullTextHighlights: 10,
   maxFullTextHighlightCommentChars: 80,
   minLocateConfidence: 0.85,
 };

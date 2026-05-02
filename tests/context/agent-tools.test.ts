@@ -152,14 +152,10 @@ describe("createZoteroAgentTools", () => {
     expect(saveCount).toBe(0);
   });
 
-  it("enforces the full-text highlight write quota", async () => {
+  it("does not cap full-text highlight writes within one tool session", async () => {
     const session = createZoteroAgentToolSession({
       source,
       itemID: 1,
-      policy: {
-        ...sourcePolicy(),
-        maxFullTextHighlights: 1,
-      },
       getActiveReader: () =>
         readerWithPdfText("First sentence. Second sentence."),
     });
@@ -173,8 +169,8 @@ describe("createZoteroAgentTools", () => {
       comment: "第二条",
     });
 
-    expect(result.output).toContain("Highlight limit reached (1)");
-    expect(saveCount).toBe(1);
+    expect(result.output).toContain("[Saved annotation #99]");
+    expect(saveCount).toBe(2);
   });
 
   it("exposes reader-text and write tools in the default tool set", () => {
@@ -196,6 +192,7 @@ describe("createZoteroAgentTools", () => {
       "zotero_get_reader_pdf_text",
       "zotero_add_annotation_to_selection",
       "zotero_annotate_passage",
+      "zotero_append_to_note",
     ]);
     expect(
       session.tools.find((tool) => tool.name === "zotero_annotate_passage")
@@ -355,6 +352,93 @@ describe("createZoteroAgentTools", () => {
       rangeEnd: 6,
     });
   });
+
+  describe("zotero_append_to_note", () => {
+    it("appends markdown to the child note via the injected callback and reports counts", async () => {
+      const calls: string[] = [];
+      const tools = createZoteroAgentTools({
+        source,
+        itemID: 1,
+        appendToChildNote: async (content) => {
+          calls.push(content);
+          return { noteID: 555, created: false, usedBetterNotes: true };
+        },
+      });
+
+      const tool = tools.find((t) => t.name === "zotero_append_to_note");
+      expect(tool).toBeDefined();
+      expect(tool!.requiresApproval).toBe(true);
+
+      const md = "# 第一章\n\n关键观点 X 和 Y。";
+      const result = await tool!.execute({ content: md });
+
+      expect(calls).toEqual([md]);
+      expect(result.summary).toContain("已追加");
+      expect(result.output).toContain("Note item ID: 555");
+      expect(result.output).toContain("Used Better Notes: yes");
+      expect(result.context?.planMode).toBe("note_write");
+    });
+
+    it("reports note creation when the callback returns created: true", async () => {
+      const tools = createZoteroAgentTools({
+        source,
+        itemID: 1,
+        appendToChildNote: async () => ({
+          noteID: 777,
+          created: true,
+          usedBetterNotes: false,
+        }),
+      });
+      const tool = tools.find((t) => t.name === "zotero_append_to_note");
+      const result = await tool!.execute({ content: "first ever entry" });
+      expect(result.summary).toContain("已新建笔记");
+      expect(result.output).toContain("Created new note: yes");
+    });
+
+    it("returns an error when no item is selected (no child-note target)", async () => {
+      const tools = createZoteroAgentTools({
+        source,
+        itemID: null,
+        appendToChildNote: async () => ({
+          noteID: 1,
+          created: false,
+          usedBetterNotes: false,
+        }),
+      });
+      const tool = tools.find((t) => t.name === "zotero_append_to_note");
+      const result = await tool!.execute({ content: "anything" });
+      expect(result.output).toContain("No Zotero item is currently selected");
+    });
+
+    it("returns an error when content is blank", async () => {
+      const tools = createZoteroAgentTools({
+        source,
+        itemID: 1,
+        appendToChildNote: async () => ({
+          noteID: 1,
+          created: false,
+          usedBetterNotes: false,
+        }),
+      });
+      const tool = tools.find((t) => t.name === "zotero_append_to_note");
+      const result = await tool!.execute({ content: "   \n  " });
+      expect(result.output).toContain("non-empty");
+    });
+
+    it("surfaces callback failures as a tool error rather than throwing", async () => {
+      const tools = createZoteroAgentTools({
+        source,
+        itemID: 1,
+        appendToChildNote: async () => {
+          throw new Error("note locked");
+        },
+      });
+      const tool = tools.find((t) => t.name === "zotero_append_to_note");
+      const result = await tool!.execute({ content: "x" });
+      expect(result.output).toContain("Failed to write");
+      expect(result.output).toContain("note locked");
+    });
+  });
 });
 
 function sourcePolicy() {
@@ -374,7 +458,6 @@ function sourcePolicy() {
     fullTextCacheReadCharLimit: 400_000,
     maxToolIterations: 100,
     maxAnnotationCommentChars: 4000,
-    maxFullTextHighlights: 10,
     maxFullTextHighlightCommentChars: 80,
     minLocateConfidence: 0.85,
   };

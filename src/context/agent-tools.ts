@@ -29,6 +29,17 @@ export interface ToolFactoryOptions {
   fullTextHighlight?: boolean;
   getActiveReader?: () => unknown | null;
   previousMessages?: Message[];
+  // Append-to-child-note callback. WHY a callback (not a direct sidebar
+  // import): keeps the agent-tools module decoupled from sidebar UI state.
+  // The sidebar curries in `doc` and the live `state.itemID` so this tool
+  // always writes to whatever item is currently selected, even if the
+  // tool call lands several turns after session creation. Mirrors the
+  // existing `selectionAnnotation` / `getActiveReader` pattern.
+  appendToChildNote?: (content: string) => Promise<{
+    noteID: number;
+    created: boolean;
+    usedBetterNotes: boolean;
+  }>;
 }
 
 export interface ZoteroAgentToolSession {
@@ -296,6 +307,7 @@ export function createZoteroAgentToolSession(
       },
     },
     createAnnotatePassageTool(policy, highlightSession),
+    createAppendToChildNoteTool(options),
   ];
 
   return { tools, dispose: highlightSession.dispose };
@@ -324,8 +336,6 @@ function readableReaderPdfTextError(session: FullTextHighlightState): string {
 }
 
 interface FullTextHighlightState {
-  canWriteHighlight(): boolean;
-  recordSavedHighlight(): void;
   getOrCreateLocator(): Promise<PdfLocator | null>;
   locatorError(): string;
   dispose(): void;
@@ -339,19 +349,11 @@ interface FullTextHighlightState {
 function createFullTextHighlightState(
   options: ToolFactoryOptions,
 ): FullTextHighlightState {
-  let savedHighlights = 0;
   let locator: PdfLocator | null = null;
   let locatorPromise: Promise<PdfLocator | null> | null = null;
   let locatorError = "";
 
   return {
-    canWriteHighlight() {
-      const policy = options.policy ?? DEFAULT_CONTEXT_POLICY;
-      return savedHighlights < policy.maxFullTextHighlights;
-    },
-    recordSavedHighlight() {
-      savedHighlights += 1;
-    },
     async getOrCreateLocator() {
       if (locator) return locator;
       if (!locatorPromise) {
@@ -504,15 +506,6 @@ function createAnnotatePassageTool(
         return errorResult(
           "zotero_annotate_passage requires a non-empty `comment`.",
         );
-      // INVARIANT: per-turn highlight cap. We surface an *error* result so
-      // the model gets clear feedback in its tool-output stream and pivots
-      // to summarizing instead of looping until maxToolIterations blows.
-      if (!session.canWriteHighlight()) {
-        return errorResult(
-          `Highlight limit reached (${policy.maxFullTextHighlights}). Stop creating annotations and summarize the saved highlights.`,
-        );
-      }
-
       const locator = await session.getOrCreateLocator();
       if (!locator) {
         return errorResult(
@@ -547,7 +540,6 @@ function createAnnotatePassageTool(
         position: { pageIndex: result.pageIndex, rects: result.rects },
       };
       const saved = await Z.Annotations.saveFromJSON(attachment, json);
-      session.recordSavedHighlight();
       return {
         output: [
           `[Saved annotation #${saved.id}]`,
@@ -796,6 +788,83 @@ function zoteroSourceFromMetadata(
 
 function errorResult(output: string): ToolExecutionResult {
   return { output, summary: output };
+}
+
+// `zotero_append_to_note` — model-driven equivalent of the user's "写入笔记"
+// button. Calls into the same `appendAssistantContentToItemNote` path the
+// button uses, so behavior (auto-create child note, Better Notes preference,
+// HTML conversion) stays identical and any future change to the button
+// flows to the model automatically.
+//
+// IMPORTANT — DESCRIPTION CONTRASTS WITH PDF ANNOTATION TOOLS: the model
+// has TWO write surfaces and they target completely different Zotero
+// objects (rich-text child note vs. PDF annotation item). The negative
+// guidance "NOT for PDF highlights" is the cheapest way to prevent
+// mis-routing — observed in user testing where the model conflated the
+// two and offered to use `zotero_annotate_passage` for note writes.
+function createAppendToChildNoteTool(options: ToolFactoryOptions): AgentTool {
+  return {
+    name: "zotero_append_to_note",
+    description:
+      "Append the given Markdown content to the rich-text child note for the current Zotero item — " +
+      "the same note the user's '写入笔记' (Save to Note) button writes to. " +
+      "If the current item has no child note yet, one is created automatically. " +
+      "Use when the user explicitly asks to write/save/add/append content to their note " +
+      "(e.g. '写到笔记里', '加到 MD 笔记', 'save this to my note'). " +
+      "DO NOT use this for PDF highlights or PDF annotations — for those use " +
+      "`zotero_annotate_passage` (passage highlight + comment) or " +
+      "`zotero_add_annotation_to_selection` (selection-based comment) instead. " +
+      "This is a write tool and requires approval unless YOLO mode is enabled.",
+    requiresApproval: true,
+    parameters: objectSchema(
+      {
+        content: stringSchema(
+          "Markdown content to append. Will be converted to Zotero note HTML " +
+            "(via Better Notes if installed, otherwise a built-in converter). " +
+            "Include headings, lists, code blocks as needed.",
+        ),
+      },
+      ["content"],
+    ),
+    execute: async (args) => {
+      if (!options.appendToChildNote) {
+        return errorResult(
+          "Note write is unavailable in this context (no UI callback registered).",
+        );
+      }
+      if (options.itemID == null) {
+        return errorResult(
+          "No Zotero item is currently selected; cannot resolve a child note.",
+        );
+      }
+      const parsed = objectArgs(args);
+      const content = stringArg(parsed, "content").trim();
+      if (!content) {
+        return errorResult(
+          "zotero_append_to_note requires non-empty `content`.",
+        );
+      }
+      try {
+        const result = await options.appendToChildNote(content);
+        return {
+          output: [
+            "[Appended to Zotero child note]",
+            `Note item ID: ${result.noteID}`,
+            `Created new note: ${result.created ? "yes" : "no"}`,
+            `Used Better Notes: ${result.usedBetterNotes ? "yes" : "no"}`,
+            `Appended ${content.length} chars of Markdown.`,
+          ].join("\n"),
+          summary: result.created
+            ? `已新建笔记并写入 ${content.length} 字`
+            : `已追加 ${content.length} 字到笔记 #${result.noteID}`,
+          context: { planMode: "note_write" },
+        };
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        return errorResult(`Failed to write to Zotero child note: ${detail}`);
+      }
+    },
+  };
 }
 
 function objectArgs(args: unknown): Record<string, unknown> {

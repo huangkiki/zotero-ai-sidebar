@@ -37,9 +37,60 @@ interface ZoteroProfileAPI {
   dir: string;
 }
 
+interface ZoteroItemLike {
+  key?: string;
+  libraryID?: number;
+}
+
+interface ZoteroLibraryLike {
+  libraryType?: 'user' | 'group';
+  groupID?: number;
+  id?: number;
+}
+
+interface ZoteroItemsAPI {
+  get(itemID: number): ZoteroItemLike | false;
+  getByLibraryAndKey(libraryID: number, key: string): ZoteroItemLike | false;
+}
+
+interface ZoteroLibrariesAPI {
+  get(libraryID: number): ZoteroLibraryLike | undefined;
+  userLibraryID: number;
+}
+
+interface ZoteroGroupLike {
+  libraryID?: number;
+}
+
+interface ZoteroGroupsAPI {
+  get(groupID: number): ZoteroGroupLike | false | undefined;
+}
+
 interface ZoteroGlobal {
   File: ZoteroFileAPI;
   Profile: ZoteroProfileAPI;
+  Items?: ZoteroItemsAPI;
+  Libraries?: ZoteroLibrariesAPI;
+  Groups?: ZoteroGroupsAPI;
+}
+
+// Cross-machine portable form for cloud sync. WHY this shape: the local
+// `itemID` numeric key is per-database (Zotero assigns them at insert
+// time), so it CANNOT be sent to another machine. The portable identifier
+// is `(libraryType, groupID?, itemKey)` — `itemKey` is the 8-char base32
+// key Zotero sync uses, and it's stable across machines.
+export interface PortableThread {
+  libraryType: 'user' | 'group' | 'global';
+  groupID?: number;
+  itemKey?: string;
+  updatedAt: string;
+  messages: Message[];
+}
+
+export interface ImportThreadsResult {
+  imported: number;
+  unchanged: number;
+  unresolved: number;
 }
 
 const HISTORY_FILE = 'zotero-ai-sidebar-chat-history.json';
@@ -189,4 +240,123 @@ function threadKey(itemID: number | null): string {
 
 function getZotero(): ZoteroGlobal {
   return (globalThis as unknown as { Zotero: ZoteroGlobal }).Zotero;
+}
+
+// ---------------------------------------------------------------------------
+// Cloud sync export/import.
+//
+// Both functions go DIRECTLY to the threads file (not through
+// `saveChatMessages`) to keep bulk import as a single write — going through
+// the public API would write once per thread and serialize on writeQueue.
+// We DO chain on writeQueue so a concurrent in-flight chat save doesn't
+// race with the import.
+
+export async function exportAllThreads(): Promise<PortableThread[]> {
+  const threads = await readThreads();
+  const result: PortableThread[] = [];
+  for (const [key, thread] of Object.entries(threads)) {
+    if (key === 'global' || thread.itemID == null) {
+      result.push({
+        libraryType: 'global',
+        updatedAt: thread.updatedAt,
+        messages: thread.messages,
+      });
+      continue;
+    }
+    const portable = portableFromItemID(thread.itemID);
+    if (!portable) continue; // item no longer in local library — drop
+    result.push({
+      ...portable,
+      updatedAt: thread.updatedAt,
+      messages: thread.messages,
+    });
+  }
+  return result;
+}
+
+export function importAllThreads(
+  portable: PortableThread[],
+): Promise<ImportThreadsResult> {
+  // Chain on writeQueue so we don't race a chat save in flight.
+  let outcome: ImportThreadsResult = { imported: 0, unchanged: 0, unresolved: 0 };
+  writeQueue = writeQueue.catch(() => undefined).then(async () => {
+    const existing = await readThreads();
+    let imported = 0;
+    let unchanged = 0;
+    let unresolved = 0;
+    for (const candidate of portable) {
+      const localKey = resolvePortableKey(candidate);
+      if (!localKey) {
+        unresolved += 1;
+        continue;
+      }
+      const safeMessages = normalizeMessages(candidate.messages);
+      if (safeMessages.length === 0) continue;
+      const existingThread = existing[localKey];
+      // Last-write-wins by updatedAt: only overwrite when the cloud copy is
+      // strictly newer. Equal timestamps treated as "no change" to avoid
+      // gratuitous updates.
+      if (existingThread && existingThread.updatedAt >= candidate.updatedAt) {
+        unchanged += 1;
+        continue;
+      }
+      existing[localKey] = {
+        itemID: candidate.libraryType === 'global' ? null : itemIDForKey(localKey),
+        updatedAt: candidate.updatedAt,
+        messages: safeMessages,
+      };
+      imported += 1;
+    }
+    await writeThreads(existing);
+    outcome = { imported, unchanged, unresolved };
+  });
+  return writeQueue.then(() => outcome);
+}
+
+function portableFromItemID(itemID: number): Omit<PortableThread, 'updatedAt' | 'messages'> | null {
+  const Zotero = getZotero();
+  const item = Zotero.Items?.get(itemID);
+  if (!item || typeof item.key !== 'string' || item.key.length === 0) return null;
+  const libraryID = item.libraryID;
+  if (typeof libraryID !== 'number') return null;
+  const library = Zotero.Libraries?.get(libraryID);
+  if (library?.libraryType === 'group') {
+    // Prefer the group's portable groupID (stable across machines) over the
+    // local libraryID. WHY: libraryID is reassigned per database; groupID
+    // is the global Zotero group identifier.
+    const groupID = typeof library.groupID === 'number' ? library.groupID : undefined;
+    if (typeof groupID !== 'number') return null;
+    return { libraryType: 'group', groupID, itemKey: item.key };
+  }
+  return { libraryType: 'user', itemKey: item.key };
+}
+
+function resolvePortableKey(thread: PortableThread): string | null {
+  if (thread.libraryType === 'global') return 'global';
+  const Zotero = getZotero();
+  if (typeof thread.itemKey !== 'string' || thread.itemKey.length === 0) return null;
+  let libraryID: number | undefined;
+  if (thread.libraryType === 'group') {
+    if (typeof thread.groupID !== 'number') return null;
+    const group = Zotero.Groups?.get(thread.groupID);
+    if (!group || typeof group.libraryID !== 'number') return null;
+    libraryID = group.libraryID;
+  } else {
+    libraryID = Zotero.Libraries?.userLibraryID;
+  }
+  if (typeof libraryID !== 'number') return null;
+  const item = Zotero.Items?.getByLibraryAndKey(libraryID, thread.itemKey);
+  if (!item) return null;
+  // We don't have a public itemID accessor on the item-like; the legacy
+  // storage layout is `item:<itemID>`, so we round-trip via Zotero's
+  // typed shape. The cast is safe — Zotero items always expose `id`.
+  const id = (item as unknown as { id?: number }).id;
+  if (typeof id !== 'number') return null;
+  return `item:${id}`;
+}
+
+function itemIDForKey(threadKey: string): number | null {
+  if (!threadKey.startsWith('item:')) return null;
+  const id = Number(threadKey.slice('item:'.length));
+  return Number.isFinite(id) ? id : null;
 }

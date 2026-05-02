@@ -23,14 +23,27 @@ export interface McpServerSettings {
 export interface ToolSettings {
   webSearchMode: WebSearchMode;
   mcpServers: McpServerSettings[];
+  annotationColorGuide: string;
   // Legacy arXiv MCP shape kept only for migration/back-compat. The current
   // arXiv reader is a fixed local AgentTool, not a user-configured MCP.
   arxivMcp: ArxivMcpSettings;
 }
 
+export const DEFAULT_ANNOTATION_COLOR_GUIDE = [
+  'PDF 注释颜色预设（写入 zotero_annotate_passage 时使用）：',
+  '- #ffd400 黄色：研究背景 / 动机 / 关键上下文。',
+  '- #ff6666 红色：核心问题 / 方法空白 / 关键限制 / 值得质疑处。',
+  '- #2ea8e5 蓝色：任务定义 / 问题设定 / 评价协议。',
+  '- #5fb236 绿色：方法模块 / 模型结构 / 算法机制。',
+  '- #a28ae5 紫色：数据集 / 数据引擎 / 实验设置。',
+  '- #f19837 橙色：实验结果 / 消融 / 定量证据。',
+  '只能使用上面列出的 hex；如果类别不明确，不要强行分彩色，省略 color 使用 Zotero 默认色。',
+].join('\n');
+
 export const DEFAULT_TOOL_SETTINGS: ToolSettings = {
   webSearchMode: 'disabled',
   mcpServers: [],
+  annotationColorGuide: DEFAULT_ANNOTATION_COLOR_GUIDE,
   arxivMcp: {
     enabled: false,
     serverLabel: 'arxiv',
@@ -43,6 +56,7 @@ export const DEFAULT_TOOL_SETTINGS: ToolSettings = {
 const KEY = 'extensions.zotero-ai-sidebar.toolSettings';
 const LABEL_MAX_LENGTH = 64;
 const MAX_MCP_SERVERS = 8;
+const MAX_ANNOTATION_COLOR_GUIDE_CHARS = 4000;
 
 export function loadToolSettings(prefs: PrefsStore): ToolSettings {
   const raw = prefs.get(KEY);
@@ -73,6 +87,9 @@ export function normalizeToolSettings(value: unknown): ToolSettings {
       ? input.webSearchMode
       : DEFAULT_TOOL_SETTINGS.webSearchMode,
     mcpServers: normalizeMcpServers(input.mcpServers),
+    annotationColorGuide: normalizeAnnotationColorGuide(
+      input.annotationColorGuide,
+    ),
     arxivMcp: {
       enabled: rawArxiv.enabled === true,
       serverLabel: normalizeServerLabel(rawArxiv.serverLabel),
@@ -85,6 +102,11 @@ export function normalizeToolSettings(value: unknown): ToolSettings {
         rawArxiv.requireApproval === 'always' ? 'always' : 'never',
     },
   };
+}
+
+function normalizeAnnotationColorGuide(value: unknown): string {
+  const guide = stringValue(value).slice(0, MAX_ANNOTATION_COLOR_GUIDE_CHARS);
+  return guide || DEFAULT_ANNOTATION_COLOR_GUIDE;
 }
 
 function normalizeMcpServers(value: unknown): McpServerSettings[] {
