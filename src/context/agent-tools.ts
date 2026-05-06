@@ -821,7 +821,11 @@ function createAppendToChildNoteTool(options: ToolFactoryOptions): AgentTool {
         content: stringSchema(
           "Markdown content to append. Will be converted to Zotero note HTML " +
             "(via Better Notes if installed, otherwise a built-in converter). " +
-            "Include headings, lists, code blocks as needed.",
+            "Include headings, lists, code blocks as needed. " +
+            "For math: write LaTeX source wrapped in $...$ (inline) or $$...$$ (display); " +
+            "e.g. $\\mathbb{E}_{x}[f(x)]$. \\(...\\) and \\[...\\] are also accepted and " +
+            "will be normalized. Do NOT pre-render math to Unicode (e.g. don't write 'θ' " +
+            "for \\theta inside math) — keep it as LaTeX source so the note can typeset it.",
         ),
       },
       ["content"],

@@ -35,6 +35,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.91.1",
+    "katex": "^0.16.45",
     "openai": "^6.35.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",

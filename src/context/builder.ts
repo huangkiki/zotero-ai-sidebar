@@ -37,7 +37,10 @@ export interface BuiltContext {
 
 const SYSTEM_BASE =
   'You are a research assistant helping the user understand academic papers. ' +
-  'Cite the paper when answering questions about its content. Be precise and concise.';
+  'Cite the paper when answering questions about its content. Be precise and concise. ' +
+  'For math, write LaTeX inside $...$ (inline) or $$...$$ (display). ' +
+  'Do NOT wrap math formulas in backticks (`) — backticks are for code, the chat ' +
+  'and note renderers typeset math automatically when it appears in plain text.';
 
 export async function buildContext(
   source: ContextSource,

@@ -50,6 +50,12 @@ import {
   matchingSlashCommands,
   type SlashCommand,
 } from "../ui/slash-commands";
+import {
+  findNextMathRegion,
+  renderMathInto,
+  type MathRenderMode,
+} from "../ui/math";
+import { serializeSelectionAsMarkdown } from "../ui/selection-serialize";
 
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
 const COLUMN_ID = "zai-column";
@@ -103,6 +109,9 @@ interface WindowSidebarState {
   noteAutosaveTimer?: number;
   noteAutosavePromise?: Promise<void>;
   noteEditorCleanup?: () => void;
+  copyHandlerCleanup?: () => void;
+  selectionMenuCleanup?: () => void;
+  lastCopySelection?: { text: string; updatedAt: number };
   toggleButton?: Element;
   floatingButton?: HTMLElement;
   selectionMonitorID?: number;
@@ -391,9 +400,15 @@ function renderToolbar(doc: Document, mount: HTMLElement, state: PanelState) {
       ? "复制当前对话为 Markdown（含工具上下文和 PDF 片段）"
       : "复制当前对话为 Markdown（只含论文介绍和对话）";
     copyAll.addEventListener("click", () => {
+      const markdown = formatConversationMarkdown(
+        state,
+        state.copyDebugContext,
+      );
       void copyToClipboard(
         doc,
-        formatConversationMarkdown(state, state.copyDebugContext),
+        markdown,
+        undefined,
+        markdownToClipboardHTML(doc, markdown),
       );
       flashButton(copyAll, "已复制");
     });
@@ -3451,9 +3466,12 @@ function bubble(
   const actions = el(doc, "div", "bubble-actions");
   const copy = buttonEl(doc, "复制");
   copy.addEventListener("click", () => {
+    const markdown = messageToClipboard(message, state.copyDebugContext);
     void copyToClipboard(
       doc,
-      messageToClipboard(message, state.copyDebugContext),
+      markdown,
+      undefined,
+      markdownToClipboardHTML(doc, markdown),
     );
     flashButton(copy, "已复制");
   });
@@ -3760,6 +3778,7 @@ function initializeZoteroNoteEditor(
     const instance = editor.getCurrentInstance?.();
     if (instance?._iframeWindow) {
       installZoteroNoteEditorKeySave(editor, status, saveButton);
+      ensureZoteroNoteEditorKatexCSS(editor);
       void focusZoteroNoteEditor(editor);
       return;
     }
@@ -3831,6 +3850,69 @@ function installZoteroNoteEditorKeySave(
   };
   iframeWindow.addEventListener("keydown", saveOnKeyDown, true);
   (editor as Element).setAttribute("data-zai-save-key", "true");
+}
+
+function ensureAllZoteroNoteEditorKatexCSS(doc: Document): void {
+  const editors = Array.from(
+    doc.querySelectorAll("note-editor"),
+  ) as ZoteroNoteEditorElement[];
+  let injected = 0;
+  for (const editor of editors) {
+    if (ensureZoteroNoteEditorKatexCSS(editor)) injected++;
+  }
+  debugZai("note-editor-katex-css:scan", {
+    editors: editors.length,
+    injected,
+  });
+}
+
+function ensureZoteroNoteEditorKatexCSS(
+  editor: ZoteroNoteEditorElement,
+): boolean {
+  const iframeDoc = editor.getCurrentInstance?.()?._iframeWindow?.document;
+  if (!iframeDoc) return false;
+  ensureKatexCSSInDocument(iframeDoc);
+  return true;
+}
+
+function ensureKatexCSSInDocument(doc: Document): void {
+  const root = doc.head ?? doc.documentElement;
+  if (!root) return;
+
+  if (!doc.getElementById("zai-katex-css-link")) {
+    const link = doc.createElement("link");
+    link.id = "zai-katex-css-link";
+    link.rel = "stylesheet";
+    link.href = `chrome://${addon.data.config.addonRef}/content/katex/katex.min.css`;
+    root.append(link);
+  }
+
+  if (!doc.getElementById("zai-katex-css-fallback")) {
+    const style = doc.createElement("style");
+    style.id = "zai-katex-css-fallback";
+    style.textContent = `
+.katex .katex-mathml {
+  position: absolute;
+  clip: rect(1px, 1px, 1px, 1px);
+  padding: 0;
+  border: 0;
+  height: 1px;
+  width: 1px;
+  overflow: hidden;
+}
+.katex-display {
+  display: block;
+  margin: 1em 0;
+  text-align: center;
+}
+.katex-display > .katex {
+  display: block;
+  text-align: center;
+  white-space: nowrap;
+}
+`;
+    root.append(style);
+  }
 }
 
 function closeZoteroNoteWindow(
@@ -4453,7 +4535,13 @@ function assistantContentToNoteHTML(doc: Document, content: string): string {
   root.append(title);
 
   const body = doc.createElement("div");
-  renderMarkdownInto(body, content.trim());
+  // Notes path: keep $..$ / $$..$$ as plain text. Zotero's note editor
+  // (and Better Notes' ProseMirror schema) strips KaTeX-produced HTML and
+  // MathML wrappers; the only math syntax that consistently round-trips
+  // is the LaTeX source inside dollar delimiters, which Better Notes
+  // re-renders via its own KaTeX pass. See the comment in
+  // appendInlineMarkdown above for the failure modes we'd hit otherwise.
+  renderMarkdownInto(body, content.trim(), "source");
   while (body.firstChild) root.appendChild(body.firstChild);
   return String(root.innerHTML);
 }
@@ -4461,15 +4549,37 @@ function assistantContentToNoteHTML(doc: Document, content: string): string {
 async function insertHTMLIntoNote(
   note: Zotero.Item,
   html: string,
+  forceMetadata = false,
 ): Promise<boolean> {
   const betterNotesInsert = betterNotesNoteInsert();
+  const before = note.getNote?.() || "";
+  debugZai("note-insert:start", {
+    noteID: note.id,
+    forceMetadata,
+    betterNotes: Boolean(betterNotesInsert),
+    before: textDebugInfo(before, 120),
+    beforeHTML: htmlStringDebugInfo(before),
+    html: htmlStringDebugInfo(html),
+  });
   if (betterNotesInsert) {
-    await betterNotesInsert(note, html, -1, false);
+    await betterNotesInsert(note, html, -1, forceMetadata);
+    const after = note.getNote?.() || "";
+    debugZai("note-insert:better-notes-done", {
+      noteID: note.id,
+      after: textDebugInfo(after, 120),
+      afterHTML: htmlStringDebugInfo(after),
+    });
     return true;
   }
 
   note.setNote(appendHTMLToExistingNote(note.getNote() || "", html));
   await note.saveTx();
+  const after = note.getNote?.() || "";
+  debugZai("note-insert:zotero-done", {
+    noteID: note.id,
+    after: textDebugInfo(after, 120),
+    afterHTML: htmlStringDebugInfo(after),
+  });
   return false;
 }
 
@@ -4886,7 +4996,11 @@ function renderToolTrace(
 // NOT supported: tables, HR, image syntax, nested lists, setext headings.
 // REF: Claudian's MessageRenderer (similar minimal subset for the same
 //      streaming reasons); CommonMark spec we deliberately don't follow.
-function renderMarkdownInto(target: HTMLElement, markdown: string) {
+function renderMarkdownInto(
+  target: HTMLElement,
+  markdown: string,
+  mathMode: MathRenderMode = "html",
+) {
   const doc = target.ownerDocument!;
   target.replaceChildren();
   const normalized = markdown.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
@@ -4899,8 +5013,15 @@ function renderMarkdownInto(target: HTMLElement, markdown: string) {
   const flushParagraph = () => {
     if (!paragraph.length) return;
     const p = doc.createElement("p");
-    appendInlineMarkdown(p, paragraph.join(" "));
-    target.append(p);
+    appendInlineMarkdown(p, paragraph.join(" "), mathMode);
+    // Display math in source mode emits a block element. Nesting that inside
+    // <p> is invalid HTML and note parsers may drop or duplicate it. Hoist
+    // block children up to `target` and emit surrounding inline text as <p>'s.
+    if (p.querySelector(":scope > pre, :scope > div.math-display")) {
+      flushParagraphWithBlockHoist(target, p);
+    } else {
+      target.append(p);
+    }
     paragraph = [];
   };
 
@@ -4916,7 +5037,7 @@ function renderMarkdownInto(target: HTMLElement, markdown: string) {
       target.append(list);
     }
     const li = doc.createElement("li");
-    appendInlineMarkdown(li, text);
+    appendInlineMarkdown(li, text, mathMode);
     list.append(li);
   };
 
@@ -4964,7 +5085,11 @@ function renderMarkdownInto(target: HTMLElement, markdown: string) {
       flushParagraph();
       flushList();
       const heading = doc.createElement(`h${headingLevel}`);
-      appendInlineMarkdown(heading, line.slice(headingLevel + 1).trim());
+      appendInlineMarkdown(
+        heading,
+        line.slice(headingLevel + 1).trim(),
+        mathMode,
+      );
       target.append(heading);
       continue;
     }
@@ -4985,7 +5110,7 @@ function renderMarkdownInto(target: HTMLElement, markdown: string) {
       flushParagraph();
       flushList();
       const quote = doc.createElement("blockquote");
-      appendInlineMarkdown(quote, line.slice(2));
+      appendInlineMarkdown(quote, line.slice(2), mathMode);
       target.append(quote);
       continue;
     }
@@ -4997,6 +5122,56 @@ function renderMarkdownInto(target: HTMLElement, markdown: string) {
   flushParagraph();
 }
 
+// Walks `<p>`'s children, splitting at direct child blocks so display
+// math (or any other block emitted by inline rendering) sits at block
+// level instead of nested inside <p>. We preserve a fresh <p> only for
+// runs of inline content; empty runs are dropped.
+function flushParagraphWithBlockHoist(
+  target: HTMLElement,
+  p: HTMLElement,
+): void {
+  const doc = target.ownerDocument!;
+  let buffer: HTMLElement = doc.createElement("p");
+  const flushBuffer = () => {
+    if (buffer.childNodes.length > 0) target.append(buffer);
+    buffer = doc.createElement("p");
+  };
+  let preceedingPreFlushed = false;
+  for (const child of Array.from(p.childNodes) as Node[]) {
+    if (isHoistableInlineRenderBlock(child)) {
+      flushBuffer();
+      target.append(child);
+      preceedingPreFlushed = true;
+    } else {
+      // After hoisting a <pre>, the joined-paragraph mechanic leaves a
+      // single leading space on the next text node (paragraph.join(" ")
+      // glue). Trim it so the resulting <p> doesn't start with " ".
+      if (
+        preceedingPreFlushed &&
+        buffer.childNodes.length === 0 &&
+        child.nodeType === 3
+      ) {
+        const stripped = (child.textContent ?? "").replace(/^\s+/, "");
+        if (stripped) buffer.append(doc.createTextNode(stripped));
+        preceedingPreFlushed = false;
+      } else {
+        buffer.append(child);
+        preceedingPreFlushed = false;
+      }
+    }
+  }
+  flushBuffer();
+}
+
+function isHoistableInlineRenderBlock(node: Node): boolean {
+  if (node.nodeType !== 1) return false;
+  const el = node as HTMLElement;
+  return (
+    el.tagName === "PRE" ||
+    (el.tagName === "DIV" && el.classList.contains("math-display"))
+  );
+}
+
 // Inline markdown: `code`, **bold**, [label](url).
 // Streaming-safe pattern: at each step we look for the EARLIEST opening
 // delimiter; if its closing partner is not yet in the buffer, we emit the
@@ -5005,17 +5180,36 @@ function renderMarkdownInto(target: HTMLElement, markdown: string) {
 // `<strong>` or `<a>` (those would have to be unwound on the next call).
 // INVARIANT: every emitted node is either createTextNode or createElement
 // with textContent; no innerHTML on any path.
-function appendInlineMarkdown(parent: HTMLElement, text: string) {
+function appendInlineMarkdown(
+  parent: HTMLElement,
+  text: string,
+  mathMode: MathRenderMode = "html",
+) {
   const doc = parent.ownerDocument!;
   let cursor = 0;
 
   while (cursor < text.length) {
+    // Math is checked first because its delimiters can legitimately contain
+    // characters that would otherwise be parsed as bold/link/code (e.g.
+    // `\[ a [b] \]`). Streaming-safe: findNextMathRegion returns null when
+    // the closing delimiter has not arrived yet, so unclosed math falls
+    // through to plain-text emission and is retried on the next chunk.
+    //
+    // All three modes (html / mathml / source) need detection so the
+    // delimiters get consumed and the inner LaTeX is normalized. The
+    // mode only affects the OUTPUT in renderMathInto: KaTeX HTML for
+    // chat, KaTeX MathML for older note paths, or a plain
+    // <span class="math">$..$</span> wrapper that Better Notes recognizes.
+    const math = findNextMathRegion(text, cursor);
     const codeStart = text.indexOf("`", cursor);
     const boldStart = text.indexOf("**", cursor);
     const linkStart = text.indexOf("[", cursor);
-    const starts = [codeStart, boldStart, linkStart].filter(
-      (index) => index >= 0,
-    );
+    const starts = [
+      math ? math.start : -1,
+      codeStart,
+      boldStart,
+      linkStart,
+    ].filter((index) => index >= 0);
     const next = starts.length ? Math.min(...starts) : -1;
 
     if (next < 0) {
@@ -5026,14 +5220,35 @@ function appendInlineMarkdown(parent: HTMLElement, text: string) {
       parent.append(doc.createTextNode(text.slice(cursor, next)));
     }
 
+    if (math && next === math.start) {
+      renderMathInto(parent, math, mathMode);
+      cursor = math.end;
+      continue;
+    }
+
     if (next === codeStart) {
       const end = text.indexOf("`", next + 1);
       if (end < 0) {
         parent.append(doc.createTextNode(text.slice(next)));
         return;
       }
+      const codeContent = text.slice(next + 1, end);
+      // ESCAPE HATCH: models sometimes wrap a math formula in backticks
+      // (`$$ x $$` or `$x$`), which would normally render as inline code
+      // and leave the dollar delimiters visible. If the entire backticked
+      // body — after trimming — is a single closed math region, treat
+      // the author's intent as math and render accordingly. Genuine
+      // "show LaTeX source" cases should use a fenced code block, which
+      // is handled at the block level and never reaches here.
+      const trimmed = codeContent.trim();
+      const inner = findNextMathRegion(trimmed, 0);
+      if (inner && inner.start === 0 && inner.end === trimmed.length) {
+        renderMathInto(parent, inner, mathMode);
+        cursor = end + 1;
+        continue;
+      }
       const code = doc.createElement("code");
-      code.textContent = text.slice(next + 1, end);
+      code.textContent = codeContent;
       parent.append(code);
       cursor = end + 1;
       continue;
@@ -5046,7 +5261,7 @@ function appendInlineMarkdown(parent: HTMLElement, text: string) {
         return;
       }
       const strong = doc.createElement("strong");
-      appendInlineMarkdown(strong, text.slice(next + 2, end));
+      appendInlineMarkdown(strong, text.slice(next + 2, end), mathMode);
       parent.append(strong);
       cursor = end + 2;
       continue;
@@ -5065,7 +5280,7 @@ function appendInlineMarkdown(parent: HTMLElement, text: string) {
     anchor.href = link.href;
     anchor.target = "_blank";
     anchor.rel = "noreferrer";
-    appendInlineMarkdown(anchor, link.label);
+    appendInlineMarkdown(anchor, link.label, mathMode);
     parent.append(anchor);
     cursor = link.end;
   }
@@ -5134,11 +5349,45 @@ function findPreviousUserIndex(messages: Message[], fromIndex: number): number {
   return -1;
 }
 
-async function copyToClipboard(doc: Document, text: string) {
+let programmaticClipboardWrite = false;
+let pendingSidebarCopy: { text: string; label: string; html?: string } | null =
+  null;
+
+async function copyToClipboard(
+  doc: Document,
+  text: string,
+  debugLabel?: string,
+  html?: string,
+) {
+  if (debugLabel) {
+    debugZai(`${debugLabel}: clipboard-write:start`, {
+      text: textDebugInfo(text),
+      html: html ? htmlStringDebugInfo(html) : null,
+    });
+  }
+  if (html) {
+    const copiedRich = copyRichTextViaExecCommand(doc, text, html, debugLabel);
+    if (copiedRich) return;
+  }
   const clipboard = doc.defaultView?.navigator.clipboard;
   if (clipboard?.writeText) {
-    await clipboard.writeText(text);
-    return;
+    try {
+      await clipboard.writeText(text);
+      if (debugLabel) {
+        debugZai(`${debugLabel}: clipboard-write:writeText-ok`, {
+          length: text.length,
+        });
+      }
+      return;
+    } catch (err) {
+      // Zotero/Firefox chrome documents can expose navigator.clipboard but
+      // still reject writeText(). Fall through to the execCommand path.
+      if (debugLabel) {
+        debugZai(`${debugLabel}: clipboard-write:writeText-failed`, {
+          error: errorMessage(err),
+        });
+      }
+    }
   }
 
   const textarea = doc.createElement("textarea");
@@ -5146,11 +5395,69 @@ async function copyToClipboard(doc: Document, text: string) {
   textarea.style.position = "fixed";
   textarea.style.opacity = "0";
   const root = doc.body ?? doc.documentElement;
-  if (!root) return;
+  if (!root) {
+    if (debugLabel) debugZai(`${debugLabel}: clipboard-write:no-root`);
+    return;
+  }
   root.append(textarea);
   textarea.select();
-  doc.execCommand("copy");
-  textarea.remove();
+  programmaticClipboardWrite = true;
+  try {
+    const ok = doc.execCommand("copy");
+    if (debugLabel) {
+      debugZai(`${debugLabel}: clipboard-write:execCommand`, { ok });
+    }
+  } finally {
+    programmaticClipboardWrite = false;
+    textarea.remove();
+  }
+}
+
+function copyRichTextViaExecCommand(
+  doc: Document,
+  text: string,
+  html: string,
+  debugLabel?: string,
+): boolean {
+  const root = doc.body ?? doc.documentElement;
+  if (!root) {
+    if (debugLabel) debugZai(`${debugLabel}: clipboard-write:no-root`);
+    return false;
+  }
+
+  let wrote = false;
+  const onCopy = (event: ClipboardEvent) => {
+    if (!event.clipboardData) return;
+    event.clipboardData.setData("text/plain", text);
+    event.clipboardData.setData("text/html", html);
+    wrote = true;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+  };
+
+  const textarea = doc.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  root.append(textarea);
+  textarea.select();
+  doc.addEventListener("copy", onCopy, true);
+  programmaticClipboardWrite = true;
+  try {
+    const ok = doc.execCommand("copy");
+    if (debugLabel) {
+      debugZai(`${debugLabel}: clipboard-write:rich-execCommand`, {
+        ok,
+        wrote,
+      });
+    }
+    return ok && wrote;
+  } finally {
+    programmaticClipboardWrite = false;
+    doc.removeEventListener("copy", onCopy, true);
+    textarea.remove();
+  }
 }
 
 function flashButton(button: HTMLButtonElement, text: string) {
@@ -5703,9 +6010,17 @@ export function registerSidebarForWindow(win: Window) {
   link.rel = "stylesheet";
   link.href = `chrome://${addon.data.config.addonRef}/content/sidebar.css`;
 
+  const katexLink = doc.createElementNS(XHTML_NS, "link") as HTMLLinkElement;
+  katexLink.rel = "stylesheet";
+  katexLink.href = `chrome://${addon.data.config.addonRef}/content/katex/katex.min.css`;
+
   const noteLink = doc.createElementNS(XHTML_NS, "link") as HTMLLinkElement;
   noteLink.rel = "stylesheet";
   noteLink.href = `chrome://${addon.data.config.addonRef}/content/sidebar.css`;
+
+  const noteKatexLink = doc.createElementNS(XHTML_NS, "link") as HTMLLinkElement;
+  noteKatexLink.rel = "stylesheet";
+  noteKatexLink.href = `chrome://${addon.data.config.addonRef}/content/katex/katex.min.css`;
 
   const mount = doc.createElementNS(XHTML_NS, "div") as HTMLElement;
   mount.id = ROOT_ID;
@@ -5715,8 +6030,8 @@ export function registerSidebarForWindow(win: Window) {
   noteMount.id = NOTE_ROOT_ID;
   noteMount.className = "zai-note-root";
 
-  noteColumn.append(noteLink, noteMount);
-  column.append(link, mount);
+  noteColumn.append(noteLink, noteKatexLink, noteMount);
+  column.append(link, katexLink, mount);
   parent.insertBefore(noteSplitter, contextPane.nextSibling);
   parent.insertBefore(noteColumn, noteSplitter.nextSibling);
   parent.insertBefore(splitter, noteColumn.nextSibling);
@@ -5738,7 +6053,732 @@ export function registerSidebarForWindow(win: Window) {
   installFloatingToggle(win, state);
   patchItemSelection(win, state);
   startSelectionMonitor(win, state);
+  installSidebarCopyHandler(win, state);
+  installSidebarSelectionMenu(win, state);
   renderWindowSidebar(win);
+}
+
+// Zotero's main window keybindings intercept Ctrl/Cmd+C before any native
+// `copy` event fires inside our XHTML sidebar — pressing the shortcut
+// triggers Zotero's "copy selected items" instead of copying the text the
+// user highlighted in our chat. Hook a capture-phase keydown at the window
+// level: if the current selection lives inside our column or noteColumn,
+// write its text to the clipboard ourselves and stop the event so Zotero
+// doesn't override it. We deliberately don't touch other Ctrl+C presses
+// (selection in items list, search bar, etc.) — the column.contains check
+// keeps this scoped.
+function installSidebarCopyHandler(
+  win: Window,
+  sidebar: WindowSidebarState,
+): void {
+  const doc = win.document;
+  const installedWindows = new WeakSet<Window>();
+  const installedTargets: EventTarget[] = [];
+  const addTarget = (
+    target: EventTarget | null | undefined,
+    sourceWin: Window,
+  ) => {
+    if (!target || installedTargets.includes(target)) return;
+    const keydownHandler = (event: KeyboardEvent) => {
+      const isCopyCombo =
+        (event.ctrlKey || event.metaKey) &&
+        !event.shiftKey &&
+        !event.altKey &&
+        event.key.toLowerCase() === "c";
+      if (!isCopyCombo) return;
+      copySidebarSelectionFromEvent(
+        doc,
+        win,
+        sourceWin,
+        sidebar,
+        event,
+        "copy-keydown",
+      );
+    };
+    const copyHandler = (event: ClipboardEvent) => {
+      handleSidebarCopyEvent(doc, win, sourceWin, sidebar, event);
+    };
+    const commandHandler = (event: Event) => {
+      if (!isCopyCommandEvent(event)) return;
+      copySidebarSelectionFromEvent(
+        doc,
+        win,
+        sourceWin,
+        sidebar,
+        event,
+        "copy-command",
+      );
+    };
+
+    target.addEventListener("keydown", keydownHandler as EventListener, true);
+    target.addEventListener("copy", copyHandler as EventListener, true);
+    target.addEventListener("command", commandHandler, true);
+    installedTargets.push(target);
+    cleanupCallbacks.push(() => {
+      target.removeEventListener(
+        "keydown",
+        keydownHandler as EventListener,
+        true,
+      );
+      target.removeEventListener("copy", copyHandler as EventListener, true);
+      target.removeEventListener("command", commandHandler, true);
+    });
+  };
+  const addWindow = (targetWin: Window | null | undefined) => {
+    if (!targetWin || installedWindows.has(targetWin)) return;
+    installedWindows.add(targetWin);
+    addTarget(targetWin, targetWin);
+    try {
+      addTarget(targetWin.document, targetWin);
+      addTarget(targetWin.document.getElementById("cmd_copy"), targetWin);
+      addTarget(targetWin.document.getElementById("key_copy"), targetWin);
+      addTarget(targetWin.document.getElementById("editMenuCommands"), targetWin);
+      addTarget(targetWin.document.getElementById("editMenuKeys"), targetWin);
+    } catch {
+      // Cross-origin / destroyed frame; ignore.
+    }
+  };
+  const cleanupCallbacks: Array<() => void> = [];
+  const cacheSelection = () => {
+    const sel = win.getSelection();
+    if (!selectionBelongsToSidebar(sel, sidebar)) return;
+    const text = serializeSidebarSelectionForClipboard(sel);
+    if (!text) return;
+    cacheSidebarSelection(sidebar, text, "selection-cache");
+  };
+  const installLikelyFrameWindows = () => {
+    addWindow(win);
+    installDescendantFrameCopyHandlers(win, addWindow);
+    const reader = getActiveReader(win) as any;
+    addWindow(reader?._internalReader?._primaryView?._iframeWindow);
+    addWindow(reader?._internalReader?._secondaryView?._iframeWindow);
+    addWindow(reader?._iframeWindow);
+    const noteEditor = findActiveNoteEditor(sidebar);
+    addWindow(noteEditor?.getCurrentInstance?.()?._iframeWindow);
+  };
+  installLikelyFrameWindows();
+  const frameMonitorID = win.setInterval(installLikelyFrameWindows, 500);
+  doc.addEventListener("selectionchange", cacheSelection, true);
+  sidebar.column.addEventListener("mouseup", cacheSelection, true);
+  sidebar.column.addEventListener("keyup", cacheSelection, true);
+  sidebar.noteColumn.addEventListener("mouseup", cacheSelection, true);
+  sidebar.noteColumn.addEventListener("keyup", cacheSelection, true);
+  cleanupCallbacks.push(() => {
+    win.clearInterval(frameMonitorID);
+    doc.removeEventListener("selectionchange", cacheSelection, true);
+    sidebar.column.removeEventListener("mouseup", cacheSelection, true);
+    sidebar.column.removeEventListener("keyup", cacheSelection, true);
+    sidebar.noteColumn.removeEventListener("mouseup", cacheSelection, true);
+    sidebar.noteColumn.removeEventListener("keyup", cacheSelection, true);
+  });
+  sidebar.copyHandlerCleanup = () => {
+    for (const cleanup of cleanupCallbacks.splice(0)) cleanup();
+  };
+}
+
+function handleSidebarCopyEvent(
+  doc: Document,
+  topWin: Window,
+  sourceWin: Window,
+  sidebar: WindowSidebarState,
+  event: ClipboardEvent,
+): void {
+  if (pendingSidebarCopy) {
+    if (!event.clipboardData) return;
+    event.clipboardData.setData("text/plain", pendingSidebarCopy.text);
+    if (pendingSidebarCopy.html) {
+      event.clipboardData.setData("text/html", pendingSidebarCopy.html);
+    }
+    debugZai(
+      `${pendingSidebarCopy.label}: clipboardData-set`,
+      {
+        text: textDebugInfo(pendingSidebarCopy.text),
+        html: pendingSidebarCopy.html
+          ? htmlStringDebugInfo(pendingSidebarCopy.html)
+          : null,
+      },
+    );
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    return;
+  }
+  if (programmaticClipboardWrite) return;
+  const sel = topWin.getSelection();
+  if (!selectionBelongsToSidebar(sel, sidebar)) return;
+  if (editableTargetHasOwnSelection(event.target, sel)) return;
+  const text = serializeSidebarSelection(sel, "copy-event");
+  if (!text || !event.clipboardData) return;
+  cacheSidebarSelection(sidebar, text, "copy-event");
+  const html = markdownToClipboardHTML(doc, text);
+  event.clipboardData.setData("text/plain", text);
+  event.clipboardData.setData("text/html", html);
+  debugZai("copy-event: clipboardData-set", textDebugInfo(text));
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
+  if (sourceWin !== topWin) {
+    void copyToClipboard(doc, text, "copy-event:ensure", html);
+  }
+}
+
+function installDescendantFrameCopyHandlers(
+  rootWin: Window,
+  addWindow: (win: Window | null | undefined) => void,
+): void {
+  const frames = rootWin.frames;
+  for (let i = 0; i < frames.length; i++) {
+    let frame: Window | null = null;
+    try {
+      frame = frames.item(i);
+    } catch {
+      frame = null;
+    }
+    if (!frame) continue;
+    addWindow(frame);
+    installDescendantFrameCopyHandlers(frame, addWindow);
+  }
+}
+
+function copySidebarSelectionFromEvent(
+  doc: Document,
+  topWin: Window,
+  sourceWin: Window,
+  sidebar: WindowSidebarState,
+  event: Event,
+  label: string,
+): boolean {
+  const selectionResult = sidebarClipboardText(topWin, sourceWin, sidebar);
+  if (!selectionResult) return false;
+  const { text, fromCache } = selectionResult;
+  if (editableTargetHasOwnSelection(event.target, topWin.getSelection())) {
+    return false;
+  }
+
+  debugZai(`${label}: intercepted`, {
+    fromCache,
+    sourceIsTop: sourceWin === topWin,
+    target: eventTargetDebugInfo(event.target),
+    text: textDebugInfo(text, 160),
+  });
+  cacheSidebarSelection(sidebar, text, label);
+
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
+
+  let copied = false;
+  const html = markdownToClipboardHTML(doc, text);
+  pendingSidebarCopy = { text, label, html };
+  try {
+    copied = doc.execCommand("copy");
+    debugZai(`${label}: execCommand`, { copied });
+  } catch (err) {
+    debugZai(`${label}: execCommand-failed`, {
+      error: errorMessage(err),
+    });
+  } finally {
+    pendingSidebarCopy = null;
+  }
+
+  // Even when execCommand reports success, Zotero/Firefox chrome can still
+  // leave the native KaTeX/selection text on the clipboard. The async write
+  // path is known to work from the context-menu copy action, so use it as a
+  // final authoritative overwrite for keyboard/command copies.
+  void copyToClipboard(doc, text, `${label}:ensure`, html);
+  return true;
+}
+
+function sidebarClipboardText(
+  topWin: Window,
+  sourceWin: Window,
+  sidebar: WindowSidebarState,
+): { text: string; fromCache: boolean } | null {
+  const topSelection = topWin.getSelection();
+  if (selectionBelongsToSidebar(topSelection, sidebar)) {
+    const text = serializeSidebarSelection(topSelection, "copy-active-selection");
+    return text ? { text, fromCache: false } : null;
+  }
+
+  if (hasNonCollapsedSelection(sourceWin) || hasNonCollapsedSelection(topWin)) {
+    return null;
+  }
+  if (sourceWin === topWin) return null;
+
+  const cached = sidebar.lastCopySelection;
+  if (!cached || Date.now() - cached.updatedAt > 10000) return null;
+  return { text: cached.text, fromCache: true };
+}
+
+function hasNonCollapsedSelection(win: Window): boolean {
+  try {
+    const sel = win.getSelection();
+    return Boolean(sel && !sel.isCollapsed && sel.rangeCount > 0);
+  } catch {
+    return false;
+  }
+}
+
+function cacheSidebarSelection(
+  sidebar: WindowSidebarState,
+  text: string,
+  label: string,
+): void {
+  const previous = sidebar.lastCopySelection;
+  sidebar.lastCopySelection = { text, updatedAt: Date.now() };
+  if (!previous || previous.text !== text || Date.now() - previous.updatedAt > 1000) {
+    debugZai(`${label}: cached`, textDebugInfo(text, 120));
+  }
+}
+
+function serializeSidebarSelectionForClipboard(selection: Selection): string {
+  return serializeSelectionAsMarkdown(selection) || selection.toString();
+}
+
+function isCopyCommandEvent(event: Event): boolean {
+  const target = event.target;
+  const id = eventTargetId(target).toLowerCase();
+  const command = eventTargetCommand(target).toLowerCase();
+  return (
+    id === "cmd_copy" ||
+    command === "cmd_copy" ||
+    id.includes("copy") ||
+    command.includes("copy")
+  );
+}
+
+function eventTargetId(target: EventTarget | null): string {
+  const id = (target as unknown as { id?: unknown } | null)?.id;
+  return typeof id === "string"
+    ? id
+    : "";
+}
+
+function eventTargetCommand(target: EventTarget | null): string {
+  const getter = (target as { getAttribute?: (name: string) => string | null } | null)
+    ?.getAttribute;
+  return typeof getter === "function" ? getter.call(target, "command") || "" : "";
+}
+
+function eventTargetDebugInfo(target: EventTarget | null): unknown {
+  return {
+    id: eventTargetId(target),
+    command: eventTargetCommand(target),
+    tag: (target as { tagName?: string } | null)?.tagName ?? "",
+  };
+}
+
+function selectionBelongsToSidebar(
+  selection: Selection | null,
+  sidebar: WindowSidebarState,
+): selection is Selection {
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+    return false;
+  }
+  const anchor = selection.anchorNode;
+  const focus = selection.focusNode;
+  return Boolean(
+    (anchor &&
+      (sidebar.column.contains(anchor) || sidebar.noteColumn.contains(anchor))) ||
+      (focus &&
+        (sidebar.column.contains(focus) || sidebar.noteColumn.contains(focus))),
+  );
+}
+
+function isEditableCopyTarget(target: EventTarget | null): boolean {
+  return !!editableCopyRoot(target);
+}
+
+function editableCopyRoot(target: EventTarget | null): Element | null {
+  const el = target as unknown as Element | null;
+  if (!el || (el as unknown as { nodeType?: number }).nodeType !== 1) {
+    return null;
+  }
+  const closest = (el as unknown as {
+    closest?: (selector: string) => Element | null;
+  }).closest;
+  const root =
+    typeof closest === "function"
+      ? closest.call(el, "textarea,input,[contenteditable='true']")
+      : null;
+  if (root) return root;
+  const tag = el.tagName;
+  return (
+    tag === "TEXTAREA" ||
+    tag === "INPUT" ||
+    el.getAttribute("contenteditable") === "true"
+  )
+    ? el
+    : null;
+}
+
+function editableTargetHasOwnSelection(
+  target: EventTarget | null,
+  selection: Selection | null,
+): boolean {
+  const root = editableCopyRoot(target);
+  if (!root) return false;
+  const tag = root.tagName;
+  if (tag === "TEXTAREA" || tag === "INPUT") {
+    const input = root as HTMLInputElement | HTMLTextAreaElement;
+    try {
+      return (input.selectionStart ?? 0) !== (input.selectionEnd ?? 0);
+    } catch {
+      return true;
+    }
+  }
+  const anchor = selection?.anchorNode;
+  const focus = selection?.focusNode;
+  return Boolean(
+    (anchor && root.contains(anchor)) || (focus && root.contains(focus)),
+  );
+}
+
+function serializeSidebarSelection(
+  selection: Selection,
+  label: string,
+): string {
+  const nativeText = selection.toString();
+  const markdown = serializeSelectionAsMarkdown(selection);
+  const text = markdown || nativeText;
+  debugZai(`${label}: selection`, {
+    rangeCount: selection.rangeCount,
+    native: textDebugInfo(nativeText),
+    markdown: textDebugInfo(markdown),
+    used: markdown ? "markdown" : "native",
+    output: textDebugInfo(text),
+    ranges: rangeDebugInfo(selection),
+  });
+  return text;
+}
+
+function rangeDebugInfo(selection: Selection): unknown[] {
+  const ranges: unknown[] = [];
+  for (let i = 0; i < selection.rangeCount; i++) {
+    const range = selection.getRangeAt(i);
+    const startMath = closestLatexElement(range.startContainer);
+    const endMath = closestLatexElement(range.endContainer);
+    let clonedMathCount = 0;
+    let clonedTags = "";
+    try {
+      const fragment = range.cloneContents();
+      clonedMathCount = fragment.querySelectorAll?.("[data-latex]").length ?? 0;
+      clonedTags = Array.from(fragment.childNodes)
+        .slice(0, 8)
+        .map((node) => node?.nodeName ?? "")
+        .join(",");
+    } catch {
+      clonedTags = "<clone failed>";
+    }
+    ranges.push({
+      index: i,
+      collapsed: range.collapsed,
+      startOffset: range.startOffset,
+      endOffset: range.endOffset,
+      start: nodeDebugInfo(range.startContainer),
+      end: nodeDebugInfo(range.endContainer),
+      startMath: mathDebugInfo(startMath),
+      endMath: mathDebugInfo(endMath),
+      clonedMathCount,
+      clonedTags,
+    });
+  }
+  return ranges;
+}
+
+function closestLatexElement(node: Node | null): HTMLElement | null {
+  let cur: Node | null = node;
+  while (cur) {
+    if (cur.nodeType === 1) {
+      const el = cur as HTMLElement;
+      if (el.dataset?.latex !== undefined) return el;
+    }
+    cur = cur.parentNode;
+  }
+  return null;
+}
+
+function nodeDebugInfo(node: Node | null): unknown {
+  if (!node) return null;
+  const parent =
+    node.nodeType === 1
+      ? (node as Element)
+      : node.parentElement ?? undefined;
+  return {
+    type: node.nodeType,
+    name: node.nodeName,
+    parent: parent
+      ? `${parent.tagName.toLowerCase()}${parent.className ? `.${String(parent.className).split(/\s+/).filter(Boolean).slice(0, 3).join(".")}` : ""}`
+      : "",
+    text: node.nodeType === 3 ? previewText(node.textContent ?? "", 80) : "",
+  };
+}
+
+function mathDebugInfo(el: HTMLElement | null): unknown {
+  if (!el) return null;
+  return {
+    tag: el.tagName.toLowerCase(),
+    className: el.className,
+    display: el.dataset.display,
+    latex: textDebugInfo(el.dataset.latex ?? "", 120),
+  };
+}
+
+function htmlDebugInfo(doc: Document, html: string): unknown {
+  const tmp = doc.createElement("div");
+  tmp.innerHTML = html;
+  return {
+    ...textDebugInfo(html),
+    p: tmp.querySelectorAll("p").length,
+    li: tmp.querySelectorAll("li").length,
+    preMath: tmp.querySelectorAll("pre.math").length,
+    spanMath: tmp.querySelectorAll("span.math").length,
+    divMath: tmp.querySelectorAll("div.math").length,
+    dataLatex: tmp.querySelectorAll("[data-latex]").length,
+    topTags: Array.from(tmp.children)
+      .slice(0, 10)
+      .map((el) => el.tagName.toLowerCase())
+      .join(","),
+  };
+}
+
+function htmlStringDebugInfo(html: string): Record<string, unknown> {
+  return {
+    ...textDebugInfo(html),
+    p: countMatches(html, /<p[\s>]/g),
+    li: countMatches(html, /<li[\s>]/g),
+    preMath: countMatches(html, /<pre[^>]*class="[^"]*\bmath\b/g),
+    spanMath: countMatches(html, /<span[^>]*class="[^"]*\bmath\b/g),
+    divMath: countMatches(html, /<div[^>]*class="[^"]*\bmath\b/g),
+    dataLatex: countMatches(html, /\sdata-latex=/g),
+    displayDelimiters: countMatches(html, /\$\$[\s\S]*?\$\$/g),
+  };
+}
+
+function textDebugInfo(
+  text: string,
+  previewLimit = 240,
+): Record<string, unknown> {
+  return {
+    length: text.length,
+    lines: text ? text.split("\n").length : 0,
+    head: previewText(text, previewLimit),
+    tail: previewText(text.slice(-previewLimit), previewLimit),
+  };
+}
+
+function previewText(text: string, limit = 240): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized.length > limit
+    ? `${normalized.slice(0, limit)}...`
+    : normalized;
+}
+
+function countMatches(text: string, pattern: RegExp): number {
+  return Array.from(text.matchAll(pattern)).length;
+}
+
+function debugZai(label: string, detail?: unknown): void {
+  try {
+    const suffix =
+      detail === undefined
+        ? ""
+        : ` ${typeof detail === "string" ? detail : JSON.stringify(detail)}`;
+    Zotero.debug(`[zai-debug] ${label}${suffix}`);
+  } catch {
+    // Ignore logging failures; diagnostics must not break copy/import.
+  }
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+// Right-click on a chat selection → floating menu with 复制 / 导入笔记.
+// We deliberately don't replace the entire context menu (that would require
+// fighting Zotero's XUL menupopup system); instead we suppress the default
+// browser menu only when our criteria are met, then render a lightweight
+// HTML menu at the click point.
+function installSidebarSelectionMenu(
+  win: Window,
+  sidebar: WindowSidebarState,
+): void {
+  const doc = win.document;
+  let activeMenu: HTMLElement | null = null;
+  const dismiss = () => {
+    activeMenu?.remove();
+    activeMenu = null;
+    doc.removeEventListener("mousedown", outsideClick, true);
+    doc.removeEventListener("keydown", escClose, true);
+  };
+  const outsideClick = (e: Event) => {
+    if (activeMenu && !activeMenu.contains(e.target as Node)) dismiss();
+  };
+  const escClose = (e: KeyboardEvent) => {
+    if (e.key === "Escape") dismiss();
+  };
+
+  const onContextMenu = (event: MouseEvent) => {
+    const sel = win.getSelection();
+    if (!selectionBelongsToSidebar(sel, sidebar)) return;
+    const text = serializeSidebarSelection(sel, "context-menu");
+    if (!text) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    dismiss();
+
+    const menu = doc.createElementNS(XHTML_NS, "div") as HTMLElement;
+    menu.className = "zai-selection-menu";
+    menu.style.left = `${event.clientX}px`;
+    menu.style.top = `${event.clientY}px`;
+
+    const copyBtn = doc.createElementNS(XHTML_NS, "button") as HTMLButtonElement;
+    copyBtn.type = "button";
+    copyBtn.className = "zai-selection-menu-item";
+    copyBtn.textContent = "复制";
+    copyBtn.addEventListener("click", () => {
+      debugZai("context-menu-copy: click", textDebugInfo(text));
+      void copyToClipboard(
+        doc,
+        text,
+        "context-menu-copy",
+        markdownToClipboardHTML(doc, text),
+      );
+      dismiss();
+    });
+
+    const importBtn = doc.createElementNS(XHTML_NS, "button") as HTMLButtonElement;
+    importBtn.type = "button";
+    importBtn.className = "zai-selection-menu-item";
+    importBtn.textContent = "导入笔记";
+    importBtn.addEventListener("click", () => {
+      debugZai("context-menu-import: click", textDebugInfo(text));
+      void importSelectionToNote(doc, sidebar, text);
+      dismiss();
+    });
+
+    menu.append(copyBtn, importBtn);
+    (doc.body ?? doc.documentElement)?.append(menu);
+    activeMenu = menu;
+    doc.addEventListener("mousedown", outsideClick, true);
+    doc.addEventListener("keydown", escClose, true);
+  };
+
+  win.addEventListener("contextmenu", onContextMenu, true);
+  sidebar.selectionMenuCleanup = () => {
+    win.removeEventListener("contextmenu", onContextMenu, true);
+    dismiss();
+  };
+}
+
+// Insert a chat selection into the user's note. If the note panel is open
+// AND its editor exposes a usable cursor (ProseMirror selection), insert
+// at that cursor; otherwise append to the end of the note. The end-of-note
+// fallback uses the existing append path (with Better Notes if available)
+// but without the "AI 总结 [timestamp]" header — that header is for whole-
+// message exports, not for snippet imports.
+async function importSelectionToNote(
+  doc: Document,
+  sidebar: WindowSidebarState,
+  selectionMarkdown: string,
+): Promise<void> {
+  const itemID = sidebar.noteItemID ?? currentItemIdForSidebar(sidebar);
+  if (itemID == null) {
+    Zotero.debug("[zai] importSelectionToNote: no item selected");
+    return;
+  }
+
+  const html = markdownToNoteHTMLFragment(doc, selectionMarkdown);
+  debugZai("import-selection:prepared", {
+    itemID,
+    noteItemID: sidebar.noteItemID,
+    currentItemID: currentItemIdForSidebar(sidebar),
+    markdown: textDebugInfo(selectionMarkdown),
+    html: htmlDebugInfo(doc, html),
+  });
+
+  try {
+    const target = await resolveTargetNote(itemID);
+    debugZai("import-selection:target-note", {
+      noteID: target.note.id,
+      created: target.created,
+      noteBefore: textDebugInfo(target.note.getNote?.() || "", 120),
+    });
+    // Better Notes' editor insertion path uses ProseMirror insertHTML(),
+    // which can truncate multi-block snippets after display math. Force
+    // metadata insertion for selection imports, then refresh the visible
+    // editor so all blocks after the formula survive.
+    await insertHTMLIntoNote(target.note, html, true);
+    refreshVisibleNoteWindow(doc, target.note.id);
+    ensureAllZoteroNoteEditorKatexCSS(doc);
+    doc.defaultView?.setTimeout(() => {
+      ensureAllZoteroNoteEditorKatexCSS(doc);
+    }, 300);
+    debugZai("import-selection:refreshed", {
+      noteID: target.note.id,
+      noteAfterRefreshCall: textDebugInfo(target.note.getNote?.() || "", 120),
+    });
+  } catch (err) {
+    debugZai("import-selection:failed", { error: errorMessage(err) });
+  }
+}
+
+function currentItemIdForSidebar(sidebar: WindowSidebarState): number | null {
+  return states.get(sidebar.mount)?.itemID ?? null;
+}
+
+function markdownToNoteHTMLFragment(doc: Document, markdown: string): string {
+  const tmp = doc.createElement("div");
+  renderMarkdownInto(tmp, markdown.trim(), "source");
+  return String(tmp.innerHTML);
+}
+
+function markdownToClipboardHTML(doc: Document, markdown: string): string {
+  const htmlDoc = doc.implementation.createHTMLDocument("zai-clipboard");
+  const tmp = htmlDoc.createElement("div");
+  renderMarkdownInto(tmp, markdown.trim(), "source");
+  return String(tmp.innerHTML);
+}
+
+function findActiveNoteEditor(
+  sidebar: WindowSidebarState,
+): ZoteroNoteEditorElement | null {
+  const editor = sidebar.noteMount.querySelector(
+    "note-editor",
+  ) as ZoteroNoteEditorElement | null;
+  return editor ?? null;
+}
+
+function tryInsertHTMLAtCursor(
+  editor: ZoteroNoteEditorElement,
+  html: string,
+): boolean {
+  try {
+    const iframeWin = editor.getCurrentInstance?.()?._iframeWindow as
+      | (Window & { wrappedJSObject?: any })
+      | undefined;
+    if (!iframeWin) return false;
+    const wrapped = iframeWin.wrappedJSObject ?? iframeWin;
+    const instance = wrapped._currentEditorInstance;
+    const core = instance?._editorCore;
+    if (!core?.view?.state || typeof core.insertHTML !== "function") {
+      return false;
+    }
+    const sel = core.view.state.selection;
+    let position: number;
+    try {
+      position = sel.$anchor.after(sel.$anchor.depth);
+    } catch {
+      position = core.view.state.doc.content.size;
+    }
+    const docSize = core.view.state.doc.content.size;
+    position = Math.max(0, Math.min(position, docSize));
+    core.insertHTML(position, html);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function unregisterSidebarForWindow(win: Window) {
@@ -5759,6 +6799,10 @@ export function unregisterSidebarForWindow(win: Window) {
   state.noteSplitter.remove();
   state.noteEditorCleanup?.();
   state.noteEditorCleanup = undefined;
+  state.copyHandlerCleanup?.();
+  state.copyHandlerCleanup = undefined;
+  state.selectionMenuCleanup?.();
+  state.selectionMenuCleanup = undefined;
   state.noteColumn.remove();
   state.toggleButton?.remove();
   state.floatingButton?.remove();
