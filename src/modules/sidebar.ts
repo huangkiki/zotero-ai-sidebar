@@ -15,13 +15,22 @@ import {
   toApiMessages,
 } from "../context/message-format";
 import { DEFAULT_CONTEXT_POLICY } from "../context/policy";
+import { createPdfLocator } from "../context/pdf-locator";
 import { extractPdfRange, searchPdfPassages } from "../context/retrieval";
+import { resolveSelectedTextFromPdfText } from "../context/selection-repair";
 import { zoteroContextSource } from "../context/zotero-source";
 import { getProvider } from "../providers/factory";
 import type { AssistantAnnotationDraft, Message } from "../providers/types";
 import { loadChatMessages, saveChatMessages } from "../settings/chat-history";
 import { loadQuickPromptSettings } from "../settings/quick-prompts";
 import { loadPresets, savePresets, zoteroPrefs } from "../settings/storage";
+import {
+  DEFAULT_LOCAL_UI_SETTINGS,
+  loadLocalUiSettings,
+  normalizeLocalUiSettings,
+  saveLocalUiSettings,
+  type LocalUiSettings,
+} from "../settings/local-ui-settings";
 import {
   loadToolSettings,
   saveToolSettings,
@@ -111,6 +120,7 @@ interface WindowSidebarState {
   noteEditorCleanup?: () => void;
   copyHandlerCleanup?: () => void;
   selectionMenuCleanup?: () => void;
+  promptShortcutCleanup?: () => void;
   lastCopySelection?: { text: string; updatedAt: number };
   toggleButton?: Element;
   floatingButton?: HTMLElement;
@@ -169,6 +179,7 @@ interface PanelState {
   pasteBlocks: PasteBlock[];
   draftImages: DraftImage[];
   nextPasteID: number;
+  localUiSettings: LocalUiSettings;
   abort?: AbortController;
   messagesScrollLock?: MessagesScrollLock;
 }
@@ -239,6 +250,7 @@ function renderMount(mount: HTMLElement, itemID: number | null) {
       pasteBlocks: [],
       draftImages: [],
       nextPasteID: 1,
+      localUiSettings: loadLocalUiSettings(zoteroPrefs()),
     };
     states.set(mount, state);
     void loadPersistedMessages(mount, state);
@@ -257,6 +269,7 @@ function renderMount(mount: HTMLElement, itemID: number | null) {
       selectedChatPreset(state) ?? selectedPreset(state),
     );
     state.uiSettings = loadUiSettings(zoteroPrefs());
+    state.localUiSettings = loadLocalUiSettings(zoteroPrefs());
   }
 
   renderPanel(mount, state);
@@ -269,6 +282,7 @@ function renderPanel(mount: HTMLElement, state: PanelState) {
   mount.replaceChildren();
 
   const panel = el(doc, "div", "zai-app native-panel");
+  applyChatAppearance(panel, state.uiSettings, state.localUiSettings);
   panel.append(renderToolbar(doc, mount, state));
   panel.append(renderContextCard(doc, state.itemID));
   panel.append(renderMessages(doc, mount, state));
@@ -288,6 +302,22 @@ function renderPanel(mount: HTMLElement, state: PanelState) {
     }
     restoreChatInput(mount, state, !!shouldFocus);
   });
+}
+
+function applyChatAppearance(
+  panel: HTMLElement,
+  settings: UiSettings,
+  localSettings: LocalUiSettings,
+): void {
+  if (settings.chatFontFamily) {
+    panel.style.setProperty("--zai-font", settings.chatFontFamily);
+  } else {
+    panel.style.removeProperty("--zai-font");
+  }
+  panel.style.setProperty(
+    "--zai-chat-font-size",
+    `${localSettings.chatFontSizePx}px`,
+  );
 }
 
 // Captures DOM-resident state into PanelState BEFORE renderPanel wipes
@@ -438,11 +468,44 @@ function renderToolbar(doc: Document, mount: HTMLElement, state: PanelState) {
   hide.title = "隐藏 AI 对话列";
   hide.addEventListener("click", () => hideCurrentSidebar(mount));
   bottomRow.append(hide);
+  bottomRow.append(renderChatFontSizeControl(doc, mount, state));
   if (state.messages.length > 0) {
     bottomRow.append(renderCopyDebugToggle(doc, mount, state));
   }
   bar.append(topRow, bottomRow);
   return bar;
+}
+
+function renderChatFontSizeControl(
+  doc: Document,
+  mount: HTMLElement,
+  state: PanelState,
+): HTMLElement {
+  const wrap = el(doc, "label", "chat-font-size-control");
+  wrap.title = "仅保存在本机，不参与 WebDAV 云同步";
+  wrap.append(doc.createTextNode("字号"));
+  const select = doc.createElement("select");
+  for (const size of [11, 12, 13, 14, 15, 16, 18, 20, 22]) {
+    const option = doc.createElement("option");
+    option.value = String(size);
+    option.textContent =
+      size === DEFAULT_LOCAL_UI_SETTINGS.chatFontSizePx
+        ? `${size}px 默认`
+        : `${size}px`;
+    select.append(option);
+  }
+  select.value = String(state.localUiSettings.chatFontSizePx);
+  select.addEventListener("change", () => {
+    const next = normalizeLocalUiSettings({
+      ...state.localUiSettings,
+      chatFontSizePx: select.value,
+    });
+    state.localUiSettings = next;
+    saveLocalUiSettings(zoteroPrefs(), next);
+    renderPanel(mount, state);
+  });
+  wrap.append(select);
+  return wrap;
 }
 
 export function refreshSidebarPreferences(): void {
@@ -460,6 +523,7 @@ export function refreshSidebarPreferences(): void {
       selectedChatPreset(state) ?? selectedPreset(state),
     );
     state.uiSettings = loadUiSettings(zoteroPrefs());
+    state.localUiSettings = loadLocalUiSettings(zoteroPrefs());
     renderPanel(sidebar.mount, state);
   }
 }
@@ -926,7 +990,9 @@ function renderQuickPrompts(
       const button = buttonEl(doc, custom.label);
       button.className = "quick-prompt-custom";
       button.disabled = state.sending;
-      button.title = "自定义提示词按钮";
+      button.title = custom.shortcut
+        ? `自定义提示词按钮；PDF 中按 ${custom.shortcut.toUpperCase()} 触发`
+        : "自定义提示词按钮";
       button.addEventListener("click", () => {
         void sendMessage(mount, state, custom.prompt);
       });
@@ -1029,7 +1095,9 @@ function renderInput(doc: Document, mount: HTMLElement, state: PanelState) {
       (!event.shiftKey || event.ctrlKey || event.metaKey);
     if (shouldSend) {
       event.preventDefault();
-      void sendMessage(mount, state, composerMessageContent(input.value, state));
+      void sendMessage(mount, state, composerMessageContent(input.value, state), {
+        fromComposer: true,
+      });
     }
   });
 
@@ -1113,7 +1181,13 @@ function renderInput(doc: Document, mount: HTMLElement, state: PanelState) {
   send.setAttribute("aria-label", "发送");
   send.addEventListener(
     "click",
-    () => void sendMessage(mount, state, composerMessageContent(input.value, state)),
+    () =>
+      void sendMessage(
+        mount,
+        state,
+        composerMessageContent(input.value, state),
+        { fromComposer: true },
+      ),
   );
   row.append(send, renderSelectionBadge(doc, mount, state));
   composer.append(
@@ -2276,6 +2350,7 @@ function selectedLineCount(text: string): number {
 interface SendMessageOptions {
   explainSelection?: boolean;
   fullTextHighlight?: boolean;
+  fromComposer?: boolean;
 }
 
 // User-message → wire-message pipeline.
@@ -2286,9 +2361,9 @@ interface SendMessageOptions {
 //   3. Capture the SELECTED PDF TEXT exactly once at send time. WHY: the
 //      user may type their question after selecting; locking selection
 //      here makes the wire content match what the chip showed.
-//   4. Snapshot the annotation draft for explainSelection flows BEFORE we
-//      append user message — `attachAnnotationDraft` will use the snapshot
-//      regardless of how selection state evolves during streaming.
+//   4. Snapshot the annotation draft for selection-annotation flows BEFORE
+//      we append user message — `attachAnnotationDraft` will use the
+//      snapshot regardless of how selection state evolves during streaming.
 //   5. Reset draft state (text/images/scroll-anchor) to fresh defaults.
 //   6. Persist BEFORE streaming so the user message is durable even if the
 //      provider request errors out.
@@ -2298,12 +2373,13 @@ async function sendMessage(
   text: string,
   options: SendMessageOptions = {},
 ) {
-  const content = text.trim();
+  const baseContent = text.trim();
   const preset = selectedChatPreset(state);
   const images = state.draftImages
     .filter((image) => text.includes(image.marker))
     .map((image) => ({ ...image }));
-  if ((!content && images.length === 0) || !preset || state.sending) return;
+  if ((!baseContent && images.length === 0) || !preset || state.sending)
+    return;
   await ensureHistoryLoaded(mount, state);
   if (states.get(mount) !== state) return;
   if (!preset.apiKey || !preset.model) {
@@ -2312,30 +2388,52 @@ async function sendMessage(
   }
 
   const history = state.messages.slice();
-  const selectedText = options.fullTextHighlight
+  const rawSelectedText = options.fullTextHighlight
     ? ""
-    : getSelectedTextForPrompt(mount, state.itemID);
-  const selectionContext =
-    options.explainSelection && selectedText
-      ? await buildSelectionNearbyContext(selectedText, state.itemID)
-      : {};
+    : await getSelectedTextForPrompt(mount, state.itemID);
+  const selectionPayload = await buildSelectionPromptContext(
+    rawSelectedText,
+    state.itemID,
+  );
+  const selectedText = selectionPayload.selectedText;
+  const quickPromptSettings = loadQuickPromptSettings(zoteroPrefs());
+  const selectedSnapshot = cloneSelectionAnnotationDraft(
+    getStoredSelectionAnnotation(state.itemID),
+  );
+  if (selectedSnapshot && selectedText) selectedSnapshot.text = selectedText;
+  const selectionQuestionAnnotationEnabled =
+    !options.explainSelection &&
+    options.fromComposer === true &&
+    !!selectedText &&
+    !!selectedSnapshot &&
+    quickPromptSettings.selectionQuestionAnnotationEnabled;
+  const selectionContext = selectedText ? selectionPayload.context : {};
+  const annotationColorGuide = selectionQuestionAnnotationEnabled
+    ? loadToolSettings(zoteroPrefs()).annotationColorGuide.trim()
+    : "";
   const userMessage: Message = {
     role: "user",
-    content,
+    content: baseContent,
     ...(images.length ? { images } : {}),
     ...(selectedText
       ? {
           context: {
             selectedText,
             explainSelection: options.explainSelection,
+            ...((options.explainSelection ||
+              selectionQuestionAnnotationEnabled) && {
+              annotationSuggestion: true,
+            }),
+            ...(annotationColorGuide ? { annotationColorGuide } : {}),
             ...selectionContext,
           },
         }
       : {}),
   };
-  const snapshot = options.explainSelection
-    ? cloneSelectionAnnotationDraft(getStoredSelectionAnnotation(state.itemID))
-    : null;
+  const snapshot =
+    options.explainSelection || selectionQuestionAnnotationEnabled
+      ? selectedSnapshot
+      : null;
   state.messages.push(userMessage);
   state.draftText = "";
   state.draftSelectionStart = 0;
@@ -2349,50 +2447,87 @@ async function sendMessage(
   void saveChatMessages(state.itemID, state.messages);
   await streamAssistant(mount, state, history, userMessage, {
     annotationSnapshot: snapshot,
+    annotationColorEnabled: selectionQuestionAnnotationEnabled,
     fullTextHighlight: options.fullTextHighlight,
   });
 }
 
-async function buildSelectionNearbyContext(
+async function buildSelectionPromptContext(
   selectedText: string,
   itemID: number | null,
-): Promise<Partial<NonNullable<Message["context"]>>> {
-  if (itemID == null) return {};
-  const query = selectionContextQuery(selectedText);
-  if (!query) return {};
+): Promise<{
+  selectedText: string;
+  context: Partial<NonNullable<Message["context"]>>;
+}> {
+  if (!selectedText || itemID == null) {
+    return { selectedText, context: {} };
+  }
 
   try {
     const pdfText = await zoteroContextSource.getFullText(itemID);
-    if (!pdfText) return {};
-    const matches = searchPdfPassages(
+    if (!pdfText) return { selectedText, context: {} };
+    const rawMatches = searchPdfPassages(
       pdfText,
-      query,
+      selectionContextQuery(selectedText),
       contextPolicy.searchCandidateCount,
       contextPolicy,
     );
-    const best = matches[0];
-    if (!best) return {};
-
-    const range = extractPdfRange(
+    const resolvedText = resolveSelectedTextFromPdfText(
+      selectedText,
       pdfText,
-      Math.max(0, best.start - SELECTION_CONTEXT_RADIUS_CHARS),
-      best.end + SELECTION_CONTEXT_RADIUS_CHARS,
-      contextPolicy,
+      rawMatches,
     );
-    if (!range) return {};
-
+    if (resolvedText !== selectedText) {
+      debugZai("selection.fulltext-repair", {
+        raw: textDebugInfo(selectedText, 120),
+        resolved: textDebugInfo(resolvedText, 120),
+      });
+    }
     return {
-      query,
-      candidatePassageCount: matches.length,
-      selectedPassageNumbers: [1],
-      passageSelectorSource: "fallback",
-      passageSelectionReason:
-        "解释选区默认自动检索原文位置，并附带命中段落附近上下文",
-      retrievedPassages: [range],
+      selectedText: resolvedText,
+      context: buildSelectionNearbyContextFromPdfText(resolvedText, pdfText),
     };
-  } catch {
-    return {};
+  } catch (err) {
+    debugZai("selection.fulltext-repair.failed", {
+      error: errorMessage(err),
+      raw: textDebugInfo(selectedText, 120),
+    });
+    return { selectedText, context: {} };
   }
+}
+
+function buildSelectionNearbyContextFromPdfText(
+  selectedText: string,
+  pdfText: string,
+): Partial<NonNullable<Message["context"]>> {
+  const query = selectionContextQuery(selectedText);
+  if (!query) return {};
+  const matches = searchPdfPassages(
+    pdfText,
+    query,
+    contextPolicy.searchCandidateCount,
+    contextPolicy,
+  );
+  const best = matches[0];
+  if (!best) return {};
+
+  const range = extractPdfRange(
+    pdfText,
+    Math.max(0, best.start - SELECTION_CONTEXT_RADIUS_CHARS),
+    best.end + SELECTION_CONTEXT_RADIUS_CHARS,
+    contextPolicy,
+  );
+  if (!range) return {};
+
+  return {
+    query,
+    candidatePassageCount: matches.length,
+    selectedPassageNumbers: [1],
+    passageSelectorSource: "fallback",
+    passageSelectionReason:
+      "当前 PDF 选区自动检索原文位置，并附带命中位置附近上下文",
+    retrievedPassages: [range],
+  };
 }
 
 function selectionContextQuery(selectedText: string): string {
@@ -2415,6 +2550,7 @@ function cloneSelectionAnnotationDraft(
 
 interface StreamAssistantOptions {
   annotationSnapshot?: SelectionAnnotationDraft | null;
+  annotationColorEnabled?: boolean;
   fullTextHighlight?: boolean;
 }
 
@@ -2582,7 +2718,11 @@ async function streamAssistant(
   } finally {
     toolSession?.dispose();
     if (options.annotationSnapshot) {
-      attachAnnotationDraft(assistant, options.annotationSnapshot);
+      attachAnnotationDraft(
+        assistant,
+        options.annotationSnapshot,
+        !!options.annotationColorEnabled,
+      );
     }
     state.sending = false;
     state.abort = undefined;
@@ -2606,12 +2746,15 @@ async function streamAssistant(
 function attachAnnotationDraft(
   assistant: Message,
   snapshot: SelectionAnnotationDraft,
+  colorEnabled: boolean,
 ) {
   const parsed = parseAnnotationSuggestion(assistant.content);
   if (!parsed.comment) return;
+  const color = colorEnabled ? allowedAnnotationColor(parsed.color) : null;
   assistant.content = parsed.body;
   assistant.annotationDraft = {
     comment: parsed.comment,
+    ...(color ? { color } : {}),
     snapshot: {
       text: snapshot.text,
       attachmentID: snapshot.attachmentID,
@@ -2619,6 +2762,21 @@ function attachAnnotationDraft(
     },
     state: { kind: "idle" },
   };
+}
+
+function allowedAnnotationColor(color: string | null): string | null {
+  if (!color) return null;
+  const allowed = configuredAnnotationColors();
+  return allowed.has(color.toLowerCase()) ? color.toLowerCase() : null;
+}
+
+function configuredAnnotationColors(): Set<string> {
+  const guide = loadToolSettings(zoteroPrefs()).annotationColorGuide;
+  return new Set(
+    (guide.match(/#[0-9a-fA-F]{6}\b/g) ?? []).map((hex) =>
+      hex.toLowerCase(),
+    ),
+  );
 }
 
 async function buildSystemContextOnly(
@@ -2811,11 +2969,21 @@ async function ensureHistoryLoaded(mount: HTMLElement, state: PanelState) {
 // `readerItemIDs`); the same selection appears under both parent and
 // attachment IDs so the chip survives switching between them.
 
-function getSelectedTextForPrompt(
+async function getSelectedTextForPrompt(
   mount: HTMLElement,
   itemID: number | null,
-): string {
+): Promise<string> {
   const win = mount.ownerDocument?.defaultView;
+  const reader = getActiveReader(win);
+  const ids = readerItemIDs(reader, itemID);
+  const draft = firstUsableStoredSelectionAnnotation(ids);
+  const extracted = draft
+    ? await extractSelectionTextFromAnnotationPosition(reader, draft)
+    : "";
+  if (draft && extracted) {
+    rememberReaderSelection(reader, itemID, extracted, draft.annotation);
+    return shouldIgnoreSelectedText(ids, extracted) ? "" : extracted;
+  }
   return (
     refreshActiveReaderSelection(win, itemID, false) ||
     getStoredSelectedText(itemID)
@@ -2890,7 +3058,25 @@ function registerReaderSelectionCapture() {
     };
     const text = normalizeSelectedText(e.params?.annotation?.text);
     if (!text) return;
-    rememberReaderSelection(e.reader, null, text, e.params?.annotation);
+    const annotation = e.params?.annotation;
+    debugZai("selection.event-capture", {
+      rects: annotation ? annotationRectCount(annotation) : 0,
+      text: textDebugInfo(text, 120),
+    });
+    rememberReaderSelection(e.reader, null, text, annotation);
+    void repairStoredSelectionTextFromAnnotation(
+      e.reader,
+      null,
+      annotation,
+      text,
+    ).then((updated) => {
+      if (!updated) return;
+      for (const win of mountedWindows) {
+        const sidebar = windowSidebars.get(win);
+        if (sidebar)
+          updateSelectionIndicators(sidebar.mount, getSelectedItemID(win));
+      }
+    });
     for (const win of mountedWindows) {
       const sidebar = windowSidebars.get(win);
       if (sidebar)
@@ -3017,6 +3203,18 @@ function firstUsableStoredSelectedText(ids: number[]): string {
   return "";
 }
 
+function firstUsableStoredSelectionAnnotation(
+  ids: number[],
+): SelectionAnnotationDraft | null {
+  for (const id of ids) {
+    const draft = selectedAnnotationByItem.get(id);
+    if (draft && ignoredSelectedTextByItem.get(id) !== draft.text) {
+      return draft;
+    }
+  }
+  return null;
+}
+
 function shouldIgnoreSelectedText(ids: number[], text: string): boolean {
   return ids.some((id) => ignoredSelectedTextByItem.get(id) === text);
 }
@@ -3123,10 +3321,87 @@ function firstText(values: string[]): string {
 
 function normalizeSelectedText(text: unknown): string {
   if (typeof text !== "string") return "";
-  const normalized = text.replace(/\s+/g, " ").trim();
+  const normalized = repairPdfSelectionLineBreaks(text)
+    .replace(/\s+/g, " ")
+    .trim();
   return normalized.length > contextPolicy.maxSelectedTextChars
     ? normalized.slice(0, contextPolicy.maxSelectedTextChars)
     : normalized;
+}
+
+function repairPdfSelectionLineBreaks(text: string): string {
+  return text
+    .replace(/([A-Za-z]{3,})-\s*\r?\n\s*([a-z]{3,})/g, "$1$2")
+    .replace(/([A-Za-z]{3,})-\s{2,}([a-z]{3,})/g, "$1$2");
+}
+
+async function repairStoredSelectionTextFromAnnotation(
+  reader: unknown,
+  fallbackItemID: number | null,
+  annotation: Record<string, unknown> | undefined,
+  expectedText: string,
+): Promise<boolean> {
+  if (!annotation) return false;
+  const ids = readerItemIDs(reader, fallbackItemID);
+  const draft = firstUsableStoredSelectionAnnotation(ids);
+  if (!draft || draft.text !== expectedText) return false;
+
+  const extracted = await extractSelectionTextFromAnnotationPosition(
+    reader,
+    draft,
+  );
+  if (!extracted || extracted === draft.text) return false;
+
+  const latest = firstUsableStoredSelectionAnnotation(ids);
+  if (!latest || latest.text !== expectedText) {
+    debugZai("selection.rect-extract.stale", {
+      ids,
+      expected: textDebugInfo(expectedText, 120),
+      latest: latest ? textDebugInfo(latest.text, 120) : null,
+    });
+    return false;
+  }
+  rememberReaderSelection(reader, fallbackItemID, extracted, annotation);
+  return true;
+}
+
+async function extractSelectionTextFromAnnotationPosition(
+  reader: unknown,
+  draft: SelectionAnnotationDraft,
+): Promise<string> {
+  if (!reader || !hasAnnotationPosition(draft.annotation)) return "";
+  let locator: Awaited<ReturnType<typeof createPdfLocator>> | null = null;
+  try {
+    locator = await createPdfLocator(reader);
+    const extracted = normalizeSelectedText(
+      await locator.extractTextFromPosition(draft.annotation.position),
+    );
+    debugZai(extracted ? "selection.rect-extract" : "selection.rect-empty", {
+      rects: annotationRectCount(draft.annotation),
+      raw: textDebugInfo(draft.text, 120),
+      extracted: textDebugInfo(extracted, 120),
+    });
+    return extracted;
+  } catch (err) {
+    debugZai("selection.rect-extract.failed", {
+      error: errorMessage(err),
+      raw: textDebugInfo(draft.text, 120),
+    });
+    return "";
+  } finally {
+    locator?.dispose();
+  }
+}
+
+function hasAnnotationPosition(
+  annotation: Record<string, unknown>,
+): annotation is Record<string, unknown> & { position: unknown } {
+  return !!annotation.position && typeof annotation.position === "object";
+}
+
+function annotationRectCount(annotation: Record<string, unknown>): number {
+  const position = annotation.position as { rects?: unknown } | undefined;
+  return Array.isArray(position?.rects) ? position.rects.length : 0;
 }
 
 function updateMessageBubble(
@@ -4649,6 +4924,12 @@ function renderAnnotationSuggestion(
   const head = el(doc, "div", "annotation-suggestion-head");
   head.append(el(doc, "span", "annotation-suggestion-icon", "📌"));
   head.append(el(doc, "span", "annotation-suggestion-title", "建议注释"));
+  if (draft.color) {
+    const color = el(doc, "span", "annotation-suggestion-color", draft.color);
+    color.style.setProperty("--annotation-color", draft.color);
+    color.title = "保存时使用该 PDF 注释颜色";
+    head.append(color);
+  }
   const preview = previewSelection(draft.snapshot.text);
   if (preview) {
     const ctx = el(
@@ -4842,6 +5123,7 @@ async function saveAnnotationDraftFromBubble(
   try {
     const { id } = await saveSelectionAnnotation(draft.snapshot, {
       comment: draft.comment,
+      ...(draft.color ? { color: draft.color } : {}),
     });
     lockMessagesScroll(mount, scrollSnapshot);
     scheduleMessagesScrollRestore(mount, scrollSnapshot);
@@ -6055,7 +6337,126 @@ export function registerSidebarForWindow(win: Window) {
   startSelectionMonitor(win, state);
   installSidebarCopyHandler(win, state);
   installSidebarSelectionMenu(win, state);
+  installReaderPromptShortcutHandler(win, state);
   renderWindowSidebar(win);
+}
+
+function installReaderPromptShortcutHandler(
+  win: Window,
+  sidebar: WindowSidebarState,
+): void {
+  const installedWindows = new WeakSet<Window>();
+  const cleanupCallbacks: Array<() => void> = [];
+  const addWindow = (targetWin: Window | null | undefined) => {
+    if (!targetWin || installedWindows.has(targetWin)) return;
+    installedWindows.add(targetWin);
+    const handler = (event: KeyboardEvent) => {
+      void handleReaderPromptShortcut(win, targetWin, sidebar, event);
+    };
+    targetWin.addEventListener("keydown", handler, true);
+    cleanupCallbacks.push(() =>
+      targetWin.removeEventListener("keydown", handler, true),
+    );
+  };
+  const installLikelyReaderWindows = () => {
+    addWindow(win);
+    const reader = getActiveReader(win) as any;
+    for (const readerWin of activeReaderWindows(reader)) addWindow(readerWin);
+  };
+  installLikelyReaderWindows();
+  const monitorID = win.setInterval(installLikelyReaderWindows, 500);
+  sidebar.promptShortcutCleanup = () => {
+    win.clearInterval(monitorID);
+    for (const cleanup of cleanupCallbacks) cleanup();
+  };
+}
+
+async function handleReaderPromptShortcut(
+  win: Window,
+  sourceWin: Window,
+  sidebar: WindowSidebarState,
+  event: KeyboardEvent,
+): Promise<void> {
+  const key = shortcutKeyFromEvent(event);
+  if (!key || !isReaderShortcutContext(win, sourceWin, event)) return;
+
+  const settings = loadQuickPromptSettings(zoteroPrefs());
+  const prompt = settings.customButtons.find(
+    (button) => button.shortcut === key && button.prompt.trim(),
+  );
+  if (!prompt) return;
+
+  const itemID = getSelectedItemID(win);
+  const selectedText = await getSelectedTextForPrompt(sidebar.mount, itemID);
+  if (!selectedText) return;
+
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  setColumnCollapsed(win, sidebar, false);
+  const state = states.get(sidebar.mount);
+  if (!state || state.sending) return;
+  void sendMessage(sidebar.mount, state, prompt.prompt);
+}
+
+function shortcutKeyFromEvent(event: KeyboardEvent): string {
+  if (
+    event.defaultPrevented ||
+    event.isComposing ||
+    event.ctrlKey ||
+    event.altKey ||
+    event.metaKey
+  ) {
+    return "";
+  }
+  const key = event.key.toLowerCase();
+  return /^[a-z0-9]$/.test(key) ? key : "";
+}
+
+function isReaderShortcutContext(
+  win: Window,
+  sourceWin: Window,
+  event: KeyboardEvent,
+): boolean {
+  if (isEditableEventTarget(event.target)) return false;
+  const reader = getActiveReader(win);
+  if (!reader) return false;
+  const readerWindows = activeReaderWindows(reader);
+  if (readerWindows.some((readerWin) => readerWin === sourceWin)) return true;
+
+  const active = win.document.activeElement;
+  return readerWindows.some((readerWin) => active === safeFrameElement(readerWin));
+}
+
+function activeReaderWindows(reader: any): Window[] {
+  const windows: Window[] = [];
+  const add = (value: unknown) => {
+    const win = value as Window | null | undefined;
+    if (win && !windows.includes(win)) windows.push(win);
+  };
+  add(reader?._internalReader?._primaryView?._iframeWindow);
+  add(reader?._internalReader?._secondaryView?._iframeWindow);
+  add(reader?._iframeWindow);
+  return windows;
+}
+
+function safeFrameElement(win: Window): Element | null {
+  try {
+    return win.frameElement;
+  } catch {
+    return null;
+  }
+}
+
+function isEditableEventTarget(target: EventTarget | null): boolean {
+  const element =
+    target && (target as { nodeType?: number }).nodeType === 1
+      ? (target as Element)
+      : null;
+  if (!element) return false;
+  const editable = element.closest(
+    'input, textarea, select, [contenteditable=""], [contenteditable="true"]',
+  );
+  return !!editable;
 }
 
 // Zotero's main window keybindings intercept Ctrl/Cmd+C before any native
@@ -6803,6 +7204,8 @@ export function unregisterSidebarForWindow(win: Window) {
   state.copyHandlerCleanup = undefined;
   state.selectionMenuCleanup?.();
   state.selectionMenuCleanup = undefined;
+  state.promptShortcutCleanup?.();
+  state.promptShortcutCleanup = undefined;
   state.noteColumn.remove();
   state.toggleButton?.remove();
   state.floatingButton?.remove();

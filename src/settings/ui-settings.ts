@@ -11,6 +11,7 @@ export interface ChatProfileSettings {
 export interface UiSettings {
   messageActionsPosition: MessageActionsPosition;
   messageActionsLayout: MessageActionsLayout;
+  chatFontFamily: string;
   userProfile: ChatProfileSettings;
   assistantProfile: ChatProfileSettings;
 }
@@ -18,6 +19,7 @@ export interface UiSettings {
 export const DEFAULT_UI_SETTINGS: UiSettings = {
   messageActionsPosition: 'top-right',
   messageActionsLayout: 'inside',
+  chatFontFamily: '',
   userProfile: { label: 'YOU', avatar: '' },
   assistantProfile: { label: 'AI', avatar: '' },
 };
@@ -25,6 +27,7 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
 const KEY = 'extensions.zotero-ai-sidebar.uiSettings';
 const LABEL_MAX = 24;
 const AVATAR_MAX = 2048;
+const CHAT_FONT_MAX = 240;
 
 export function loadUiSettings(prefs: PrefsStore): UiSettings {
   const raw = prefs.get(KEY);
@@ -51,6 +54,7 @@ export function normalizeUiSettings(value: unknown): UiSettings {
     messageActionsLayout: isMessageActionsLayout(input.messageActionsLayout)
       ? input.messageActionsLayout
       : DEFAULT_UI_SETTINGS.messageActionsLayout,
+    chatFontFamily: normalizeChatFontFamily(input.chatFontFamily),
     userProfile: normalizeProfile(input.userProfile, DEFAULT_UI_SETTINGS.userProfile),
     assistantProfile: normalizeProfile(
       input.assistantProfile,
@@ -77,6 +81,13 @@ function normalizeProfile(
   const label = stringValue(input.label).slice(0, LABEL_MAX) || fallback.label;
   const avatar = stringValue(input.avatar).slice(0, AVATAR_MAX);
   return { label, avatar };
+}
+
+function normalizeChatFontFamily(value: unknown): string {
+  const font = stringValue(value).slice(0, CHAT_FONT_MAX);
+  // Keep normal font-family syntax (quotes, commas, CJK names) but reject
+  // characters that only make sense for CSS injection or HTML markup.
+  return /[;{}<>]/.test(font) ? '' : font;
 }
 
 function stringValue(value: unknown): string {

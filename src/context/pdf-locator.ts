@@ -35,6 +35,7 @@ export interface LocateResult {
 export interface PdfLocator {
   attachmentID: number;
   getFullText(): Promise<string>;
+  extractTextFromPosition(position: unknown): Promise<string>;
   locate(
     needle: string,
     opts?: { minConfidence?: number },
@@ -142,6 +143,7 @@ const DEFAULT_MIN_CONFIDENCE = 0.85;
 // ≤2 are treated as the same visual line. Loose enough for descender drift,
 // tight enough to keep adjacent lines separate at body font sizes.
 const LINE_Y_TOLERANCE = 2;
+const SELECTION_RECT_TOLERANCE = 2;
 // Reader can be polled for up to 5s before its iframe has a pdfDocument.
 // GOTCHA: opening a tab via `Zotero.Reader.open` resolves before the PDF.js
 // viewer is ready; we MUST wait, not throw immediately.
@@ -216,6 +218,17 @@ export async function createPdfLocator(reader: unknown): Promise<PdfLocator> {
       for (let pageIndex = 0; pageIndex < source.pageCount; pageIndex++) {
         const page = await bundleFor(pageIndex);
         if (page?.pageText) pages.push(page.pageText.trimEnd());
+      }
+      return pages.join("\n");
+    },
+    async extractTextFromPosition(position) {
+      const groups = selectionRectGroups(position);
+      const pages: string[] = [];
+      for (const group of groups) {
+        const page = await bundleFor(group.pageIndex);
+        if (!page) continue;
+        const text = extractPageTextFromSelectionRects(page, group.rects);
+        if (text) pages.push(text);
       }
       return pages.join("\n");
     },
@@ -534,6 +547,32 @@ function rectValue(value: unknown): PdfRect | null {
   const rect = value.slice(0, 4).map((entry) => numberValue(entry));
   if (rect.some((entry) => entry == null)) return null;
   return rect as PdfRect;
+}
+
+interface SelectionRectGroup {
+  pageIndex: number;
+  rects: PdfRect[];
+}
+
+function selectionRectGroups(position: unknown): SelectionRectGroup[] {
+  const p = position as
+    | {
+        pageIndex?: unknown;
+        rects?: unknown;
+      }
+    | null
+    | undefined;
+  const pageIndex = numberValue(p?.pageIndex);
+  const rects = rectsValue(p?.rects);
+  if (pageIndex == null || pageIndex < 0 || rects.length === 0) return [];
+  return [{ pageIndex: Math.floor(pageIndex), rects }];
+}
+
+function rectsValue(value: unknown): PdfRect[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => rectValue(entry))
+    .filter((rect): rect is PdfRect => !!rect);
 }
 
 function extractAttachmentID(reader: unknown): number | null {
@@ -1074,6 +1113,158 @@ function anchorPartialRect(
   const y0 = Math.min(anchor.y, anchor.y + anchor.height);
   const y1 = Math.max(anchor.y, anchor.y + anchor.height);
   return [Math.min(startX, endX), y0, Math.max(startX, endX), y1];
+}
+
+interface TextSpan {
+  itemIndex: number;
+  startOffset: number;
+  endOffset: number;
+}
+
+function extractPageTextFromSelectionRects(
+  page: PageBundle,
+  rects: PdfRect[],
+): string {
+  const lines = rects
+    .map((rect) => extractSelectionRectText(page, rect))
+    .filter(Boolean);
+  return lines.join("\n").trim();
+}
+
+function extractSelectionRectText(page: PageBundle, rect: PdfRect): string {
+  const spans = page.anchors
+    .map((anchor) => selectionSpanForAnchor(anchor, rect))
+    .filter((span): span is TextSpan => !!span)
+    .sort((a, b) => a.itemIndex - b.itemIndex);
+  if (!spans.length) return "";
+  return textFromSpans(page.pageText, spans);
+}
+
+function selectionSpanForAnchor(
+  anchor: ItemAnchor,
+  selectionRect: PdfRect,
+): TextSpan | null {
+  const anchorRect = fullAnchorRect(anchor);
+  if (!rectsOverlap(anchorRect, selectionRect)) return null;
+  const yOverlap = intervalOverlap(
+    anchorRect[1],
+    anchorRect[3],
+    selectionRect[1],
+    selectionRect[3],
+    SELECTION_RECT_TOLERANCE,
+  );
+  const anchorHeight = Math.max(rectHeight(anchorRect), 1);
+  if (yOverlap / anchorHeight < 0.25) return null;
+
+  const xOverlap = intervalOverlap(
+    anchorRect[0],
+    anchorRect[2],
+    selectionRect[0],
+    selectionRect[2],
+    SELECTION_RECT_TOLERANCE,
+  );
+  if (xOverlap <= 0) return null;
+
+  const span = partialAnchorTextSpan(anchor, selectionRect);
+  return span.endOffset > span.startOffset ? span : null;
+}
+
+function partialAnchorTextSpan(
+  anchor: ItemAnchor,
+  selectionRect: PdfRect,
+): TextSpan {
+  if (anchor.source === "processed" || anchor.itemString.length <= 1) {
+    return {
+      itemIndex: anchor.itemIndex,
+      startOffset: anchor.startOffset,
+      endOffset: anchor.endOffset,
+    };
+  }
+
+  const length = Math.max(1, anchor.itemString.length);
+  const width = Math.max(Math.abs(anchor.width), 1);
+  const left = Math.min(anchor.x, anchor.x + anchor.width);
+  const right = Math.max(anchor.x, anchor.x + anchor.width);
+  const selectionLeft = Math.min(selectionRect[0], selectionRect[2]);
+  const selectionRight = Math.max(selectionRect[0], selectionRect[2]);
+  const startRatio = clamp01((selectionLeft - left) / width);
+  const endRatio = clamp01((selectionRight - left) / width);
+  const startOffset =
+    anchor.startOffset + Math.max(0, Math.floor(startRatio * length));
+  const endOffset =
+    anchor.startOffset + Math.min(length, Math.ceil(endRatio * length));
+
+  // If the rect covers the anchor but x ordering was inverted, fall back to
+  // the full item instead of returning an empty slice.
+  if (
+    endOffset <= startOffset &&
+    selectionLeft <= right &&
+    selectionRight >= left
+  ) {
+    return {
+      itemIndex: anchor.itemIndex,
+      startOffset: anchor.startOffset,
+      endOffset: anchor.endOffset,
+    };
+  }
+
+  return { itemIndex: anchor.itemIndex, startOffset, endOffset };
+}
+
+function textFromSpans(pageText: string, spans: TextSpan[]): string {
+  let output = "";
+  let cursor: number | null = null;
+  for (const span of spans) {
+    const start = Math.max(0, Math.min(pageText.length, span.startOffset));
+    const end = Math.max(start, Math.min(pageText.length, span.endOffset));
+    if (cursor != null && start > cursor) {
+      const gap = pageText.slice(cursor, start);
+      output += /\S/.test(gap) ? " " : gap;
+    }
+    output += pageText.slice(start, end);
+    cursor = Math.max(cursor ?? 0, end);
+  }
+  return output.replace(/[ \t\f\v]+/g, " ").trim();
+}
+
+function fullAnchorRect(anchor: ItemAnchor): PdfRect {
+  const partial = anchorPartialRect(
+    anchor,
+    anchor.startOffset,
+    anchor.endOffset,
+  );
+  return (
+    partial ?? [
+      anchor.x,
+      anchor.y,
+      anchor.x + anchor.width,
+      anchor.y + anchor.height,
+    ]
+  );
+}
+
+function rectsOverlap(a: PdfRect, b: PdfRect): boolean {
+  return (
+    intervalOverlap(a[0], a[2], b[0], b[2], SELECTION_RECT_TOLERANCE) > 0 &&
+    intervalOverlap(a[1], a[3], b[1], b[3], SELECTION_RECT_TOLERANCE) > 0
+  );
+}
+
+function intervalOverlap(
+  a0: number,
+  a1: number,
+  b0: number,
+  b1: number,
+  tolerance = 0,
+): number {
+  const left = Math.max(Math.min(a0, a1), Math.min(b0, b1) - tolerance);
+  const right = Math.min(Math.max(a0, a1), Math.max(b0, b1) + tolerance);
+  return Math.max(0, right - left);
+}
+
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
 }
 
 // Zotero's annotation sort key. Format: "PPPPP|OOOOOO|TTTTT" — three

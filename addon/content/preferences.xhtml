@@ -46,6 +46,17 @@
       @media (max-width: 760px) { #zotero-ai-sidebar-tool-settings .zai-model-control { grid-template-columns: 1fr; } }
       #zotero-ai-sidebar-tool-settings .zai-inline { display: flex; align-items: center; gap: 8px; }
       #zotero-ai-sidebar-tool-settings .zai-prompt-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0 4px; font-weight: 700; }
+      #zotero-ai-sidebar-tool-settings .zai-prompt-option { margin: 8px 0 6px; padding: 8px 10px; border: 1px solid rgba(80, 70, 55, 0.12); border-radius: 8px; background: rgba(255,255,255,0.55); }
+      #zotero-ai-sidebar-tool-settings .zai-prompt-option-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+      #zotero-ai-sidebar-tool-settings .zai-prompt-option-head button { flex: 0 0 auto; padding: 4px 10px; }
+      #zotero-ai-sidebar-tool-settings .zai-prompt-option .zai-pref-help { margin: 4px 0 0 24px; font-size: 12px; }
+      #zotero-ai-sidebar-tool-settings .zai-custom-prompt-row { padding: 8px; }
+      #zotero-ai-sidebar-tool-settings .zai-custom-prompt-row .zai-subcard-title { margin-bottom: 6px; }
+      #zotero-ai-sidebar-tool-settings .zai-custom-prompt-fields { display: grid; grid-template-columns: minmax(160px, 1fr) 92px; gap: 8px; align-items: end; }
+      #zotero-ai-sidebar-tool-settings .zai-custom-prompt-field { display: grid; gap: 3px; min-width: 0; }
+      #zotero-ai-sidebar-tool-settings .zai-custom-prompt-field label { color: #666; font-size: 12px; font-weight: 600; }
+      #zotero-ai-sidebar-tool-settings .zai-custom-prompt-field textarea { min-height: 48px; }
+      #zotero-ai-sidebar-tool-settings .zai-custom-prompt-field textarea:focus { min-height: 96px; }
       #zotero-ai-sidebar-tool-settings .zai-config-json { min-height: 140px; }
       #zotero-ai-sidebar-tool-settings .zai-danger { background: rgba(170, 51, 51, 0.10); color: #a33; }
     </html:style>
@@ -91,6 +102,8 @@
         <html:input id="zai-ui-assistant-label" type="text" />
         <html:label for="zai-ui-assistant-avatar">AI 头像</html:label>
         <html:input id="zai-ui-assistant-avatar" type="text" placeholder="例如：🤖 或 data:image/png;base64,..." />
+        <html:label for="zai-ui-chat-font">聊天字体</html:label>
+        <html:input id="zai-ui-chat-font" type="text" placeholder="留空用默认；例如：LXGW WenKai, Noto Serif CJK SC, serif" />
         <html:label for="zai-ui-actions-position">消息按钮位置</html:label>
         <html:select id="zai-ui-actions-position">
           <html:option value="top-right">右上角</html:option>
@@ -111,7 +124,7 @@
     <html:div class="zai-pref-card">
       <html:div class="zai-pref-title">快捷提示词按钮</html:div>
       <html:p class="zai-pref-help">
-        可编辑“总结论文 / 全文重点 / 解释选区”的提示词，也可以新增自定义按钮。按钮必须同时有名称和提示词。
+        可编辑“总结论文 / 全文重点 / 解释选区”的提示词，也可以新增自定义按钮。自定义按钮可配置 PDF 单键快捷键，例如 t 触发 translate；焦点在 PDF Reader 且不是输入框时生效。
       </html:p>
       <html:div id="zai-built-in-prompts"></html:div>
       <html:div class="zai-pref-title" style="margin-top: 12px;">自定义按钮</html:div>

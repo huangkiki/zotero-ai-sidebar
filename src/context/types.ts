@@ -52,6 +52,8 @@ export interface MessageContext {
   sourceUrl?: string;
   selectedText?: string;
   explainSelection?: boolean;
+  annotationSuggestion?: boolean;
+  annotationColorGuide?: string;
   planMode?: ContextMode;
   planReason?: string;
   plannerSource?: ContextPlanSource;

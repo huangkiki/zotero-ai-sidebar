@@ -73,4 +73,40 @@ describe('chat history', () => {
       },
     ]);
   });
+
+  it('preserves assistant annotation draft color', async () => {
+    await saveChatMessages(42, [
+      {
+        role: 'assistant',
+        content: '解释正文',
+        annotationDraft: {
+          comment: '- 核心问题',
+          color: '#ff6666',
+          snapshot: {
+            text: 'selected sentence',
+            attachmentID: 7,
+            annotation: { position: { pageIndex: 0, rects: [] } },
+          },
+          state: { kind: 'idle' },
+        },
+      },
+    ]);
+
+    expect(await loadChatMessages(42)).toEqual([
+      {
+        role: 'assistant',
+        content: '解释正文',
+        annotationDraft: {
+          comment: '- 核心问题',
+          color: '#ff6666',
+          snapshot: {
+            text: 'selected sentence',
+            attachmentID: 7,
+            annotation: { position: { pageIndex: 0, rects: [] } },
+          },
+          state: { kind: 'idle' },
+        },
+      },
+    ]);
+  });
 });

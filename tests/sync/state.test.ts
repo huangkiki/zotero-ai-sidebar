@@ -4,6 +4,7 @@ import { savePresets } from '../../src/settings/storage';
 import { saveQuickPromptSettings } from '../../src/settings/quick-prompts';
 import { saveToolSettings } from '../../src/settings/tool-settings';
 import { saveUiSettings } from '../../src/settings/ui-settings';
+import { saveLocalUiSettings } from '../../src/settings/local-ui-settings';
 import {
   applySyncSnapshot,
   buildSyncSnapshot,
@@ -95,6 +96,7 @@ describe('sync snapshot round trip', () => {
     saveUiSettings(prefs, {
       messageActionsPosition: 'bottom-right',
       messageActionsLayout: 'edge',
+      chatFontFamily: 'Noto Serif CJK SC, serif',
       userProfile: { label: 'me', avatar: '🙂' },
       assistantProfile: { label: 'ai', avatar: '🤖' },
     });
@@ -104,7 +106,8 @@ describe('sync snapshot round trip', () => {
         fullTextHighlight: 'highlight',
         explainSelection: 'explain',
       },
-      customButtons: [{ id: 'a', label: 'A', prompt: 'do A' }],
+      selectionQuestionAnnotationEnabled: true,
+      customButtons: [{ id: 'a', label: 'A', prompt: 'do A', shortcut: 't' }],
     });
     saveToolSettings(prefs, {
       webSearchMode: 'live',
@@ -117,6 +120,7 @@ describe('sync snapshot round trip', () => {
         requireApproval: 'never',
       },
     });
+    saveLocalUiSettings(prefs, { chatFontSizePx: 18 });
     await saveChatMessages(42, [
       { role: 'user', content: 'hello' },
       { role: 'assistant', content: 'hi there' },
@@ -126,7 +130,12 @@ describe('sync snapshot round trip', () => {
     expect(snapshot.schema).toBe(SYNC_SCHEMA);
     expect(snapshot.presets).toHaveLength(1);
     expect(snapshot.uiSettings.messageActionsPosition).toBe('bottom-right');
+    expect(snapshot.uiSettings.chatFontFamily).toBe('Noto Serif CJK SC, serif');
+    expect(snapshot).not.toHaveProperty('localUiSettings');
+    expect(JSON.stringify(snapshot)).not.toContain('chatFontSizePx');
     expect(snapshot.quickPrompts.customButtons).toHaveLength(1);
+    expect(snapshot.quickPrompts.customButtons[0].shortcut).toBe('t');
+    expect(snapshot.quickPrompts.selectionQuestionAnnotationEnabled).toBe(true);
     expect(snapshot.toolSettings.webSearchMode).toBe('live');
     expect(snapshot.threads).toHaveLength(1);
     expect(snapshot.threads[0]).toMatchObject({
@@ -142,6 +151,7 @@ describe('sync snapshot round trip', () => {
     saveUiSettings(sourcePrefs, {
       messageActionsPosition: 'top-right',
       messageActionsLayout: 'inside',
+      chatFontFamily: 'LXGW WenKai, serif',
       userProfile: { label: 'YOU', avatar: '' },
       assistantProfile: { label: 'AI', avatar: '' },
     });
@@ -156,6 +166,7 @@ describe('sync snapshot round trip', () => {
 
     expect(result.threads.imported).toBe(1);
     expect(loadUiSettings(targetPrefs).messageActionsPosition).toBe('top-right');
+    expect(loadUiSettings(targetPrefs).chatFontFamily).toBe('LXGW WenKai, serif');
     expect(loadPresets(targetPrefs)).toEqual([]);
     expect(loadQuickPromptSettings(targetPrefs).builtIns.summary).toBeTruthy();
     expect(loadToolSettings(targetPrefs).webSearchMode).toBe('disabled');

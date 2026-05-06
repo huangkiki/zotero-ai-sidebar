@@ -15,6 +15,7 @@ export interface Message {
 
 export interface AssistantAnnotationDraft {
   comment: string;
+  color?: string;
   snapshot: {
     text: string;
     attachmentID: number;

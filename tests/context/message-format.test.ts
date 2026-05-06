@@ -22,6 +22,9 @@ describe('formatUserMessageForApi', () => {
         '[Selected PDF text]',
         'Important selected text.',
         '',
+        '[Selected text handling instruction]',
+        '用户问题若要求翻译、改写、润色、提取或逐句处理当前 PDF 选区，必须处理完整选区文本。\n这类任务只处理 [Selected PDF text]；不要把 [Retrieved PDF passages]、附近上下文或历史选区混入译文/改写结果。\n除非用户明确要求总结/压缩，不要用省略号（如 …、……、...）替代选区中的未翻译或未处理内容。\n如果选区本身包含省略号，可以保留原文含义，但不要新增省略来跳过内容。',
+        '',
         '[User question]',
         '解释这段',
       ].join('\n'),
@@ -74,6 +77,27 @@ describe('formatUserMessageForApi', () => {
     expect(formatted).toContain('Important highlighted text.');
     expect(formatted).toContain('Comment: Connect to related work.');
   });
+
+  it('adds hidden annotation instruction without changing the visible question', () => {
+    const message: Message = {
+      role: 'user',
+      content: '这句话为什么重要？',
+      context: {
+        selectedText: 'Important selected text.',
+        annotationSuggestion: true,
+        annotationColorGuide: '#2ea8e5 蓝色：任务定义。',
+      },
+    };
+
+    const formatted = formatUserMessageForApi(message);
+
+    expect(formatted).toContain('[Annotation suggestion instruction]');
+    expect(formatted).toContain('[Selected text handling instruction]');
+    expect(formatted).toContain('建议注释');
+    expect(formatted).toContain('建议颜色：#hex');
+    expect(formatted).toContain('#2ea8e5 蓝色');
+    expect(formatted.endsWith('[User question]\n这句话为什么重要？')).toBe(true);
+  });
 });
 
 describe('toApiMessages', () => {
@@ -125,7 +149,10 @@ describe('toApiMessages', () => {
     const oldMessage: Message = {
       role: 'user',
       content: '解释这段',
-      context: { selectedText: 'Recent selected figure caption.' },
+      context: {
+        selectedText: 'Recent selected figure caption.',
+        annotationSuggestion: true,
+      },
     };
     const assistantMessage: Message = { role: 'assistant', content: '解释结果' };
     const currentMessage: Message = { role: 'user', content: '继续解释' };
@@ -136,7 +163,31 @@ describe('toApiMessages', () => {
 
     expect(messages[0].content).toContain('[Selected PDF text]');
     expect(messages[0].content).toContain('Recent selected figure caption.');
+    expect(messages[0].content).not.toContain('[Selected text handling instruction]');
+    expect(messages[0].content).not.toContain('[Annotation suggestion instruction]');
     expect(messages[2].content).toBe('继续解释');
+  });
+
+  it('does not retain previous selected context when current turn has a fresh selection', () => {
+    const oldMessage: Message = {
+      role: 'user',
+      content: 'old translation',
+      context: { selectedText: 'Old selected text should not leak.' },
+    };
+    const assistantMessage: Message = { role: 'assistant', content: 'old answer' };
+    const currentMessage: Message = {
+      role: 'user',
+      content: '翻译',
+      context: { selectedText: 'Fresh selected text.' },
+    };
+
+    const messages = toApiMessages([oldMessage, assistantMessage, currentMessage], {
+      message: currentMessage,
+    });
+
+    expect(messages[0].content).toBe('old translation');
+    expect(messages[2].content).toContain('Fresh selected text.');
+    expect(messages[2].content).not.toContain('Old selected text');
   });
 
   it('reports retained recent context for visible tool traces', () => {

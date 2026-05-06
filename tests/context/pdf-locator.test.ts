@@ -104,6 +104,49 @@ describe("pdf locator", () => {
     expect(result?.matchedText).toContain("Extensive experiments");
   });
 
+  it("extracts selected text from annotation rects without crossing columns", async () => {
+    const locator = await createPdfLocator(
+      readerWithPages([
+        [
+          item(
+            "left column unrelated text should never leak into selection",
+            0,
+            720,
+            { width: 380 },
+          ),
+          item(
+            "right column selected text starts on this visual line",
+            410,
+            100,
+            { hasEOL: true, width: 360 },
+          ),
+          item(
+            "continues on the next selected line",
+            410,
+            80,
+            { hasEOL: true, width: 360 },
+          ),
+          item("and ends on the final selected line.", 410, 60, {
+            width: 260,
+          }),
+        ],
+      ]),
+    );
+
+    const text = await locator.extractTextFromPosition({
+      pageIndex: 0,
+      rects: [
+        [410, 100, 770, 110],
+        [410, 80, 770, 90],
+        [410, 60, 670, 70],
+      ],
+    });
+
+    expect(text).toContain("right column selected text starts");
+    expect(text).toContain("final selected line");
+    expect(text).not.toContain("left column unrelated");
+  });
+
   it("uses normalized substring matching for full-width text", async () => {
     const locator = await createPdfLocator(
       readerWithPages([[item("Ｆｉｅｌｄ result", 0, 100)]]),

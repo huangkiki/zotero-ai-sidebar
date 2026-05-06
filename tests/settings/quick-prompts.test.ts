@@ -34,8 +34,9 @@ describe('quick prompt settings storage', () => {
         fullTextHighlight: 'highlight prompt',
         explainSelection: 'explain prompt',
       },
+      selectionQuestionAnnotationEnabled: true,
       customButtons: [
-        { id: 'method', label: '方法', prompt: '总结方法' },
+        { id: 'method', label: '方法', prompt: '总结方法', shortcut: 't' },
       ],
     });
 
@@ -45,8 +46,9 @@ describe('quick prompt settings storage', () => {
         fullTextHighlight: 'highlight prompt',
         explainSelection: 'explain prompt',
       },
+      selectionQuestionAnnotationEnabled: true,
       customButtons: [
-        { id: 'method', label: '方法', prompt: '总结方法' },
+        { id: 'method', label: '方法', prompt: '总结方法', shortcut: 't' },
       ],
     });
   });
@@ -56,10 +58,16 @@ describe('quick prompt settings storage', () => {
     prefs.set(
       'extensions.zotero-ai-sidebar.quickPrompts',
       JSON.stringify({
-        builtIns: { summary: '', fullTextHighlight: 'x', explainSelection: 'y' },
+        builtIns: {
+          summary: '',
+          fullTextHighlight: 'x',
+          explainSelection: 'y',
+        },
+        selectionQuestionAnnotationEnabled: 'yes',
         customButtons: [
           { id: 'bad', label: '空提示词', prompt: '' },
-          { id: 'ok', label: 'OK', prompt: 'Do it' },
+          { id: 'nameless-bad', label: '', prompt: 'No trigger' },
+          { id: 'ok', label: 'OK', prompt: 'Do it', shortcut: 'Enter' },
         ],
       }),
     );
@@ -68,8 +76,53 @@ describe('quick prompt settings storage', () => {
     expect(settings.builtIns.summary).toBe(
       DEFAULT_QUICK_PROMPT_SETTINGS.builtIns.summary,
     );
+    expect(settings.selectionQuestionAnnotationEnabled).toBe(false);
     expect(settings.customButtons).toEqual([
       { id: 'ok', label: 'OK', prompt: 'Do it' },
     ]);
+  });
+
+  it('keeps only unique single-key custom shortcuts', () => {
+    const prefs = memPrefs();
+    saveQuickPromptSettings(prefs, {
+      ...DEFAULT_QUICK_PROMPT_SETTINGS,
+      customButtons: [
+        { id: 'translate', label: '翻译', prompt: '翻译选区', shortcut: 'T' },
+        { id: 'dup', label: '重复', prompt: '重复', shortcut: 't' },
+        { id: 'num', label: '数字', prompt: '数字', shortcut: '1' },
+      ],
+    });
+
+    expect(loadQuickPromptSettings(prefs).customButtons).toEqual([
+      { id: 'translate', label: '翻译', prompt: '翻译选区', shortcut: 't' },
+      { id: 'dup', label: '重复', prompt: '重复' },
+      { id: 'num', label: '数字', prompt: '数字', shortcut: '1' },
+    ]);
+  });
+
+  it('allows shortcut-only prompts without rendering a button label', () => {
+    const prefs = memPrefs();
+    saveQuickPromptSettings(prefs, {
+      ...DEFAULT_QUICK_PROMPT_SETTINGS,
+      customButtons: [
+        { id: 'translate-key', label: '', prompt: '翻译选区', shortcut: 't' },
+      ],
+    });
+
+    expect(loadQuickPromptSettings(prefs).customButtons).toEqual([
+      { id: 'translate-key', label: '', prompt: '翻译选区', shortcut: 't' },
+    ]);
+  });
+
+  it('migrates the old annotation suggestion switch name', () => {
+    const prefs = memPrefs();
+    prefs.set(
+      'extensions.zotero-ai-sidebar.quickPrompts',
+      JSON.stringify({ annotationSuggestionColorEnabled: true }),
+    );
+
+    expect(loadQuickPromptSettings(prefs).selectionQuestionAnnotationEnabled).toBe(
+      true,
+    );
   });
 });

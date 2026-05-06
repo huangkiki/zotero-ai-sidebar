@@ -186,12 +186,20 @@ function normalizeAnnotationDraft(value: unknown): AssistantAnnotationDraft | nu
   const attachmentID = typeof snapshot.attachmentID === 'number' ? snapshot.attachmentID : null;
   const annotation = isRecord(snapshot.annotation) ? snapshot.annotation : null;
   if (!text || attachmentID == null || !annotation) return null;
+  const color = normalizeAnnotationColor(value.color);
   const state = normalizeAnnotationDraftState(value.state);
   return {
     comment,
+    ...(color ? { color } : {}),
     snapshot: { text, attachmentID, annotation },
     state,
   };
+}
+
+function normalizeAnnotationColor(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const color = value.trim().toLowerCase();
+  return /^#[0-9a-f]{6}$/.test(color) ? color : '';
 }
 
 function normalizeAnnotationDraftState(value: unknown): AssistantAnnotationDraft['state'] {

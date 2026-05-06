@@ -43,6 +43,9 @@ export function toApiMessages(
             currentContext?.message === message
               ? currentContext.fullText
               : undefined,
+            {
+              includeTurnInstructions: currentContext?.message === message,
+            },
           )
         : message.content,
     ...(message.images?.length ? { images: message.images } : {}),
@@ -67,8 +70,15 @@ export function retainedContextStats(
 export function formatUserMessageForApi(
   message: Message,
   fullText?: string,
+  options: { includeTurnInstructions?: boolean } = {
+    includeTurnInstructions: true,
+  },
 ): string {
-  const contextBlocks = formatContextBlocks(message, fullText);
+  const contextBlocks = formatContextBlocks(
+    message,
+    fullText,
+    options.includeTurnInstructions !== false,
+  );
   if (!contextBlocks.length) return message.content;
   return [...contextBlocks, "[User question]", message.content].join("\n");
 }
@@ -318,13 +328,24 @@ function formatToolTraceInline(
     .join("; ");
 }
 
-function formatContextBlocks(message: Message, fullText?: string): string[] {
+function formatContextBlocks(
+  message: Message,
+  fullText?: string,
+  includeTurnInstructions = true,
+): string[] {
   const context = message.context;
   if (!context && !fullText) return [];
 
   const blocks: string[] = [];
   if (context?.selectedText) {
     blocks.push("[Selected PDF text]", context.selectedText, "");
+    if (includeTurnInstructions) {
+      blocks.push(
+        "[Selected text handling instruction]",
+        selectedTextHandlingInstruction(),
+        "",
+      );
+    }
   }
   if (context?.annotations?.length) {
     blocks.push(
@@ -343,6 +364,13 @@ function formatContextBlocks(message: Message, fullText?: string): string[] {
   if (fullText) {
     blocks.push("[Paper full text]", fullText, "");
   }
+  if (includeTurnInstructions && context?.annotationSuggestion) {
+    blocks.push(
+      "[Annotation suggestion instruction]",
+      annotationSuggestionInstruction(context),
+      "",
+    );
+  }
   if (context?.planMode && !context.selectedText) {
     blocks.push(
       "[Context plan]",
@@ -357,6 +385,34 @@ function formatContextBlocks(message: Message, fullText?: string): string[] {
     );
   }
   return blocks;
+}
+
+function selectedTextHandlingInstruction(): string {
+  return [
+    "用户问题若要求翻译、改写、润色、提取或逐句处理当前 PDF 选区，必须处理完整选区文本。",
+    "这类任务只处理 [Selected PDF text]；不要把 [Retrieved PDF passages]、附近上下文或历史选区混入译文/改写结果。",
+    "除非用户明确要求总结/压缩，不要用省略号（如 …、……、...）替代选区中的未翻译或未处理内容。",
+    "如果选区本身包含省略号，可以保留原文含义，但不要新增省略来跳过内容。",
+  ].join("\n");
+}
+
+function annotationSuggestionInstruction(
+  context: NonNullable<Message["context"]>,
+): string {
+  const lines = [
+    context.explainSelection
+      ? "本轮是解释选区。回答末尾必须另起一段，以 `建议注释：` 开头，用 `- ` 列出 1-3 条可直接保存到 PDF 的简短注释要点（每条 <= 80 字）。"
+      : "本轮用户是在 PDF 选区基础上手动提问。请先正常回答用户问题；回答结束后，另起一段，以 `建议注释：` 开头，用 `- ` 列出 1-3 条可直接保存到 PDF 的简短注释要点（每条 <= 80 字）。",
+    "建议注释只能写当前选区和已核对上下文支持的内容；证据不足时明确写“基于当前上下文尚不能确定”。",
+  ];
+  if (context.annotationColorGuide) {
+    lines.push(
+      "请参考 PDF 注释颜色预设，为本次选区选择一个最匹配的预设颜色；类别不明确时省略颜色，不要强行分类。",
+      `当前颜色预设：\n${context.annotationColorGuide}`,
+      "如果选择了颜色，请在 `建议注释：` 段最后另起一行输出 `建议颜色：#hex`；只能使用预设中已有的 hex。",
+    );
+  }
+  return lines.join("\n");
 }
 
 export function formatAnnotations(annotations: ItemAnnotation[]): string {
@@ -394,6 +450,8 @@ function retainedRecentContextIndexes(
   policy: ContextPolicy,
 ): Set<number> {
   const retained = new Set<number>();
+  if (messages[currentIndex]?.context?.selectedText) return retained;
+
   const signatures = new Set<string>();
   let remainingChars = policy.retainedContextCharBudget;
   const minIndex = Math.max(0, currentIndex - policy.retainedContextTurnCount);

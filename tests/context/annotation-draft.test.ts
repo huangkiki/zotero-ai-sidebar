@@ -45,6 +45,20 @@ describe('parseAnnotationSuggestion', () => {
     expect(parseAnnotationSuggestion(content).comment).toBe('- 要点 A\n- 要点 B');
   });
 
+  it('extracts optional annotation color without saving it into comment', () => {
+    const content = [
+      '解释正文。',
+      '',
+      '建议注释：',
+      '- 这句话定义了核心任务。',
+      '建议颜色：#2EA8E5',
+    ].join('\n');
+    const { body, comment, color } = parseAnnotationSuggestion(content);
+    expect(body).toBe('解释正文。');
+    expect(comment).toBe('- 这句话定义了核心任务。');
+    expect(color).toBe('#2ea8e5');
+  });
+
   it('takes only the last header occurrence', () => {
     const content = [
       '第一段提到"建议注释"这个词组，但不是真正的标记。',

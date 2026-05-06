@@ -565,6 +565,7 @@ function renderUiSettings(doc: Document): void {
   setInputValue(doc, 'zai-ui-user-avatar', settings.userProfile.avatar);
   setInputValue(doc, 'zai-ui-assistant-label', settings.assistantProfile.label);
   setInputValue(doc, 'zai-ui-assistant-avatar', settings.assistantProfile.avatar);
+  setInputValue(doc, 'zai-ui-chat-font', settings.chatFontFamily);
   const position = byID<HTMLSelectElement>(doc, 'zai-ui-actions-position');
   if (position) position.value = settings.messageActionsPosition;
   const layout = byID<HTMLSelectElement>(doc, 'zai-ui-actions-layout');
@@ -584,6 +585,7 @@ function readUiSettingsControls(doc: Document): UiSettings {
       label: byID<HTMLInputElement>(doc, 'zai-ui-assistant-label')?.value,
       avatar: byID<HTMLInputElement>(doc, 'zai-ui-assistant-avatar')?.value,
     },
+    chatFontFamily: byID<HTMLInputElement>(doc, 'zai-ui-chat-font')?.value,
     messageActionsPosition: position?.value,
     messageActionsLayout: layout?.value,
   });
@@ -1133,7 +1135,54 @@ function populateBuiltInPromptControls(
     builtInPromptControl(doc, 'summary', '总结论文', settings.builtIns.summary, DEFAULT_QUICK_PROMPT_SETTINGS.builtIns.summary),
     builtInPromptControl(doc, 'fullTextHighlight', '全文重点', settings.builtIns.fullTextHighlight, DEFAULT_QUICK_PROMPT_SETTINGS.builtIns.fullTextHighlight),
     builtInPromptControl(doc, 'explainSelection', '解释选区', settings.builtIns.explainSelection, DEFAULT_QUICK_PROMPT_SETTINGS.builtIns.explainSelection),
+    selectionQuestionAnnotationControl(
+      doc,
+      settings.selectionQuestionAnnotationEnabled,
+    ),
   );
+}
+
+function selectionQuestionAnnotationControl(
+  doc: Document,
+  enabled: boolean,
+): HTMLElement {
+  const wrap = el(doc, 'div', 'zai-prompt-option');
+  const checkbox = doc.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.id = 'zai-selection-question-annotation-enabled';
+  checkbox.checked = enabled;
+  checkbox.addEventListener('change', () => {
+    const settings = loadQuickPromptSettings(zoteroPrefs());
+    saveQuickPromptSettings(zoteroPrefs(), {
+      ...settings,
+      selectionQuestionAnnotationEnabled: checkbox.checked,
+    });
+    refreshSidebarPreferences();
+    setStatus(
+      doc,
+      'zai-prompt-status',
+      checkbox.checked
+        ? '普通选区提问后会自动生成建议注释，已直接保存。'
+        : '普通选区提问后不再自动生成建议注释，已直接保存。',
+    );
+  });
+  const save = button(doc, '保存提示词/按钮');
+  save.addEventListener('click', () => savePromptControls(doc));
+  const head = el(doc, 'div', 'zai-prompt-option-head');
+  head.append(
+    labelWrap(doc, checkbox, '普通选区提问后生成建议注释'),
+    save,
+  );
+  wrap.append(
+    head,
+    el(
+      doc,
+      'div',
+      'zai-pref-help',
+      '默认关闭；仅作用于“选中文本后在对话框手动提问”。解释选区按钮始终会生成建议注释。开启后会参考 PDF 注释颜色预设推荐颜色。',
+    ),
+  );
+  return wrap;
 }
 
 function builtInPromptControl(
@@ -1160,23 +1209,58 @@ function builtInPromptControl(
 
 function addCustomPromptRow(
   doc: Document,
-  config: { id: string; label: string; prompt: string },
+  config: { id: string; label: string; prompt: string; shortcut?: string },
 ): void {
   const list = byID<HTMLElement>(doc, 'zai-custom-prompts');
   if (!list) return;
   const card = el(doc, 'div', 'zai-subcard zai-custom-prompt-row');
   card.dataset.id = config.id;
   const title = el(doc, 'div', 'zai-subcard-title');
-  title.append(el(doc, 'span', '', '自定义按钮'));
+  title.append(el(doc, 'span', '', '自定义提示'));
   const remove = button(doc, '删除');
   remove.addEventListener('click', () => card.remove());
   title.append(remove);
   const label = input(doc, config.label);
   label.dataset.field = 'label';
+  label.placeholder = '留空则只作为快捷键';
+  const shortcut = input(doc, config.shortcut ?? '');
+  shortcut.dataset.field = 'shortcut';
+  shortcut.maxLength = 1;
+  shortcut.placeholder = '例如：t';
+  shortcut.title = '焦点在 PDF Reader 时按这个单键触发；支持 a-z / 0-9。';
   const prompt = textarea(doc, config.prompt);
   prompt.dataset.field = 'prompt';
-  card.append(title, grid(doc, [['按钮名称', label], ['提示词', prompt]]));
+  card.append(
+    title,
+    compactPromptFields(doc, label, shortcut),
+    compactPromptField(doc, '提示词', prompt, true),
+  );
   list.append(card);
+}
+
+function compactPromptFields(
+  doc: Document,
+  label: HTMLElement,
+  shortcut: HTMLElement,
+): HTMLElement {
+  const wrap = el(doc, 'div', 'zai-custom-prompt-fields');
+  wrap.append(
+    compactPromptField(doc, '按钮名称（可空）', label),
+    compactPromptField(doc, 'PDF 快捷键', shortcut),
+  );
+  return wrap;
+}
+
+function compactPromptField(
+  doc: Document,
+  label: string,
+  control: HTMLElement,
+  full = false,
+): HTMLElement {
+  const wrap = el(doc, 'div', 'zai-custom-prompt-field');
+  if (full) wrap.classList.add('zai-custom-prompt-full');
+  wrap.append(el(doc, 'label', '', label), control);
+  return wrap;
 }
 
 function savePromptControls(doc: Document, okMessage = '提示词已保存，侧边栏按钮立即刷新。'): void {
@@ -1203,21 +1287,44 @@ function readPromptControls(doc: Document): QuickPromptSettings | string {
   if (!summary || !fullTextHighlight || !explainSelection) {
     return '内置快捷按钮的提示词不能为空。';
   }
+  const selectionQuestionAnnotationEnabled =
+    byID<HTMLInputElement>(doc, 'zai-selection-question-annotation-enabled')
+      ?.checked === true;
   const customButtons = [];
   for (const node of Array.from(doc.querySelectorAll('.zai-custom-prompt-row'))) {
     const row = node as HTMLElement;
     const label = controlValue(row, 'label');
+    const shortcut = controlValue(row, 'shortcut');
     const prompt = controlValue(row, 'prompt');
-    if (!label && !prompt) continue;
-    if (!label || !prompt) return '自定义按钮必须同时填写名称和提示词。';
-    customButtons.push({ id: row.dataset.id || makeId('prompt'), label, prompt });
+    if (!label && !shortcut && !prompt) continue;
+    if (!prompt) return '自定义提示必须填写提示词。';
+    if (!label && !shortcut)
+      return '自定义提示至少填写按钮名称或 PDF 快捷键。';
+    customButtons.push({
+      id: row.dataset.id || makeId('prompt'),
+      label,
+      prompt,
+      shortcut,
+    });
   }
-  return { builtIns: { summary, fullTextHighlight, explainSelection }, customButtons };
+  return {
+    builtIns: {
+      summary,
+      fullTextHighlight,
+      explainSelection,
+    },
+    customButtons,
+    selectionQuestionAnnotationEnabled,
+  };
 }
 
 function customPromptLabels(settings: QuickPromptSettings): string {
   return settings.customButtons.length
-    ? settings.customButtons.map((button) => button.label).join('、')
+    ? settings.customButtons
+        .map((button) =>
+          button.label || `快捷键 ${button.shortcut?.toUpperCase()}`,
+        )
+        .join('、')
     : '无';
 }
 

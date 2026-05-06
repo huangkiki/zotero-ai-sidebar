@@ -1,6 +1,9 @@
 import type { PrefsStore } from './storage';
 
-export type BuiltInPromptID = 'summary' | 'fullTextHighlight' | 'explainSelection';
+export type BuiltInPromptID =
+  | 'summary'
+  | 'fullTextHighlight'
+  | 'explainSelection';
 
 export interface BuiltInPromptSettings {
   summary: string;
@@ -12,11 +15,13 @@ export interface CustomPromptButton {
   id: string;
   label: string;
   prompt: string;
+  shortcut?: string;
 }
 
 export interface QuickPromptSettings {
   builtIns: BuiltInPromptSettings;
   customButtons: CustomPromptButton[];
+  selectionQuestionAnnotationEnabled: boolean;
 }
 
 export const DEFAULT_SUMMARY_PROMPT =
@@ -56,6 +61,7 @@ export const DEFAULT_QUICK_PROMPT_SETTINGS: QuickPromptSettings = {
     explainSelection: DEFAULT_EXPLAIN_SELECTION_PROMPT,
   },
   customButtons: [],
+  selectionQuestionAnnotationEnabled: false,
 };
 
 const KEY = 'extensions.zotero-ai-sidebar.quickPrompts';
@@ -100,6 +106,10 @@ export function normalizeQuickPromptSettings(value: unknown): QuickPromptSetting
       ),
     },
     customButtons: normalizeCustomButtons(input.customButtons),
+    selectionQuestionAnnotationEnabled:
+      input.selectionQuestionAnnotationEnabled === true ||
+      (input as { annotationSuggestionColorEnabled?: unknown })
+        .annotationSuggestionColorEnabled === true,
   };
 }
 
@@ -107,15 +117,17 @@ function normalizeCustomButtons(value: unknown): CustomPromptButton[] {
   if (!Array.isArray(value)) return [];
   const buttons: CustomPromptButton[] = [];
   const seen = new Set<string>();
+  const seenShortcuts = new Set<string>();
   for (const raw of value) {
     if (!raw || typeof raw !== 'object') continue;
     const item = raw as Partial<CustomPromptButton>;
     const label = stringValue(item.label).slice(0, MAX_LABEL_CHARS);
     const prompt = stringValue(item.prompt).slice(0, MAX_PROMPT_CHARS);
-    if (!label || !prompt) continue;
-    const baseId = stringValue(item.id) || label;
+    const shortcut = uniqueShortcut(item.shortcut, seenShortcuts);
+    if (!prompt || (!label && !shortcut)) continue;
+    const baseId = stringValue(item.id) || label || shortcut;
     const id = uniqueID(baseId, seen);
-    buttons.push({ id, label, prompt });
+    buttons.push({ id, label, prompt, ...(shortcut ? { shortcut } : {}) });
     if (buttons.length >= MAX_CUSTOM_BUTTONS) break;
   }
   return buttons;
@@ -136,6 +148,21 @@ function uniqueID(value: string, seen: Set<string>): string {
 function promptValue(value: unknown, fallback: string): string {
   const prompt = stringValue(value).slice(0, MAX_PROMPT_CHARS);
   return prompt || fallback;
+}
+
+function uniqueShortcut(
+  value: unknown,
+  seenShortcuts: Set<string>,
+): string {
+  const shortcut = normalizeShortcut(value);
+  if (!shortcut || seenShortcuts.has(shortcut)) return '';
+  seenShortcuts.add(shortcut);
+  return shortcut;
+}
+
+function normalizeShortcut(value: unknown): string {
+  const shortcut = stringValue(value).toLowerCase();
+  return /^[a-z0-9]$/.test(shortcut) ? shortcut : '';
 }
 
 function stringValue(value: unknown): string {

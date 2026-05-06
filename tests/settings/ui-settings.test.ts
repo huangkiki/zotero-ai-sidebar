@@ -27,6 +27,7 @@ describe('ui settings storage', () => {
     saveUiSettings(prefs, {
       messageActionsPosition: 'top-right',
       messageActionsLayout: 'inside',
+      chatFontFamily: '"LXGW WenKai", serif',
       userProfile: { label: '我', avatar: '🙂' },
       assistantProfile: { label: '助手', avatar: 'https://example.test/ai.png' },
     });
@@ -34,8 +35,27 @@ describe('ui settings storage', () => {
     expect(loadUiSettings(prefs)).toEqual({
       messageActionsPosition: 'top-right',
       messageActionsLayout: 'inside',
+      chatFontFamily: '"LXGW WenKai", serif',
       userProfile: { label: '我', avatar: '🙂' },
       assistantProfile: { label: '助手', avatar: 'https://example.test/ai.png' },
     });
+  });
+
+  it('normalizes chat font family values', () => {
+    const prefs = memPrefs();
+    saveUiSettings(prefs, {
+      ...DEFAULT_UI_SETTINGS,
+      chatFontFamily: ' Noto Serif CJK SC, serif ',
+    });
+
+    expect(loadUiSettings(prefs).chatFontFamily).toBe(
+      'Noto Serif CJK SC, serif',
+    );
+
+    prefs.set(
+      'extensions.zotero-ai-sidebar.uiSettings',
+      JSON.stringify({ chatFontFamily: 'safe; color:red' }),
+    );
+    expect(loadUiSettings(prefs).chatFontFamily).toBe('');
   });
 });
