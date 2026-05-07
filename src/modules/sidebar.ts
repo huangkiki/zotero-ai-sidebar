@@ -70,6 +70,23 @@ import {
   type MathRenderMode,
 } from "../ui/math";
 import { serializeSelectionAsMarkdown } from "../ui/selection-serialize";
+import { TranslateModeController } from "../translate/translate-mode";
+import {
+  loadTranslateSettings,
+  saveTranslateSettings,
+} from "../translate/settings";
+import {
+  parseKeybinding,
+  formatKeybinding,
+} from "../translate/keybinding";
+import type {
+  TranslateSettings,
+  TranslateThinking,
+  TranslateContextLevel,
+  TranslateOverlayPosition,
+} from "../settings/types";
+
+const translateControllers = new WeakMap<Window, TranslateModeController>();
 
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
 const COLUMN_ID = "zai-column";
@@ -479,6 +496,18 @@ function renderToolbar(doc: Document, mount: HTMLElement, state: PanelState) {
   });
   bottomRow.append(openNote);
   bottomRow.append(settings);
+  const win = mount.ownerDocument!.defaultView!;
+  const translateBtn = buttonEl(doc, "译");
+  translateBtn.title = "逐句翻译模式（点击切换，右键设置）";
+  syncTranslateBtnState(translateBtn);
+  translateBtn.addEventListener("click", () => {
+    void toggleTranslateMode(win, translateBtn);
+  });
+  translateBtn.addEventListener("contextmenu", (ev) => {
+    ev.preventDefault();
+    openTranslateSettingsPopover(win, translateBtn);
+  });
+  bottomRow.append(translateBtn);
   const hide = buttonEl(doc, "隐藏");
   hide.title = "隐藏 AI 对话列";
   hide.addEventListener("click", () => hideCurrentSidebar(mount));
@@ -8774,6 +8803,206 @@ function itemIDToParentID(itemID: unknown): number | null {
   } catch {
     return itemID;
   }
+}
+
+async function toggleTranslateMode(win: Window, btn: HTMLElement): Promise<void> {
+  const prefs = zoteroPrefs();
+  const settings = loadTranslateSettings(prefs);
+  const next = !settings.enabled;
+  saveTranslateSettings(prefs, { ...settings, enabled: next });
+
+  const ctrl = await getOrCreateTranslateController(win);
+  if (!ctrl) {
+    saveTranslateSettings(prefs, { ...settings, enabled: false });
+    syncTranslateBtnState(btn);
+    return;
+  }
+  if (next) await ctrl.enable();
+  else ctrl.disable();
+  syncTranslateBtnState(btn);
+}
+
+async function getOrCreateTranslateController(win: Window): Promise<TranslateModeController | null> {
+  const existing = translateControllers.get(win);
+  if (existing) return existing;
+  const reader = getActiveReader(win);
+  if (!reader) return null;
+  const prefs = zoteroPrefs();
+  const ctrl = new TranslateModeController({
+    prefs,
+    presets: loadPresets(prefs),
+    reader,
+  });
+  translateControllers.set(win, ctrl);
+  return ctrl;
+}
+
+function syncTranslateBtnState(btn: HTMLElement): void {
+  const enabled = loadTranslateSettings(zoteroPrefs()).enabled;
+  btn.classList.toggle("zai-toolbar-icon--active", enabled);
+}
+
+function openTranslateSettingsPopover(win: Window, anchor: HTMLElement): void {
+  const doc = win.document;
+  const existing = doc.getElementById("zai-translate-settings-popover");
+  if (existing) { existing.remove(); return; }
+
+  const prefs = zoteroPrefs();
+  let settings = loadTranslateSettings(prefs);
+  const presets = loadPresets(prefs).filter((p) => p.provider === "openai");
+
+  const pop = doc.createElement("div");
+  pop.id = "zai-translate-settings-popover";
+  pop.className = "zai-translate-settings-popover";
+
+  const update = (patch: Partial<TranslateSettings>): void => {
+    settings = { ...settings, ...patch };
+    saveTranslateSettings(prefs, settings);
+    syncTranslateBtnState(anchor);
+  };
+
+  // ON / OFF row
+  pop.append(makeRow(doc, "状态", makeToggle(doc, settings.enabled, async (val) => {
+    update({ enabled: val });
+    const ctrl = await getOrCreateTranslateController(win);
+    if (!ctrl) return;
+    if (val) await ctrl.enable(); else ctrl.disable();
+  })));
+
+  // Preset
+  const presetSelect = doc.createElement("select");
+  presetSelect.append(makeOption(doc, "", "(选择 GPT 配置)"));
+  for (const p of presets) presetSelect.append(makeOption(doc, p.id, p.label));
+  presetSelect.value = settings.presetId;
+  pop.append(makeRow(doc, "API", presetSelect));
+
+  // Model
+  const modelSelect = doc.createElement("select");
+  const refreshModels = (): void => {
+    modelSelect.replaceChildren();
+    const preset = presets.find((p) => p.id === settings.presetId) ?? presets[0];
+    const list = preset?.models?.length ? preset.models : (preset ? [preset.model] : []);
+    for (const m of list) modelSelect.append(makeOption(doc, m, m));
+    modelSelect.value = settings.model && list.includes(settings.model) ? settings.model : (list[0] ?? "");
+    if (modelSelect.value !== settings.model) update({ model: modelSelect.value });
+  };
+  refreshModels();
+  pop.append(makeRow(doc, "模型", modelSelect));
+
+  presetSelect.addEventListener("change", () => {
+    update({ presetId: presetSelect.value, model: "" });
+    refreshModels();
+  });
+  modelSelect.addEventListener("change", () => update({ model: modelSelect.value }));
+
+  pop.append(makeRow(doc, "思考", makeSegmented<TranslateThinking>(doc,
+    [["none", "关"], ["low", "低"], ["medium", "中"], ["high", "高"]],
+    settings.thinking, (v) => update({ thinking: v }))));
+
+  pop.append(makeRow(doc, "上下文", makeSegmented<TranslateContextLevel>(doc,
+    [["none", "无"], ["paragraph", "段落"], ["page", "整页"]],
+    settings.ctxLevel, (v) => update({ ctxLevel: v }))));
+
+  pop.append(makeRow(doc, "位置", makeSegmented<TranslateOverlayPosition>(doc,
+    [["above", "句上方"], ["below", "句下方"]],
+    settings.overlayPosition, (v) => update({ overlayPosition: v }))));
+
+  pop.append(makeRow(doc, "下一句", makeKeyRecorder(doc, settings.nextSentenceKey,
+    (v) => update({ nextSentenceKey: v }))));
+  pop.append(makeRow(doc, "上一句", makeKeyRecorder(doc, settings.prevSentenceKey,
+    (v) => update({ prevSentenceKey: v }))));
+
+  (doc.body ?? doc.documentElement!).append(pop);
+  const anchorRect = anchor.getBoundingClientRect();
+  pop.style.position = "fixed";
+  pop.style.right = `${win.innerWidth - anchorRect.right}px`;
+  pop.style.top = `${anchorRect.bottom + 4}px`;
+  pop.style.zIndex = "9999";
+
+  const dismiss = (ev: Event): void => {
+    if (pop.contains(ev.target as Node)) return;
+    if (anchor === ev.target) return;
+    pop.remove();
+    win.removeEventListener("mousedown", dismiss, true);
+  };
+  win.addEventListener("mousedown", dismiss, true);
+}
+
+function makeRow(doc: Document, label: string, control: HTMLElement): HTMLElement {
+  const row = doc.createElement("div");
+  row.className = "zai-translate-settings-popover__row";
+  const lab = doc.createElement("label");
+  lab.textContent = label;
+  row.append(lab, control);
+  return row;
+}
+
+function makeOption(doc: Document, value: string, label: string): HTMLOptionElement {
+  const o = doc.createElement("option");
+  o.value = value;
+  o.textContent = label;
+  return o;
+}
+
+function makeToggle(doc: Document, value: boolean, onChange: (v: boolean) => void): HTMLElement {
+  const cb = doc.createElement("input");
+  cb.type = "checkbox";
+  cb.checked = value;
+  cb.addEventListener("change", () => onChange(cb.checked));
+  return cb;
+}
+
+function makeSegmented<T extends string>(
+  doc: Document,
+  options: Array<[T, string]>,
+  current: T,
+  onChange: (v: T) => void,
+): HTMLElement {
+  const wrap = doc.createElement("div");
+  wrap.className = "zai-translate-segmented";
+  for (const [val, label] of options) {
+    const btn = doc.createElement("button");
+    btn.type = "button";
+    btn.textContent = label;
+    btn.classList.toggle("zai-translate-segmented__btn--active", val === current);
+    btn.addEventListener("click", () => {
+      for (const c of wrap.children) c.classList.remove("zai-translate-segmented__btn--active");
+      btn.classList.add("zai-translate-segmented__btn--active");
+      onChange(val);
+    });
+    wrap.append(btn);
+  }
+  return wrap;
+}
+
+function makeKeyRecorder(doc: Document, value: string, onChange: (v: string) => void): HTMLElement {
+  const btn = doc.createElement("button");
+  btn.type = "button";
+  btn.className = "zai-translate-keyrecorder";
+  btn.textContent = value || "(未设置)";
+  btn.addEventListener("click", () => {
+    btn.textContent = "按下按键…";
+    btn.classList.add("zai-translate-keyrecorder--listening");
+    const onKey = (ev: KeyboardEvent): void => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (["Shift", "Control", "Alt", "Meta"].includes(ev.key)) return;
+      const fmt = formatKeybinding({
+        key: ev.key,
+        shift: ev.shiftKey,
+        ctrl: ev.ctrlKey,
+        alt: ev.altKey,
+        meta: ev.metaKey,
+      });
+      btn.removeEventListener("keydown", onKey, true);
+      btn.classList.remove("zai-translate-keyrecorder--listening");
+      btn.textContent = fmt;
+      onChange(fmt);
+    };
+    btn.addEventListener("keydown", onKey, true);
+    btn.focus();
+  });
+  return btn;
 }
 
 declare global {
