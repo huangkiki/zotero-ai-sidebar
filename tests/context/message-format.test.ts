@@ -23,7 +23,7 @@ describe('formatUserMessageForApi', () => {
         'Important selected text.',
         '',
         '[Selected text handling instruction]',
-        '用户问题若要求翻译、改写、润色、提取或逐句处理当前 PDF 选区，必须处理完整选区文本。\n这类任务只处理 [Selected PDF text]；不要把 [Retrieved PDF passages]、附近上下文或历史选区混入译文/改写结果。\n除非用户明确要求总结/压缩，不要用省略号（如 …、……、...）替代选区中的未翻译或未处理内容。\n如果选区本身包含省略号，可以保留原文含义，但不要新增省略来跳过内容。',
+        '用户问题若要求翻译、改写、润色、提取或逐句处理当前 PDF 选区，必须处理完整选区文本。\n这类任务只处理 [Selected PDF text]；不要把 [Retrieved PDF passages]、附近上下文或历史选区混入译文/改写结果。\n尽量保留 [Selected PDF text] 中的段落、编号列表和项目结构；不要保留 PDF 版面造成的机械换行。\n除非用户明确要求总结/压缩，不要用省略号（如 …、……、...）替代选区中的未翻译或未处理内容。\n如果选区本身包含省略号，可以保留原文含义，但不要新增省略来跳过内容。',
         '',
         '[User question]',
         '解释这段',
