@@ -30,6 +30,7 @@ describe('ui settings storage', () => {
       chatFontFamily: '"LXGW WenKai", serif',
       userProfile: { label: '我', avatar: '🙂' },
       assistantProfile: { label: '助手', avatar: 'https://example.test/ai.png' },
+      composerQueueWhileSending: true,
     });
 
     expect(loadUiSettings(prefs)).toEqual({
@@ -38,7 +39,25 @@ describe('ui settings storage', () => {
       chatFontFamily: '"LXGW WenKai", serif',
       userProfile: { label: '我', avatar: '🙂' },
       assistantProfile: { label: '助手', avatar: 'https://example.test/ai.png' },
+      composerQueueWhileSending: true,
     });
+  });
+
+  it('treats only an explicit `true` as enabling composerQueueWhileSending', () => {
+    const prefs = memPrefs();
+    prefs.set(
+      'extensions.zotero-ai-sidebar.uiSettings',
+      JSON.stringify({ composerQueueWhileSending: 'truthy-but-not-true' }),
+    );
+    expect(loadUiSettings(prefs).composerQueueWhileSending).toBe(false);
+
+    prefs.set(
+      'extensions.zotero-ai-sidebar.uiSettings',
+      JSON.stringify({ composerQueueWhileSending: true }),
+    );
+    expect(loadUiSettings(prefs).composerQueueWhileSending).toBe(true);
+
+    expect(loadUiSettings(memPrefs()).composerQueueWhileSending).toBe(false);
   });
 
   it('normalizes chat font family values', () => {

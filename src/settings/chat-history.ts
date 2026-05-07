@@ -1,4 +1,4 @@
-import type { AssistantAnnotationDraft, Message } from '../providers/types';
+import type { AssistantAnnotationDraft, ChatTaskMeta, Message } from '../providers/types';
 
 // Per-Zotero-item chat persistence.
 //
@@ -163,6 +163,7 @@ function normalizeMessages(value: unknown): Message[] {
     if (typeof m.content !== 'string') return [];
     const images = normalizeImages(m.images);
     const annotationDraft = normalizeAnnotationDraft(m.annotationDraft);
+    const task = normalizeChatTask(m.task);
     return [{
       role: m.role,
       content: m.content,
@@ -172,8 +173,62 @@ function normalizeMessages(value: unknown): Message[] {
       ...(images.length ? { images } : {}),
       ...(isRecord(m.context) ? { context: m.context as Message['context'] } : {}),
       ...(annotationDraft ? { annotationDraft } : {}),
+      ...(task ? { task } : {}),
     }];
   });
+}
+
+function normalizeChatTask(value: unknown): ChatTaskMeta | null {
+  if (!isRecord(value)) return null;
+  const id = typeof value.id === 'string' ? value.id : '';
+  const title = typeof value.title === 'string' ? value.title : '';
+  const promptPreview = typeof value.promptPreview === 'string' ? value.promptPreview : '';
+  const createdAt = typeof value.createdAt === 'number' ? value.createdAt : 0;
+  if (!id || !title || !createdAt) return null;
+  const kind =
+    value.kind === 'selection' || value.kind === 'full_text' || value.kind === 'general'
+      ? value.kind
+      : 'general';
+  const completedAt = optionalNumber(value.completedAt);
+  const viewedAt = optionalNumber(value.viewedAt);
+  const hiddenAt = optionalNumber(value.hiddenAt);
+  const cancelledAt = optionalNumber(value.cancelledAt);
+  const error = typeof value.error === 'string' && value.error ? value.error : undefined;
+  const pdfSelection = normalizePdfSelectionLocator(value.pdfSelection);
+  return {
+    id,
+    kind,
+    title,
+    promptPreview,
+    createdAt,
+    ...(completedAt != null ? { completedAt } : {}),
+    ...(viewedAt != null ? { viewedAt } : {}),
+    ...(hiddenAt != null ? { hiddenAt } : {}),
+    ...(cancelledAt != null ? { cancelledAt } : {}),
+    ...(error ? { error } : {}),
+    ...(pdfSelection ? { pdfSelection } : {}),
+  };
+}
+
+function normalizePdfSelectionLocator(value: unknown): ChatTaskMeta['pdfSelection'] | null {
+  if (!isRecord(value)) return null;
+  const attachmentID = typeof value.attachmentID === 'number' ? value.attachmentID : null;
+  const selectedText = typeof value.selectedText === 'string' ? value.selectedText : '';
+  const position = isRecord(value.position) ? value.position : null;
+  if (attachmentID == null || !selectedText || !position) return null;
+  const pageIndex = optionalNumber(value.pageIndex);
+  const pageLabel = typeof value.pageLabel === 'string' ? value.pageLabel : undefined;
+  return {
+    attachmentID,
+    selectedText,
+    ...(pageIndex != null ? { pageIndex } : {}),
+    ...(pageLabel ? { pageLabel } : {}),
+    position: { ...position },
+  };
+}
+
+function optionalNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 function normalizeAnnotationDraft(value: unknown): AssistantAnnotationDraft | null {
@@ -188,11 +243,13 @@ function normalizeAnnotationDraft(value: unknown): AssistantAnnotationDraft | nu
   if (!text || attachmentID == null || !annotation) return null;
   const color = normalizeAnnotationColor(value.color);
   const state = normalizeAnnotationDraftState(value.state);
+  const textState = normalizeAnnotationDraftState(value.textState);
   return {
     comment,
     ...(color ? { color } : {}),
     snapshot: { text, attachmentID, annotation },
     state,
+    ...(textState.kind !== 'idle' ? { textState } : {}),
   };
 }
 
@@ -202,7 +259,7 @@ function normalizeAnnotationColor(value: unknown): string {
   return /^#[0-9a-f]{6}$/.test(color) ? color : '';
 }
 
-function normalizeAnnotationDraftState(value: unknown): AssistantAnnotationDraft['state'] {
+function normalizeAnnotationDraftState(value: unknown): NonNullable<AssistantAnnotationDraft['textState']> {
   if (!isRecord(value)) return { kind: 'idle' };
   if (value.kind === 'saved' && typeof value.annotationID === 'number') {
     const savedAt = typeof value.savedAt === 'number' ? value.savedAt : Date.now();

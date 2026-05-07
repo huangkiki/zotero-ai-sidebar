@@ -61,7 +61,10 @@ export const DEFAULT_QUICK_PROMPT_SETTINGS: QuickPromptSettings = {
     explainSelection: DEFAULT_EXPLAIN_SELECTION_PROMPT,
   },
   customButtons: [],
-  selectionQuestionAnnotationEnabled: false,
+  // Default ON: a free-form selection question gets a "建议注释" card with
+  // both 💾 高亮+评论 and 🅣 新增文字 save buttons, so the user picks the
+  // annotation type by clicking — no need to type "用 T 工具" in the prompt.
+  selectionQuestionAnnotationEnabled: true,
 };
 
 const KEY = 'extensions.zotero-ai-sidebar.quickPrompts';
@@ -106,10 +109,12 @@ export function normalizeQuickPromptSettings(value: unknown): QuickPromptSetting
       ),
     },
     customButtons: normalizeCustomButtons(input.customButtons),
+    // Treat ONLY explicit `false` as off — undefined / unknown / legacy
+    // shapes default to on now (the toggle previously defaulted off).
+    // Existing users who saved `false` before keep their disabled state;
+    // new and never-touched profiles get the suggestion card by default.
     selectionQuestionAnnotationEnabled:
-      input.selectionQuestionAnnotationEnabled === true ||
-      (input as { annotationSuggestionColorEnabled?: unknown })
-        .annotationSuggestionColorEnabled === true,
+      input.selectionQuestionAnnotationEnabled !== false,
   };
 }
 

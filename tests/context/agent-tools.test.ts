@@ -81,6 +81,327 @@ describe("createZoteroAgentTools", () => {
     });
   });
 
+  it("exposes the current PDF selection as a read-only model tool", async () => {
+    const tools = createZoteroAgentTools({
+      source,
+      itemID: 1,
+      selectionAnnotation: () => ({
+        text: "Paragraph one.\n\n1) First question.\n2) Second question.",
+        attachmentID: 2,
+        annotation: {
+          text: "Paragraph one.\n\n1) First question.\n2) Second question.",
+          pageLabel: "8",
+          position: { pageIndex: 7, rects: [[1, 2, 3, 4]] },
+        },
+      }),
+    });
+
+    const tool = tools.find(
+      (candidate) => candidate.name === "zotero_get_current_pdf_selection",
+    );
+    expect(tool?.requiresApproval).toBeUndefined();
+
+    const result = await tool!.execute({});
+
+    expect(result.summary).toBe("读取当前 PDF 选区 54 字");
+    expect(result.output).toContain("[Current PDF selection]");
+    expect(result.output).toContain("Page: 8");
+    expect(result.output).toContain("1) First question.\n2) Second question.");
+    expect(result.context).toMatchObject({
+      planMode: "selected_text",
+      sourceKind: "zotero_item",
+      sourceID: "1",
+      selectedText: "Paragraph one.\n\n1) First question.\n2) Second question.",
+    });
+  });
+
+  it("reports when the current PDF selection tool has no selection", async () => {
+    const tools = createZoteroAgentTools({
+      source,
+      itemID: 1,
+      selectionAnnotation: () => null,
+    });
+
+    const tool = tools.find(
+      (candidate) => candidate.name === "zotero_get_current_pdf_selection",
+    );
+    const result = await tool!.execute({});
+
+    expect(result.output).toContain("No live PDF text selection is available");
+  });
+
+  it("creates a visible PDF text annotation near the current selection", async () => {
+    const tools = createZoteroAgentTools({
+      source,
+      itemID: 1,
+      selectionAnnotation: () => ({
+        text: "Anchor text",
+        attachmentID: 2,
+        annotation: {
+          text: "Anchor text",
+          color: "#ffd400",
+          pageLabel: "5",
+          sortIndex: "00004|000000|00100",
+          position: { pageIndex: 4, rects: [[100, 200, 220, 214]] },
+        },
+      }),
+    });
+
+    const tool = tools.find(
+      (candidate) =>
+        candidate.name === "zotero_add_text_annotation_to_selection",
+    );
+    expect(tool?.requiresApproval).toBe(true);
+
+    const result = await tool!.execute({
+      comment: "你好",
+      color: "#ffcc00",
+      fontSize: 16,
+      placement: "below",
+    });
+
+    expect(result.summary).toBe("新增 PDF 文字（T 工具） 2 字");
+    expect(result.output).toContain("Visible text: 你好");
+    expect(savedJSON).toMatchObject({
+      type: "text",
+      text: "",
+      comment: "你好",
+      color: "#ffcc00",
+      pageLabel: "5",
+      sortIndex: "00004|000000|00100",
+      position: {
+        pageIndex: 4,
+        fontSize: 16,
+        rotation: 0,
+      },
+    });
+    expect((savedJSON?.position as any).rects[0][1]).toBeGreaterThan(214);
+  });
+
+  it("writes visible text annotations directly through saveFromJSON, bypassing Reader's read-only UI lock", async () => {
+    let selectedIDs: string[] = [];
+    const manager = {
+      _readOnly: true,
+      setReadOnly(readOnly: boolean) {
+        this._readOnly = readOnly;
+      },
+      // Reader.addAnnotation MUST NOT be called: a previous save failure left
+      // it read-only and re-entering it would just keep failing. saveFromJSON
+      // is the chrome-side write path that ignores the Reader UI lock.
+      addAnnotation() {
+        throw new Error("Reader.addAnnotation must not be invoked");
+      },
+    };
+    const reader = {
+      itemID: 2,
+      _item: { id: 2 },
+      _iframeWindow: {},
+      _internalReader: {
+        _state: { readOnly: true },
+        _annotationManager: manager,
+        setReadOnly(readOnly: boolean) {
+          this._state.readOnly = readOnly;
+        },
+        setSelectedAnnotations(ids: string[]) {
+          selectedIDs = ids;
+        },
+      },
+    };
+
+    const tools = createZoteroAgentTools({
+      source,
+      itemID: 1,
+      getActiveReader: () => reader,
+      selectionAnnotation: () => ({
+        text: "Anchor text",
+        attachmentID: 2,
+        annotation: {
+          text: "Anchor text",
+          color: "#ffd400",
+          pageLabel: "5",
+          sortIndex: "00004|000000|00100",
+          position: { pageIndex: 4, rects: [[100, 200, 220, 214]] },
+        },
+      }),
+    });
+
+    const tool = tools.find(
+      (candidate) =>
+        candidate.name === "zotero_add_text_annotation_to_selection",
+    );
+    const result = await tool!.execute({ comment: "你好", fontSize: 16 });
+
+    expect(result.output).toContain("Annotation item ID: 99");
+    expect(saveCount).toBe(1);
+    // Best-effort UI niceties on the Reader: stale read-only is cleared and
+    // the new annotation is selected so the user sees it highlighted.
+    expect(reader._internalReader._state.readOnly).toBe(false);
+    expect(manager._readOnly).toBe(false);
+    expect(selectedIDs).toEqual(["GENKEY"]);
+  });
+
+  it("succeeds when post-save Reader nudges throw, since they're best-effort cosmetics", async () => {
+    const reader = {
+      itemID: 2,
+      _item: { id: 2 },
+      _iframeWindow: {},
+      _internalReader: {
+        _annotationManager: { _readOnly: false },
+        setSelectedAnnotations() {
+          throw new Error("Permission denied to pass object to privileged code");
+        },
+      },
+    };
+
+    const tools = createZoteroAgentTools({
+      source,
+      itemID: 1,
+      getActiveReader: () => reader,
+      selectionAnnotation: () => ({
+        text: "Anchor text",
+        attachmentID: 2,
+        annotation: {
+          text: "Anchor text",
+          color: "#ffd400",
+          pageLabel: "5",
+          sortIndex: "00004|000000|00100",
+          position: { pageIndex: 4, rects: [[100, 200, 220, 214]] },
+        },
+      }),
+    });
+
+    const tool = tools.find(
+      (candidate) =>
+        candidate.name === "zotero_add_text_annotation_to_selection",
+    );
+    const result = await tool!.execute({ comment: "你好", fontSize: 16 });
+
+    expect(result.output).toContain("Annotation item ID: 99");
+    expect(saveCount).toBe(1);
+  });
+
+  it("recovers via Notifier observation when saveFromJSON rejects after the item already landed", async () => {
+    const savedByKey = new Map<string, { id: number; libraryID: number }>();
+    const Z = (globalThis as any).Zotero;
+    Z.Items.getByLibraryAndKey = (_libraryID: number, key: string) =>
+      savedByKey.get(key) ?? false;
+    Z.Annotations.saveFromJSON = async (
+      _attachment: unknown,
+      json: Record<string, unknown>,
+    ) => {
+      saveCount += 1;
+      // Simulate the racy case: item is written to DB before the cross-scope
+      // promise resolution chokes on the wrapped result object.
+      savedByKey.set(json.key as string, { id: 250, libraryID: 1 });
+      throw new Error("Permission denied to pass object to privileged code");
+    };
+
+    const tools = createZoteroAgentTools({
+      source,
+      itemID: 1,
+      selectionAnnotation: () => ({
+        text: "Anchor text",
+        attachmentID: 2,
+        annotation: {
+          text: "Anchor text",
+          color: "#ffd400",
+          pageLabel: "5",
+          sortIndex: "00004|000000|00100",
+          position: { pageIndex: 4, rects: [[100, 200, 220, 214]] },
+        },
+      }),
+    });
+
+    const tool = tools.find(
+      (candidate) =>
+        candidate.name === "zotero_add_text_annotation_to_selection",
+    );
+    const result = await tool!.execute({ comment: "你好", fontSize: 16 });
+
+    expect(result.output).toContain("Annotation item ID: 250");
+    expect(saveCount).toBe(1);
+  });
+
+  it("propagates saveFromJSON errors when no item ever landed", async () => {
+    const Z = (globalThis as any).Zotero;
+    Z.Items.getByLibraryAndKey = () => false;
+    Z.Annotations.saveFromJSON = async () => {
+      saveCount += 1;
+      throw new Error("Permission denied to pass object to privileged code");
+    };
+
+    const tools = createZoteroAgentTools({
+      source,
+      itemID: 1,
+      selectionAnnotation: () => ({
+        text: "Anchor text",
+        attachmentID: 2,
+        annotation: {
+          text: "Anchor text",
+          color: "#ffd400",
+          pageLabel: "5",
+          sortIndex: "00004|000000|00100",
+          position: { pageIndex: 4, rects: [[100, 200, 220, 214]] },
+        },
+      }),
+    });
+
+    const tool = tools.find(
+      (candidate) =>
+        candidate.name === "zotero_add_text_annotation_to_selection",
+    );
+
+    await expect(
+      tool!.execute({ comment: "你好", fontSize: 16 }),
+    ).rejects.toThrow(/Permission denied/);
+  });
+
+  it("discovers an open Zotero Reader for the post-save UI nudge when no active reader is passed", async () => {
+    let selectedIDs: string[] = [];
+    const Z = (globalThis as any).Zotero;
+    Z.Reader = {
+      _readers: [
+        {
+          itemID: 2,
+          _item: { id: 2 },
+          _iframeWindow: {},
+          _internalReader: {
+            _annotationManager: { _readOnly: false },
+            setSelectedAnnotations(ids: string[]) {
+              selectedIDs = ids;
+            },
+          },
+        },
+      ],
+    };
+
+    const tools = createZoteroAgentTools({
+      source,
+      itemID: 1,
+      selectionAnnotation: () => ({
+        text: "Anchor text",
+        attachmentID: 2,
+        annotation: {
+          text: "Anchor text",
+          color: "#ffd400",
+          pageLabel: "5",
+          sortIndex: "00004|000000|00100",
+          position: { pageIndex: 4, rects: [[100, 200, 220, 214]] },
+        },
+      }),
+    });
+
+    const tool = tools.find(
+      (candidate) =>
+        candidate.name === "zotero_add_text_annotation_to_selection",
+    );
+    const result = await tool!.execute({ comment: "你好", fontSize: 16 });
+
+    expect(result.output).toContain("Annotation item ID: 99");
+    expect(saveCount).toBe(1);
+    expect(selectedIDs).toEqual(["GENKEY"]);
+  });
+
   it("creates a full-text highlight annotation from a located passage", async () => {
     const session = createZoteroAgentToolSession({
       source,
@@ -190,6 +511,8 @@ describe("createZoteroAgentTools", () => {
       "paper_search_arxiv",
       "paper_fetch_arxiv_fulltext",
       "zotero_get_reader_pdf_text",
+      "zotero_get_current_pdf_selection",
+      "zotero_add_text_annotation_to_selection",
       "zotero_add_annotation_to_selection",
       "zotero_annotate_passage",
       "zotero_append_to_note",

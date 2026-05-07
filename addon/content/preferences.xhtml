@@ -12,6 +12,9 @@
       #zotero-ai-sidebar-tool-settings .zai-pref-title { font-weight: 700; margin-bottom: 4px; }
       #zotero-ai-sidebar-tool-settings .zai-pref-help { opacity: 0.78; margin: 0 0 10px; }
       #zotero-ai-sidebar-tool-settings .zai-pref-grid { display: grid; grid-template-columns: 140px minmax(260px, 1fr); gap: 8px 12px; align-items: center; }
+      #zotero-ai-sidebar-tool-settings .zai-pref-checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; cursor: pointer; }
+      #zotero-ai-sidebar-tool-settings .zai-pref-checkbox-row input[type="checkbox"] { width: auto; margin: 0; }
+      #zotero-ai-sidebar-tool-settings .zai-pref-checkbox-label { font-weight: 600; }
       #zotero-ai-sidebar-tool-settings input[type="text"], #zotero-ai-sidebar-tool-settings input[type="password"], #zotero-ai-sidebar-tool-settings input[type="number"], #zotero-ai-sidebar-tool-settings select, #zotero-ai-sidebar-tool-settings textarea { box-sizing: border-box; width: 100%; }
       #zotero-ai-sidebar-tool-settings textarea { min-height: 84px; max-height: 45vh; resize: vertical; overflow: auto; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
       #zotero-ai-sidebar-tool-settings .zai-built-in-prompt textarea { min-height: 180px; }
@@ -89,6 +92,21 @@
     </html:div>
 
     <html:div class="zai-pref-card">
+      <html:div class="zai-pref-title">PDF 新增文字（T 工具）</html:div>
+      <html:p class="zai-pref-help">
+        点击「🅣 新增文字」时使用的默认字号（PDF 点）。范围 8–48，对应 Zotero Reader「新增文字 / Add Text」工具的可选区间。
+      </html:p>
+      <html:div class="zai-pref-grid">
+        <html:label for="zai-tool-text-annotation-font-size">默认字号</html:label>
+        <html:input id="zai-tool-text-annotation-font-size" type="number" min="8" max="48" step="1" />
+      </html:div>
+      <html:div class="zai-pref-actions">
+        <html:button id="zai-text-annotation-font-save" type="button">保存字号</html:button>
+        <html:span id="zai-text-annotation-font-status" class="zai-pref-status"></html:span>
+      </html:div>
+    </html:div>
+
+    <html:div class="zai-pref-card">
       <html:div class="zai-pref-title">显示设置</html:div>
       <html:p class="zai-pref-help">
         配置消息昵称、头像和消息按钮。头像可以填写 emoji、短文本，或图片 URL / data:image。
@@ -115,6 +133,13 @@
           <html:option value="inside">气泡里</html:option>
         </html:select>
       </html:div>
+      <html:label class="zai-pref-checkbox-row">
+        <html:input id="zai-ui-composer-queue" type="checkbox" />
+        <html:span class="zai-pref-checkbox-label">回复进行中允许排队新消息</html:span>
+      </html:label>
+      <html:p class="zai-pref-help">
+        开启后可在 AI 回答时插队新消息，当前回复结束后按提交顺序逐条执行；PDF 选区以入队时为准。
+      </html:p>
       <html:div class="zai-pref-actions">
         <html:button id="zai-ui-save" type="button">保存显示设置</html:button>
         <html:span id="zai-ui-status" class="zai-pref-status"></html:span>

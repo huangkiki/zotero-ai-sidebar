@@ -63,6 +63,8 @@ describe('quick prompt settings storage', () => {
           fullTextHighlight: 'x',
           explainSelection: 'y',
         },
+        // Non-boolean garbage: with the new "default on unless explicit
+        // false" rule, anything that isn't === false is treated as on.
         selectionQuestionAnnotationEnabled: 'yes',
         customButtons: [
           { id: 'bad', label: '空提示词', prompt: '' },
@@ -76,10 +78,27 @@ describe('quick prompt settings storage', () => {
     expect(settings.builtIns.summary).toBe(
       DEFAULT_QUICK_PROMPT_SETTINGS.builtIns.summary,
     );
-    expect(settings.selectionQuestionAnnotationEnabled).toBe(false);
+    expect(settings.selectionQuestionAnnotationEnabled).toBe(true);
     expect(settings.customButtons).toEqual([
       { id: 'ok', label: 'OK', prompt: 'Do it' },
     ]);
+  });
+
+  it('keeps an explicit `false` for selectionQuestionAnnotationEnabled', () => {
+    const prefs = memPrefs();
+    prefs.set(
+      'extensions.zotero-ai-sidebar.quickPrompts',
+      JSON.stringify({ selectionQuestionAnnotationEnabled: false }),
+    );
+    expect(loadQuickPromptSettings(prefs).selectionQuestionAnnotationEnabled).toBe(
+      false,
+    );
+  });
+
+  it('defaults selectionQuestionAnnotationEnabled to true on a fresh profile', () => {
+    expect(
+      loadQuickPromptSettings(memPrefs()).selectionQuestionAnnotationEnabled,
+    ).toBe(true);
   });
 
   it('keeps only unique single-key custom shortcuts', () => {

@@ -226,6 +226,18 @@ function setupPreferencesPane(win: Window): void {
     setStatus(doc, 'zai-tool-status', 'PDF 注释颜色预设已恢复默认并立即生效。');
     flashButton(byID<HTMLButtonElement>(doc, 'zai-tool-reset-color-guide'), '已重置');
   });
+  byID<HTMLButtonElement>(doc, 'zai-text-annotation-font-save')?.addEventListener('click', () => {
+    const settings = readToolSettingsControls(doc);
+    saveToolSettings(zoteroPrefs(), settings);
+    renderToolSettings(doc);
+    refreshSidebarPreferences();
+    setStatus(
+      doc,
+      'zai-text-annotation-font-status',
+      `「新增文字」默认字号已保存为 ${settings.textAnnotationFontSize}。`,
+    );
+    flashButton(byID<HTMLButtonElement>(doc, 'zai-text-annotation-font-save'), '已保存');
+  });
   byID<HTMLButtonElement>(doc, 'zai-config-export-file')?.addEventListener('click', () => {
     void exportConfigBackupFile(doc);
   });
@@ -570,6 +582,8 @@ function renderUiSettings(doc: Document): void {
   if (position) position.value = settings.messageActionsPosition;
   const layout = byID<HTMLSelectElement>(doc, 'zai-ui-actions-layout');
   if (layout) layout.value = settings.messageActionsLayout;
+  const queue = byID<HTMLInputElement>(doc, 'zai-ui-composer-queue');
+  if (queue) queue.checked = settings.composerQueueWhileSending;
   setStatus(doc, 'zai-ui-status', '已加载显示设置。');
 }
 
@@ -588,6 +602,8 @@ function readUiSettingsControls(doc: Document): UiSettings {
     chatFontFamily: byID<HTMLInputElement>(doc, 'zai-ui-chat-font')?.value,
     messageActionsPosition: position?.value,
     messageActionsLayout: layout?.value,
+    composerQueueWhileSending:
+      byID<HTMLInputElement>(doc, 'zai-ui-composer-queue')?.checked === true,
   });
 }
 
@@ -1179,7 +1195,7 @@ function selectionQuestionAnnotationControl(
       doc,
       'div',
       'zai-pref-help',
-      '默认关闭；仅作用于“选中文本后在对话框手动提问”。解释选区按钮始终会生成建议注释。开启后会参考 PDF 注释颜色预设推荐颜色。',
+      '默认开启：选中文本后在对话框手动提问，AI 回完会附带「建议注释」卡片，下方可一键保存为「💾 高亮+评论」或「🅣 新增文字」(T 工具)。解释选区按钮始终会生成建议注释。开启时会参考 PDF 注释颜色预设推荐颜色。',
     ),
   );
   return wrap;
@@ -1337,6 +1353,8 @@ function renderToolSettings(doc: Document): void {
     'zai-tool-annotation-color-guide',
   );
   if (colorGuide) colorGuide.value = settings.annotationColorGuide;
+  const fontSize = byID<HTMLInputElement>(doc, 'zai-tool-text-annotation-font-size');
+  if (fontSize) fontSize.value = String(settings.textAnnotationFontSize);
   const list = byID<HTMLElement>(doc, 'zai-mcp-list');
   list?.replaceChildren();
   for (const server of settings.mcpServers ?? []) addMcpRow(doc, server);
@@ -1406,6 +1424,10 @@ function readToolSettingsControls(doc: Document): ToolSettings {
     annotationColorGuide:
       byID<HTMLTextAreaElement>(doc, 'zai-tool-annotation-color-guide')?.value ??
       existing.annotationColorGuide,
+    textAnnotationFontSize: Number(
+      byID<HTMLInputElement>(doc, 'zai-tool-text-annotation-font-size')?.value ??
+        existing.textAnnotationFontSize,
+    ),
     mcpServers,
   };
 }

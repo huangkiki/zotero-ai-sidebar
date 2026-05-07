@@ -55,6 +55,10 @@ interface PdfDocumentLike {
 }
 
 interface PdfPageLike {
+  view?: unknown;
+  viewBox?: unknown;
+  _pageInfo?: { view?: unknown };
+  viewport?: { viewBox?: unknown };
   getTextContent(options?: {
     disableCombineTextItems?: boolean;
   }): Promise<{ items?: PdfTextItemLike[] }>;
@@ -227,7 +231,14 @@ export async function createPdfLocator(reader: unknown): Promise<PdfLocator> {
       for (const group of groups) {
         const page = await bundleFor(group.pageIndex);
         if (!page) continue;
-        const text = extractPageTextFromSelectionRects(page, group.rects);
+        const text = extractBestPageTextFromSelectionRects(page, group.rects);
+        debugPdfLocator("extract-position", {
+          pageIndex: group.pageIndex,
+          rects: group.rects.length,
+          source: page.source,
+          hasViewBox: !!page.viewBox,
+          text: debugTextInfo(text),
+        });
         if (text) pages.push(text);
       }
       return pages.join("\n");
@@ -365,7 +376,9 @@ function processedViewSource(view: unknown): PdfPageSource | null {
   } | null;
   if (!v) return null;
   const apps = pdfViewerApplications(v._iframeWindow);
-  const doc = apps.find((app) => app?.pdfDocument)?.pdfDocument;
+  const doc = apps
+    .map((app) => app?.pdfDocument ?? app?.pdfViewer?.pdfDocument)
+    .find(Boolean);
   const pageCount = Math.max(
     0,
     Math.floor(
@@ -385,8 +398,16 @@ function processedViewSource(view: unknown): PdfPageSource | null {
     pageCount,
     async getPageBundle(pageIndex, pageLabel) {
       const pageData = processedPageAt(v._pdfPages, pageIndex);
+      const fallbackViewBox =
+        (await viewBoxFromDocument(doc, pageIndex)) ??
+        viewBoxFromReaderView(v, apps, pageIndex);
       if (pageData) {
-        return buildProcessedPageBundle(pageData, pageIndex, pageLabel);
+        return buildProcessedPageBundle(
+          pageData,
+          pageIndex,
+          pageLabel,
+          fallbackViewBox,
+        );
       }
       return documentSource?.getPageBundle?.(pageIndex, pageLabel) ?? null;
     },
@@ -434,7 +455,12 @@ function processedDocumentSource(
         (doc?.getPageData
           ? await doc.getPageData({ pageIndex }).catch(() => null)
           : null);
-      return buildProcessedPageBundle(pageData, pageIndex, pageLabel);
+      return buildProcessedPageBundle(
+        pageData,
+        pageIndex,
+        pageLabel,
+        await viewBoxFromDocument(doc, pageIndex),
+      );
     },
     getPageLabels: () => readDocumentPageLabels(doc, pageCount),
   };
@@ -456,8 +482,10 @@ function documentSource(pdfDocument: unknown): PdfPageSource | null {
 function pageViewSource(pdfViewer: unknown): PdfPageSource | null {
   const viewer = pdfViewer as {
     pagesCount?: number;
-    _pages?: Array<{ pdfPage?: PdfPageLike }>;
-    getPageView?: (pageIndex: number) => { pdfPage?: PdfPageLike } | null;
+    _pages?: Array<Record<string, unknown> & { pdfPage?: PdfPageLike }>;
+    getPageView?: (
+      pageIndex: number,
+    ) => (Record<string, unknown> & { pdfPage?: PdfPageLike }) | null;
   } | null;
   if (!viewer) return null;
   const pageCount = Math.max(
@@ -476,7 +504,10 @@ function pageViewSource(pdfViewer: unknown): PdfPageSource | null {
       if (!page || typeof page.getTextContent !== "function") {
         throw new Error(`PDF page ${pageIndex + 1} is not loaded yet.`);
       }
-      return page;
+      const fallbackViewBox = viewBoxFromPageView(pageView);
+      return fallbackViewBox && !pageViewBox(page)
+        ? { ...page, view: fallbackViewBox }
+        : page;
     },
     getPageLabels: async () => numericPageLabels(pageCount),
   };
@@ -644,14 +675,88 @@ async function readPageBundle(
     anchors,
     normalizedText: normalized.text,
     normalizedToOriginal: normalized.map,
+    viewBox: pageViewBox(page),
     source: "textContent",
   };
+}
+
+function pageViewBox(page: PdfPageLike): PdfRect | undefined {
+  return (
+    rectValue(page.view) ??
+    rectValue(page.viewBox) ??
+    rectValue(page._pageInfo?.view) ??
+    rectValue(page.viewport?.viewBox) ??
+    undefined
+  );
+}
+
+function viewBoxFromPageView(pageView: unknown): PdfRect | undefined {
+  const page = pageView as
+    | {
+        viewport?: { viewBox?: unknown };
+        originalPage?: { viewport?: { viewBox?: unknown } };
+        pdfPage?: PdfPageLike;
+      }
+    | null
+    | undefined;
+  return (
+    rectValue(page?.viewport?.viewBox) ??
+    rectValue(page?.originalPage?.viewport?.viewBox) ??
+    (page?.pdfPage ? pageViewBox(page.pdfPage) : undefined)
+  );
+}
+
+function viewBoxFromReaderView(
+  view: { _pages?: unknown[] },
+  apps: any[],
+  pageIndex: number,
+): PdfRect | undefined {
+  return (
+    viewBoxFromPageView(view._pages?.[pageIndex]) ??
+    firstViewBox(apps.map((app) => viewBoxFromViewer(app?.pdfViewer, pageIndex)))
+  );
+}
+
+function viewBoxFromViewer(
+  pdfViewer: unknown,
+  pageIndex: number,
+): PdfRect | undefined {
+  const viewer = pdfViewer as
+    | {
+        _pages?: unknown[];
+        getPageView?: (pageIndex: number) => unknown;
+      }
+    | null
+    | undefined;
+  if (!viewer) return undefined;
+  return viewBoxFromPageView(
+    viewer.getPageView?.(pageIndex) ?? viewer._pages?.[pageIndex],
+  );
+}
+
+function firstViewBox(values: Array<PdfRect | undefined>): PdfRect | undefined {
+  return values.find((value): value is PdfRect => !!value);
+}
+
+async function viewBoxFromDocument(
+  pdfDocument: PdfDocumentLike | null | undefined,
+  pageIndex: number,
+): Promise<PdfRect | undefined> {
+  if (!pdfDocument || typeof pdfDocument.getPage !== "function") {
+    return undefined;
+  }
+  try {
+    return pageViewBox(await pdfDocument.getPage(pageIndex + 1));
+  } catch {
+    return undefined;
+  }
 }
 
 function buildProcessedPageBundle(
   pageData: ProcessedPageLike | null | undefined,
   pageIndex: number,
   pageLabel: string,
+  fallbackViewBox?: PdfRect,
 ): PageBundle | null {
   const chars = Array.isArray(pageData?.chars) ? pageData.chars : [];
   if (!chars.length) return null;
@@ -694,7 +799,7 @@ function buildProcessedPageBundle(
     anchors,
     normalizedText: normalized.text,
     normalizedToOriginal: normalized.map,
-    viewBox: rectValue(pageData?.viewBox) ?? undefined,
+    viewBox: rectValue(pageData?.viewBox) ?? fallbackViewBox,
     source: "processed",
   };
 }
@@ -836,6 +941,21 @@ function isZeroWidth(char: string): boolean {
     char === "\u200d" ||
     char === "\ufeff"
   );
+}
+
+function debugPdfLocator(label: string, detail: unknown): void {
+  try {
+    (globalThis as any).Zotero?.debug?.(
+      `[zai-debug] pdf-locator.${label} ${JSON.stringify(detail)}`,
+    );
+  } catch {
+    // Diagnostics should never affect PDF selection extraction.
+  }
+}
+
+function debugTextInfo(text: string): { length: number; head: string } {
+  const head = text.replace(/\s+/g, " ").trim().slice(0, 160);
+  return { length: text.length, head };
 }
 
 // Fuzzy match: slide a needle-sized window across the page in coarse
@@ -1129,6 +1249,48 @@ function extractPageTextFromSelectionRects(
     .map((rect) => extractSelectionRectText(page, rect))
     .filter(Boolean);
   return lines.join("\n").trim();
+}
+
+function extractBestPageTextFromSelectionRects(
+  page: PageBundle,
+  rects: PdfRect[],
+): string {
+  const flipped = flipSelectionRectsVertically(page, rects);
+  if (flipped) {
+    const flippedText = extractPageTextFromSelectionRects(page, flipped);
+    if (isPlausibleSelectionRectText(flippedText)) return flippedText;
+  }
+
+  const direct = extractPageTextFromSelectionRects(page, rects);
+  if (isPlausibleSelectionRectText(direct)) return direct;
+
+  return flipped ? extractPageTextFromSelectionRects(page, flipped) : direct;
+}
+
+function isPlausibleSelectionRectText(text: string): boolean {
+  if (!text.trim()) return false;
+  const chars = Array.from(text);
+  if (chars.length < 3) return true;
+  const printable = chars.filter(
+    (char) => /\p{L}|\p{N}|\p{P}|\p{S}|\s/u.test(char) && char !== "\u0000",
+  ).length;
+  return printable / chars.length >= 0.8;
+}
+
+function flipSelectionRectsVertically(
+  page: PageBundle,
+  rects: PdfRect[],
+): PdfRect[] | null {
+  const viewBox = page.viewBox;
+  if (!viewBox) return null;
+  const minY = Math.min(viewBox[1], viewBox[3]);
+  const maxY = Math.max(viewBox[1], viewBox[3]);
+  return rects.map((rect) => [
+    rect[0],
+    minY + maxY - rect[3],
+    rect[2],
+    minY + maxY - rect[1],
+  ]);
 }
 
 function extractSelectionRectText(page: PageBundle, rect: PdfRect): string {

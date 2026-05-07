@@ -54,6 +54,18 @@ export interface MessageContext {
   explainSelection?: boolean;
   annotationSuggestion?: boolean;
   annotationColorGuide?: string;
+  // Captured at the moment the user message was submitted (whether the
+  // task ran immediately or was queued for later). Lets a queued task that
+  // runs later still anchor its "建议注释" card to the original PDF
+  // selection — without this, the live selection at the time the queued
+  // task fires would be used (or none), breaking the contract that the
+  // selection follows the message that was typed against it.
+  queuedAnnotationSnapshot?: {
+    text: string;
+    attachmentID: number;
+    annotation: Record<string, unknown>;
+  };
+  queuedAnnotationColorEnabled?: boolean;
   planMode?: ContextMode;
   planReason?: string;
   plannerSource?: ContextPlanSource;

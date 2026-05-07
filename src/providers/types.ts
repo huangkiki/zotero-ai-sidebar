@@ -11,6 +11,31 @@ export interface Message {
   images?: MessageImage[];
   context?: MessageContext;
   annotationDraft?: AssistantAnnotationDraft;
+  task?: ChatTaskMeta;
+}
+
+export type ChatTaskKind = 'general' | 'selection' | 'full_text';
+
+export interface ChatTaskMeta {
+  id: string;
+  kind: ChatTaskKind;
+  title: string;
+  promptPreview: string;
+  createdAt: number;
+  completedAt?: number;
+  viewedAt?: number;
+  hiddenAt?: number;
+  cancelledAt?: number;
+  error?: string;
+  pdfSelection?: PdfSelectionLocator;
+}
+
+export interface PdfSelectionLocator {
+  attachmentID: number;
+  selectedText: string;
+  pageIndex?: number;
+  pageLabel?: string;
+  position: Record<string, unknown>;
 }
 
 export interface AssistantAnnotationDraft {
@@ -21,12 +46,15 @@ export interface AssistantAnnotationDraft {
     attachmentID: number;
     annotation: Record<string, unknown>;
   };
-  state:
-    | { kind: 'idle' }
-    | { kind: 'saving' }
-    | { kind: 'saved'; annotationID: number; savedAt: number }
-    | { kind: 'failed'; error: string };
+  state: AssistantAnnotationDraftState;
+  textState?: AssistantAnnotationDraftState;
 }
+
+export type AssistantAnnotationDraftState =
+  | { kind: 'idle' }
+  | { kind: 'saving' }
+  | { kind: 'saved'; annotationID: number; savedAt: number }
+  | { kind: 'failed'; error: string };
 
 export interface MessageImage {
   id: string;

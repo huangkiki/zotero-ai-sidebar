@@ -48,7 +48,7 @@ describe("pdf locator", () => {
       confidence: 1,
     });
     expect(result?.rects).toEqual([[0, 100, 100, 110]]);
-    expect(result?.sortIndex).toMatch(/^00000\|000000\|00110$/);
+    expect(result?.sortIndex).toMatch(/^00000\|000000\|00690$/);
   });
 
   it("returns one rect per line for cross-line matches", async () => {
@@ -145,6 +145,126 @@ describe("pdf locator", () => {
     expect(text).toContain("right column selected text starts");
     expect(text).toContain("final selected line");
     expect(text).not.toContain("left column unrelated");
+  });
+
+  it("prefers vertically flipped Zotero annotation rect text", async () => {
+    const locator = await createPdfLocator(
+      readerWithProcessedPages([
+        processedPage([
+          ...processedWord("wrong direct line", 0, 200, {
+            lineBreakAfter: true,
+          }),
+          ...processedWord("selected flipped line", 0, 590, {
+            lineBreakAfter: true,
+          }),
+        ]),
+      ]),
+    );
+
+    const text = await locator.extractTextFromPosition({
+      pageIndex: 0,
+      rects: [
+        [0, 200, 220, 210],
+        [0, 185, 220, 195],
+      ],
+    });
+
+    expect(text).toContain("selected flipped line");
+    expect(text).not.toContain("wrong direct line");
+  });
+
+  it("uses the PDF document view box when processed page data omits it", async () => {
+    const locator = await createPdfLocator(
+      readerWithProcessedPages([
+        processedPageWithoutViewBox([
+          ...processedWord("wrong direct line", 0, 200, {
+            lineBreakAfter: true,
+          }),
+          ...processedWord("selected flipped line", 0, 590, {
+            lineBreakAfter: true,
+          }),
+        ]),
+      ]),
+    );
+
+    const text = await locator.extractTextFromPosition({
+      pageIndex: 0,
+      rects: [[0, 200, 220, 210]],
+    });
+
+    expect(text).toContain("selected flipped line");
+    expect(text).not.toContain("wrong direct line");
+  });
+
+  it("reads the view box from pdfViewer.pdfDocument for processed view pages", async () => {
+    const locator = await createPdfLocator(
+      readerWithProcessedPages(
+        [
+          processedPageWithoutViewBox([
+            ...processedWord("wrong direct line", 0, 200, {
+              lineBreakAfter: true,
+            }),
+            ...processedWord("selected flipped line", 0, 590, {
+              lineBreakAfter: true,
+            }),
+          ]),
+        ],
+        { viewerDocumentOnly: true },
+      ),
+    );
+
+    const text = await locator.extractTextFromPosition({
+      pageIndex: 0,
+      rects: [[0, 200, 220, 210]],
+    });
+
+    expect(text).toContain("selected flipped line");
+    expect(text).not.toContain("wrong direct line");
+  });
+
+  it("reads the view box from cached reader page views", async () => {
+    const locator = await createPdfLocator(
+      readerWithProcessedPages(
+        [
+          processedPageWithoutViewBox([
+            ...processedWord("wrong direct line", 0, 200, {
+              lineBreakAfter: true,
+            }),
+            ...processedWord("selected flipped line", 0, 590, {
+              lineBreakAfter: true,
+            }),
+          ]),
+        ],
+        { noDocument: true, readerPageViewBox: true },
+      ),
+    );
+
+    const text = await locator.extractTextFromPosition({
+      pageIndex: 0,
+      rects: [[0, 200, 220, 210]],
+    });
+
+    expect(text).toContain("selected flipped line");
+    expect(text).not.toContain("wrong direct line");
+  });
+
+  it("flips annotation rects when using the PDF.js text layer", async () => {
+    const locator = await createPdfLocator(
+      readerWithPages([
+        [
+          item("wrong direct line", 0, 200, { hasEOL: true }),
+          item("selected flipped line", 0, 590, { hasEOL: true }),
+        ],
+      ]),
+    );
+
+    const text = await locator.extractTextFromPosition({
+      pageIndex: 0,
+      rects: [[0, 200, 220, 210]],
+    });
+
+    expect(text).toContain("selected flipped line");
+    expect(text).not.toContain("wrong direct line");
   });
 
   it("uses normalized substring matching for full-width text", async () => {
@@ -302,6 +422,12 @@ function processedPage(chars: FakeProcessedChar[]) {
   };
 }
 
+function processedPageWithoutViewBox(
+  chars: FakeProcessedChar[],
+): ReturnType<typeof processedPage> {
+  return { chars } as ReturnType<typeof processedPage>;
+}
+
 function readerWithPages(
   pages: FakeTextItem[][],
   options: { wrapped?: boolean; pageViewOnly?: boolean } = {},
@@ -310,6 +436,7 @@ function readerWithPages(
     numPages: pages.length,
     getPageLabels: async () => pages.map((_, index) => String(index + 1)),
     getPage: async (pageNumber: number) => ({
+      view: [0, 0, 600, 800],
       getTextContent: async () => ({
         items: pages[pageNumber - 1].map((entry) => ({
           str: entry.str,
@@ -325,6 +452,7 @@ function readerWithPages(
     pagesCount: pages.length,
     getPageView: (pageIndex: number) => ({
       pdfPage: {
+        view: [0, 0, 600, 800],
         getTextContent: async () => ({
           items: pages[pageIndex].map((entry) => ({
             str: entry.str,
@@ -354,7 +482,12 @@ function readerWithPages(
 
 function readerWithProcessedPages(
   pages: ReturnType<typeof processedPage>[],
-  options: { lazyPageData?: boolean } = {},
+  options: {
+    lazyPageData?: boolean;
+    noDocument?: boolean;
+    readerPageViewBox?: boolean;
+    viewerDocumentOnly?: boolean;
+  } = {},
 ): unknown {
   const pdfDocument = {
     numPages: pages.length,
@@ -367,11 +500,23 @@ function readerWithProcessedPages(
     getPageData: async ({ pageIndex }: { pageIndex: number }) =>
       pages[pageIndex],
     getPage: async () => ({
+      view: [0, 0, 600, 800],
       getTextContent: async () => ({
         items: [{ str: "raw fallback should not be used" }],
       }),
     }),
   };
+  const pdfViewer = options.viewerDocumentOnly
+    ? { pagesCount: pages.length, pdfDocument }
+    : { pagesCount: pages.length };
+  const app = options.noDocument
+    ? { pdfViewer }
+    : options.viewerDocumentOnly
+    ? { pdfViewer }
+    : {
+        pdfDocument,
+        pdfViewer,
+      };
   return {
     itemID: 2,
     _item: { id: 2, parentID: 1 },
@@ -382,11 +527,13 @@ function readerWithProcessedPages(
           : Object.fromEntries(
               pages.map((page, index) => [String(index), page]),
             ),
+        _pages: options.readerPageViewBox
+          ? pages.map(() => ({
+              originalPage: { viewport: { viewBox: [0, 0, 600, 800] } },
+            }))
+          : undefined,
         _iframeWindow: {
-          PDFViewerApplication: {
-            pdfDocument,
-            pdfViewer: { pagesCount: pages.length },
-          },
+          PDFViewerApplication: app,
         },
       },
     },

@@ -88,6 +88,7 @@ describe('chat history', () => {
             annotation: { position: { pageIndex: 0, rects: [] } },
           },
           state: { kind: 'idle' },
+          textState: { kind: 'saved', annotationID: 8, savedAt: 1234 },
         },
       },
     ]);
@@ -105,6 +106,55 @@ describe('chat history', () => {
             annotation: { position: { pageIndex: 0, rects: [] } },
           },
           state: { kind: 'idle' },
+          textState: { kind: 'saved', annotationID: 8, savedAt: 1234 },
+        },
+      },
+    ]);
+  });
+
+  it('preserves local task queue metadata', async () => {
+    await saveChatMessages(42, [
+      {
+        role: 'user',
+        content: '解释这句话',
+        task: {
+          id: 'task-1',
+          kind: 'selection',
+          title: '选中文字提问',
+          promptPreview: 'While most robotic learning systems...',
+          createdAt: 100,
+          completedAt: 200,
+          viewedAt: 300,
+          pdfSelection: {
+            attachmentID: 7,
+            selectedText: 'While most robotic learning systems...',
+            pageIndex: 0,
+            pageLabel: '1',
+            position: { pageIndex: 0, rects: [[1, 2, 3, 4]] },
+          },
+        },
+      },
+    ]);
+
+    expect(await loadChatMessages(42)).toEqual([
+      {
+        role: 'user',
+        content: '解释这句话',
+        task: {
+          id: 'task-1',
+          kind: 'selection',
+          title: '选中文字提问',
+          promptPreview: 'While most robotic learning systems...',
+          createdAt: 100,
+          completedAt: 200,
+          viewedAt: 300,
+          pdfSelection: {
+            attachmentID: 7,
+            selectedText: 'While most robotic learning systems...',
+            pageIndex: 0,
+            pageLabel: '1',
+            position: { pageIndex: 0, rects: [[1, 2, 3, 4]] },
+          },
         },
       },
     ]);

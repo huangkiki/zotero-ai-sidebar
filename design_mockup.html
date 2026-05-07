@@ -1,0 +1,880 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Zotero AI Sidebar - 任务队列设计原型</title>
+  <style>
+    :root {
+      --zai-bg: #fbfaf7;
+      --zai-panel: #fffdf8;
+      --zai-panel-strong: #ffffff;
+      --zai-border: #e7dfd2;
+      --zai-border-strong: #d8c9b6;
+      --zai-text: #24211d;
+      --zai-muted: #746b60;
+      --zai-faint: #9a9186;
+      --zai-accent: #c0673d;
+      --zai-accent-strong: #a94e25;
+      --zai-accent-soft: #fff0e7;
+      --zai-blue: #2d6f8f;
+      --zai-blue-soft: #e9f5f8;
+      --zai-green: #2f7d51;
+      --zai-green-soft: #eaf7ef;
+      --zai-red: #b34040;
+      --zai-red-soft: #fff0f0;
+      --zai-shadow: 0 10px 28px rgba(56, 41, 24, 0.08);
+      --zai-font: "Noto Sans CJK SC", "Source Han Sans SC", "Microsoft YaHei", sans-serif;
+      --zai-mono: "JetBrains Mono", "Fira Code", "Cascadia Mono", monospace;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 8% 4%, rgba(255, 238, 219, 0.9), transparent 34%),
+        linear-gradient(135deg, #f2ede5 0%, #fbfaf7 45%, #f6efe7 100%);
+      color: var(--zai-text);
+      font-family: var(--zai-font);
+      font-size: 13px;
+    }
+
+    .page {
+      width: min(1480px, 100%);
+      margin: 0 auto;
+      padding: 28px 28px 42px;
+    }
+
+    .hero {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 22px;
+    }
+
+    .hero h1 {
+      margin: 0 0 8px;
+      font-size: 26px;
+      letter-spacing: -0.03em;
+    }
+
+    .hero p {
+      margin: 0;
+      color: var(--zai-muted);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+      min-width: 380px;
+    }
+
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 9px;
+      border: 1px solid var(--zai-border);
+      border-radius: 999px;
+      background: rgba(255, 253, 248, 0.78);
+      color: var(--zai-muted);
+      box-shadow: 0 6px 18px rgba(56, 41, 24, 0.05);
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--zai-faint);
+    }
+    .dot.unread { background: var(--zai-accent); box-shadow: 0 0 0 3px rgba(192, 103, 61, 0.14); }
+    .dot.running { background: var(--zai-blue); box-shadow: 0 0 0 3px rgba(45, 111, 143, 0.14); }
+    .dot.done { background: var(--zai-green); }
+
+    .section-title {
+      margin: 20px 0 12px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: #5b4634;
+    }
+
+    .flow-row {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(330px, 1fr));
+      gap: 18px;
+      align-items: start;
+    }
+
+    .screen-card {
+      min-width: 0;
+    }
+
+    .screen-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin: 0 0 8px;
+      color: var(--zai-muted);
+      font: 700 12px/1 var(--zai-mono);
+    }
+
+    .screen-label b {
+      color: var(--zai-accent-strong);
+      font-family: var(--zai-font);
+      font-size: 13px;
+    }
+
+    .window {
+      overflow: hidden;
+      border: 1px solid rgba(154, 145, 134, 0.28);
+      border-radius: 18px;
+      background: rgba(255, 253, 248, 0.86);
+      box-shadow: 0 18px 44px rgba(56, 41, 24, 0.14);
+    }
+
+    .window-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 34px;
+      padding: 0 11px;
+      border-bottom: 1px solid var(--zai-border);
+      background: linear-gradient(180deg, #fffdf8, #f6efe7);
+      color: var(--zai-muted);
+      font-size: 12px;
+    }
+
+    .traffic { display: inline-flex; gap: 6px; }
+    .traffic i { width: 10px; height: 10px; border-radius: 50%; display: block; }
+    .traffic i:nth-child(1) { background: #ed6a5e; }
+    .traffic i:nth-child(2) { background: #f5bf4f; }
+    .traffic i:nth-child(3) { background: #61c454; }
+
+    .zotero-shell {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 420px;
+      height: 620px;
+      background: #f2f0ec;
+    }
+
+    .pdf-area {
+      position: relative;
+      min-width: 0;
+      padding: 34px 26px;
+      background:
+        linear-gradient(90deg, rgba(0,0,0,0.05) 1px, transparent 1px) 0 0 / 52px 52px,
+        #ece9e1;
+      border-right: 1px solid #d8d2c7;
+    }
+
+    .paper {
+      height: 100%;
+      padding: 30px 34px;
+      border-radius: 5px;
+      background: #fff;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+      color: #383838;
+      overflow: hidden;
+    }
+
+    .paper h2 { margin: 0 0 16px; font-size: 20px; }
+    .paper .columns { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+    .paper p { margin: 0 0 12px; line-height: 1.55; font-size: 13px; }
+    .highlight {
+      background: linear-gradient(transparent 52%, rgba(255, 229, 91, 0.72) 52%);
+      border-radius: 2px;
+    }
+    .pdf-focus {
+      position: relative;
+      background: linear-gradient(transparent 48%, rgba(255, 207, 97, 0.92) 48%);
+      border-radius: 3px;
+      box-shadow: 0 0 0 3px rgba(192, 103, 61, 0.18);
+      outline: 2px solid rgba(192, 103, 61, 0.56);
+      outline-offset: 2px;
+      animation: focus-pulse 1.4s ease-in-out infinite alternate;
+    }
+    .pdf-jump-label {
+      position: absolute;
+      right: 28px;
+      top: 22px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border: 1px solid #e5a686;
+      border-radius: 999px;
+      background: rgba(255, 240, 231, 0.96);
+      color: var(--zai-accent-strong);
+      box-shadow: 0 10px 24px rgba(192, 103, 61, 0.14);
+      font-weight: 800;
+      font-size: 12px;
+    }
+    @keyframes focus-pulse {
+      from { box-shadow: 0 0 0 3px rgba(192, 103, 61, 0.12); }
+      to { box-shadow: 0 0 0 6px rgba(192, 103, 61, 0.24); }
+    }
+
+    .sidebar {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      height: 100%;
+      background:
+        radial-gradient(circle at 12% 0%, #fff5eb 0, transparent 32%), var(--zai-bg);
+    }
+
+    .ctx-card {
+      padding: 8px 10px;
+      background: rgba(255, 253, 248, 0.76);
+      border-bottom: 1px solid var(--zai-border);
+    }
+    .ctx-title { font-size: 12px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ctx-meta { margin-top: 2px; color: var(--zai-muted); font: 11px/1.4 var(--zai-mono); }
+
+    .messages {
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+      padding: 14px 12px 12px;
+      font-size: 13px;
+    }
+
+    .bubble { position: relative; margin: 0 0 14px; border-radius: 12px; }
+    .bubble-head { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+    .avatar { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 999px; background: rgba(116, 107, 96, 0.1); color: var(--zai-muted); font: 700 12px/1 var(--zai-font); }
+    .role { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 999px; background: rgba(116, 107, 96, 0.1); color: var(--zai-muted); font: 700 10px/1 var(--zai-mono); letter-spacing: 0.06em; }
+    .bubble-user { width: fit-content; max-width: 92%; margin-left: auto; padding: 9px 10px; background: linear-gradient(135deg, #eaf5f9, #f8fbfc); border: 1px solid #cde4ec; box-shadow: 0 8px 20px rgba(45, 111, 143, 0.08); }
+    .bubble-assistant { width: 100%; max-width: 100%; padding: 2px 0; background: transparent; }
+    .bubble-body { line-height: 1.62; overflow-wrap: anywhere; }
+    .bubble-body p { margin: 0 0 9px; }
+    .bubble-body p:last-child { margin-bottom: 0; }
+    .bubble.flash {
+      padding: 10px 10px 12px;
+      border: 1px solid rgba(192, 103, 61, 0.38);
+      background: rgba(255, 240, 231, 0.68);
+      box-shadow: 0 0 0 3px rgba(192, 103, 61, 0.12), 0 12px 24px rgba(192, 103, 61, 0.10);
+    }
+
+    .composer {
+      flex: 0 0 auto;
+      padding: 0 8px 8px;
+      background: linear-gradient(180deg, rgba(251,250,247,0), var(--zai-bg) 22%);
+    }
+
+    .quick-prompts {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr auto;
+      gap: 6px;
+      margin: 0 0 6px;
+      align-items: center;
+    }
+
+    .quick-prompts button,
+    .queue-pill,
+    .task-action,
+    .mark-read,
+    .clear-queue {
+      border: 1px solid var(--zai-border);
+      border-radius: 8px;
+      background: var(--zai-panel-strong);
+      color: var(--zai-text);
+      padding: 4px 9px;
+      font: inherit;
+      cursor: pointer;
+      transition: border-color 120ms ease, background 120ms ease, color 120ms ease, transform 120ms ease;
+    }
+
+    .quick-prompts button:hover,
+    .queue-pill:hover,
+    .task-action:hover,
+    .mark-read:hover,
+    .clear-queue:hover {
+      background: var(--zai-accent-soft);
+      border-color: #e4aa8b;
+      color: var(--zai-accent-strong);
+    }
+
+    .quick-prompts button:disabled { cursor: default; opacity: 0.48; }
+    .queue-pill {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      min-width: max-content;
+      border-color: #e5a686;
+      background: var(--zai-accent-soft);
+      color: var(--zai-accent-strong);
+      font-weight: 800;
+    }
+    .queue-pill .count {
+      min-width: 17px;
+      height: 17px;
+      padding: 0 5px;
+      border-radius: 999px;
+      background: var(--zai-accent);
+      color: #fff;
+      font: 800 10px/17px var(--zai-mono);
+      text-align: center;
+    }
+
+    .completion-strip {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 27px;
+      margin: 0 0 6px;
+      padding: 5px 8px;
+      border: 1px solid #e5a686;
+      border-radius: 999px;
+      background: rgba(255, 240, 231, 0.92);
+      color: var(--zai-accent-strong);
+      box-shadow: 0 8px 20px rgba(192, 103, 61, 0.10);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .completion-strip .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .completion-strip a { margin-left: auto; color: var(--zai-accent-strong); text-decoration: none; border-bottom: 1px solid currentColor; }
+
+    .input-row {
+      position: relative;
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      min-height: 126px;
+      padding: 0 0 36px;
+      border: 1px solid var(--zai-border-strong);
+      border-radius: 18px;
+      background: var(--zai-panel-strong);
+      box-shadow: var(--zai-shadow);
+      overflow: visible;
+    }
+    .input-row textarea {
+      width: 100%;
+      min-height: 70px;
+      resize: none;
+      border: 0;
+      outline: none;
+      background: transparent;
+      color: var(--zai-text);
+      padding: 12px 14px 2px;
+      font: 15px/1.48 var(--zai-font);
+    }
+    .input-row textarea::placeholder { color: var(--zai-faint); }
+    .web-switch { position: absolute; left: 10px; bottom: 9px; display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 999px; color: var(--zai-muted); font-weight: 700; }
+    .send-btn { position: absolute; right: 10px; bottom: 9px; width: 38px; height: 38px; border: 0; border-radius: 14px; background: var(--zai-accent); color: white; box-shadow: 0 5px 14px rgba(192, 103, 61, 0.26); font-size: 20px; font-weight: 900; }
+
+    .queue-popover {
+      position: absolute;
+      right: 8px;
+      bottom: 170px;
+      z-index: 20;
+      width: min(392px, calc(100% - 16px));
+      padding: 10px;
+      border: 1px solid rgba(205, 190, 172, 0.92);
+      border-radius: 16px;
+      background: rgba(255, 253, 248, 0.98);
+      box-shadow: 0 18px 44px rgba(56, 41, 24, 0.18);
+      backdrop-filter: blur(12px);
+    }
+    .queue-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+    .queue-title { display: flex; align-items: center; gap: 7px; font-weight: 900; }
+    .queue-title small { color: var(--zai-muted); font-weight: 600; }
+    .queue-actions { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+    .mark-read,
+    .clear-queue { padding: 3px 8px; border-radius: 999px; color: var(--zai-muted); font-size: 12px; }
+    .clear-queue { border-color: #efc6c6; color: var(--zai-red); background: #fffafa; }
+    .clear-queue:hover { border-color: #df9b9b; background: var(--zai-red-soft); color: var(--zai-red); }
+    .clear-queue:disabled { cursor: default; opacity: 0.42; border-color: var(--zai-border); background: var(--zai-panel-strong); color: var(--zai-faint); }
+
+    .task-list { display: flex; flex-direction: column; gap: 7px; }
+    .task-card {
+      display: grid;
+      grid-template-columns: 10px minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: start;
+      padding: 8px;
+      border: 1px solid var(--zai-border);
+      border-radius: 12px;
+      background: var(--zai-panel-strong);
+    }
+    .task-card.unread { border-color: #e5a686; background: linear-gradient(135deg, #fff7f2, #fffdf8); }
+    .task-card.running { border-color: #c7dfe8; background: #f4fbfe; }
+    .task-card.failed { border-color: #efc6c6; background: var(--zai-red-soft); }
+    .task-card.cancelled { border-color: var(--zai-border); background: #faf7f2; opacity: 0.72; }
+    .task-card.read { opacity: 0.66; }
+    .task-status { width: 9px; height: 9px; margin-top: 5px; border-radius: 50%; background: var(--zai-faint); }
+    .task-card.unread .task-status { background: var(--zai-accent); box-shadow: 0 0 0 3px rgba(192, 103, 61, 0.14); }
+    .task-card.running .task-status { background: var(--zai-blue); box-shadow: 0 0 0 3px rgba(45, 111, 143, 0.14); }
+    .task-card.failed .task-status { background: var(--zai-red); }
+    .task-card.cancelled .task-status { background: var(--zai-faint); }
+    .task-card.read .task-status { background: var(--zai-green); }
+    .task-main { min-width: 0; }
+    .task-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .task-type { flex: 0 0 auto; color: var(--zai-accent-strong); font-weight: 900; }
+    .task-time { flex: 0 0 auto; color: var(--zai-faint); font: 11px/1 var(--zai-mono); }
+    .task-preview { margin-top: 3px; overflow: hidden; color: var(--zai-muted); font-size: 12px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+    .task-locator { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; color: var(--zai-blue); font: 11px/1 var(--zai-mono); }
+    .task-actions { display: inline-flex; align-self: center; align-items: center; gap: 5px; }
+    .task-action { align-self: center; min-width: 46px; padding: 4px 8px; border-radius: 999px; color: var(--zai-accent-strong); font-weight: 800; font-size: 12px; }
+    .task-card.running .task-action { color: var(--zai-blue); }
+    .task-card.failed .task-action { color: var(--zai-red); }
+    .task-card.cancelled .task-action { color: var(--zai-muted); }
+    .task-card.read .task-action { color: var(--zai-muted); }
+    .task-action.cancel { border-color: #efc6c6; color: var(--zai-red); background: #fffafa; }
+    .task-action.cancel:hover { border-color: #df9b9b; background: var(--zai-red-soft); color: var(--zai-red); }
+
+    .screen-card.mock-jump-focus .window {
+      outline: 3px solid rgba(192, 103, 61, 0.45);
+      outline-offset: 4px;
+      box-shadow: 0 0 0 8px rgba(192, 103, 61, 0.12), 0 18px 44px rgba(56, 41, 24, 0.14);
+    }
+
+    .callout {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border: 1px dashed rgba(192, 103, 61, 0.42);
+      border-radius: 14px;
+      background: rgba(255, 240, 231, 0.5);
+      color: var(--zai-muted);
+      line-height: 1.65;
+    }
+    .callout b { color: var(--zai-accent-strong); }
+
+    .jump-banner {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 10px;
+      padding: 7px 10px;
+      border: 1px solid #cde4ec;
+      border-radius: 999px;
+      background: #f4fbfe;
+      color: var(--zai-blue);
+      font-weight: 800;
+      box-shadow: 0 8px 20px rgba(45,111,143,0.09);
+    }
+
+    .notes {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-top: 18px;
+    }
+    .note {
+      padding: 13px 14px;
+      border: 1px solid var(--zai-border);
+      border-radius: 16px;
+      background: rgba(255, 253, 248, 0.76);
+      box-shadow: 0 10px 28px rgba(56, 41, 24, 0.06);
+    }
+    .note b { display: block; margin-bottom: 5px; color: var(--zai-accent-strong); }
+    .note p { margin: 0; color: var(--zai-muted); line-height: 1.65; }
+
+    @media (max-width: 1180px) {
+      .flow-row { grid-template-columns: 1fr; }
+      .zotero-shell { grid-template-columns: minmax(0, 1fr) 420px; }
+      .notes { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 780px) {
+      .page { padding: 18px 12px 28px; }
+      .hero { display: block; }
+      .legend { justify-content: flex-start; min-width: 0; margin-top: 12px; }
+      .zotero-shell { grid-template-columns: 1fr; height: auto; }
+      .pdf-area { display: none; }
+      .sidebar { height: 620px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <div>
+        <h1>任务队列 / 未读回答入口设计</h1>
+        <p>目标：连续发起“总结论文、全文重点、解释选区、自定义提问”后，可以知道哪些结果完成但还没看；点击后直接跳转到对应回答并高亮。</p>
+      </div>
+      <div class="legend" aria-label="图例">
+        <span><i class="dot unread"></i>已完成未读</span>
+        <span><i class="dot running"></i>回答中</span>
+        <span><i class="dot done"></i>已查看</span>
+      </div>
+    </header>
+
+    <div class="section-title">FLOW A：推荐放在输入区上方，保持截图里的布局，不占用太多空间</div>
+    <section class="flow-row">
+      <article class="screen-card">
+        <div class="screen-label"><b>01 默认状态</b><span>右侧多一个“队列/未读”胶囊</span></div>
+        <div class="window">
+          <div class="window-bar"><span class="traffic"><i></i><i></i><i></i></span><span>Zotero Reader</span></div>
+          <div class="zotero-shell">
+            <div class="pdf-area">
+              <div class="paper">
+                <h2>π0.5: Open-World Generalization</h2>
+                <div class="columns">
+                  <p>While most robotic learning systems are evaluated in environments that closely match the training data...</p>
+                  <p><span class="highlight">a number of prior works have explored broader open-world generalization.</span></p>
+                  <p>Training such generalist policies requires new modeling approaches to handle scale and diversity.</p>
+                  <p>We study generalization across new homes, objects, and task instructions.</p>
+                </div>
+              </div>
+            </div>
+            <aside class="sidebar">
+              <div class="ctx-card"><div class="ctx-title">π0.5: a Vision-Language-Action Model</div><div class="ctx-meta">Item ID: 1241</div></div>
+              <div class="messages">
+                <div class="bubble bubble-user"><div class="bubble-body">翻译这句话</div></div>
+                <div class="bubble bubble-assistant"><div class="bubble-head"><span class="avatar">AI</span><span class="role">AI</span></div><div class="bubble-body"><p>虽然多数机器人学习系统是在与训练数据相近的环境中评估的，但已有一些研究探索更广泛的开放世界泛化。</p></div></div>
+              </div>
+              <div class="composer">
+                <div class="quick-prompts">
+                  <button>总结论文</button><button>🔖 全文重点</button><button>解释选区</button>
+                  <button class="queue-pill">队列 <span class="count">0</span></button>
+                </div>
+                <div class="input-row"><textarea placeholder="问点什么... (Enter 发送，Shift+Enter 换行)"></textarea><span class="web-switch">＋ 联网</span><button class="send-btn">↑</button></div>
+              </div>
+            </aside>
+          </div>
+        </div>
+        <div class="callout"><b>保持：</b>三个主快捷按钮不移动；只在右侧增加一个紧凑入口。没有未读结果时显示 <b>队列 0</b>，不会抢注意力。</div>
+      </article>
+
+      <article class="screen-card">
+        <div class="screen-label"><b>02 回答完成</b><span>顶部出现可点击完成提示</span></div>
+        <div class="window">
+          <div class="window-bar"><span class="traffic"><i></i><i></i><i></i></span><span>Zotero Reader</span></div>
+          <div class="zotero-shell">
+            <div class="pdf-area">
+              <div class="paper">
+                <h2>π0.5: Open-World Generalization</h2>
+                <div class="columns">
+                  <p>While most robotic learning systems are evaluated in environments that closely match the training data...</p>
+                  <p><span class="highlight">a number of prior works have explored broader open-world generalization.</span></p>
+                  <p>Training such generalist policies requires new modeling approaches to handle scale and diversity.</p>
+                  <p>We study generalization across new homes, objects, and task instructions.</p>
+                </div>
+              </div>
+            </div>
+            <aside class="sidebar">
+              <div class="ctx-card"><div class="ctx-title">π0.5: a Vision-Language-Action Model</div><div class="ctx-meta">Item ID: 1241</div></div>
+              <div class="messages">
+                <div class="bubble bubble-user"><div class="bubble-body">总结论文</div></div>
+                <div class="bubble bubble-assistant"><div class="bubble-head"><span class="avatar">AI</span><span class="role">AI</span></div><div class="bubble-body"><p>正在总结论文结构与核心贡献...</p></div></div>
+              </div>
+              <div class="composer">
+                <div class="quick-prompts">
+                  <button>总结论文</button><button>🔖 全文重点</button><button>解释选区</button>
+                  <button class="queue-pill">未读 <span class="count">3</span></button>
+                </div>
+                <div class="completion-strip"><i class="dot unread"></i><span class="title">全文重点已完成：5 条建议高亮</span><a href="#">查看</a></div>
+                <div class="input-row"><textarea placeholder="问点什么... (Enter 发送，Shift+Enter 换行)"></textarea><span class="web-switch">＋ 联网</span><button class="send-btn">↑</button></div>
+              </div>
+            </aside>
+          </div>
+        </div>
+        <div class="callout"><b>新增：</b>完成后给一个“一行提示”，点击 <b>查看</b> 就跳到对应 AI 回答；不点也保留在未读队列里。</div>
+      </article>
+
+      <article class="screen-card">
+        <div class="screen-label"><b>03 点击未读/队列</b><span>弹出最近任务列表</span></div>
+        <div class="window">
+          <div class="window-bar"><span class="traffic"><i></i><i></i><i></i></span><span>Zotero Reader</span></div>
+          <div class="zotero-shell">
+            <div class="pdf-area">
+              <div class="paper">
+                <h2>π0.5: Open-World Generalization</h2>
+                <div class="columns">
+                  <p>While most robotic learning systems are evaluated in environments that closely match the training data...</p>
+                  <p><span class="highlight">a number of prior works have explored broader open-world generalization.</span></p>
+                  <p>Training such generalist policies requires new modeling approaches to handle scale and diversity.</p>
+                  <p>We study generalization across new homes, objects, and task instructions.</p>
+                </div>
+              </div>
+            </div>
+            <aside class="sidebar">
+              <div class="ctx-card"><div class="ctx-title">π0.5: a Vision-Language-Action Model</div><div class="ctx-meta">Item ID: 1241</div></div>
+              <div class="messages">
+                <div class="bubble bubble-user"><div class="bubble-body">解释选区</div></div>
+                <div class="bubble bubble-assistant"><div class="bubble-head"><span class="avatar">AI</span><span class="role">AI</span></div><div class="bubble-body"><p>这句话是在承接并转折：它先指出主流评估通常接近训练环境，然后引出开放世界泛化这个更难的问题。</p></div></div>
+              </div>
+              <div class="queue-popover">
+                <div class="queue-head"><div class="queue-title">任务队列 <small>3 未读 / 6 总计</small></div><div class="queue-actions"><button class="mark-read">全部已读</button><button class="clear-queue" disabled title="还有未读或回答中任务，全部已读后才可清空">清空队列</button></div></div>
+                <div class="task-list">
+                  <div class="task-card unread"><span class="task-status"></span><div class="task-main"><div class="task-top"><span class="task-type">全文重点</span><span class="task-time">刚刚</span></div><div class="task-preview">已生成 5 条建议高亮，等待查看</div></div><button class="task-action jump-to" data-target="answer-target-highlight">查看</button></div>
+                  <div class="task-card unread"><span class="task-status"></span><div class="task-main"><div class="task-top"><span class="task-type">解释选区</span><span class="task-time">1 分钟</span></div><div class="task-preview">While most robotic learning systems...</div><div class="task-locator">📍 PDF 第 1 页 · 原选区</div></div><button class="task-action jump-to" data-target="answer-target-selection">查看</button></div>
+                  <div class="task-card unread"><span class="task-status"></span><div class="task-main"><div class="task-top"><span class="task-type">选中文字提问</span><span class="task-time">刚刚</span></div><div class="task-preview">这句话为什么重要？</div><div class="task-locator">📍 PDF 第 1 页 · 原选区</div></div><button class="task-action jump-to" data-target="answer-target-selection">查看</button></div>
+                  <div class="task-card running"><span class="task-status"></span><div class="task-main"><div class="task-top"><span class="task-type">总结论文</span><span class="task-time">回答中</span></div><div class="task-preview">正在整理方法、实验、结论</div></div><div class="task-actions"><button class="task-action cancel" title="取消这个正在回答的任务">取消</button></div></div>
+                  <div class="task-card failed"><span class="task-status"></span><div class="task-main"><div class="task-top"><span class="task-type">自定义提问</span><span class="task-time">失败</span></div><div class="task-preview">网络中断，请重试</div></div><button class="task-action">重试</button></div>
+                  <div class="task-card cancelled"><span class="task-status"></span><div class="task-main"><div class="task-top"><span class="task-type">翻译选区</span><span class="task-time">已取消</span></div><div class="task-preview">用户手动取消，未生成回答</div></div><button class="task-action">移除</button></div>
+                </div>
+              </div>
+              <div class="composer">
+                <div class="quick-prompts">
+                  <button>总结论文</button><button>🔖 全文重点</button><button>解释选区</button>
+                  <button class="queue-pill">未读 <span class="count">2</span></button>
+                </div>
+                <div class="input-row"><textarea placeholder="问点什么... (Enter 发送，Shift+Enter 换行)"></textarea><span class="web-switch">＋ 联网</span><button class="send-btn">↑</button></div>
+              </div>
+            </aside>
+          </div>
+        </div>
+        <div class="callout"><b>队列内容：</b>完成未读、回答中、失败、已读都在一个小弹窗里；主要操作是 <b>查看</b>。<b>清空队列</b> 只有全部已读且没有回答中任务时才可用，点击直接清空。</div>
+      </article>
+    </section>
+
+    <div class="section-title">FLOW B：点击“查看”后的效果</div>
+    <section class="flow-row">
+      <article class="screen-card" id="answer-target-highlight">
+        <div class="screen-label"><b>04 跳转到对应回答</b><span>回答短暂高亮，避免用户找不到位置</span></div>
+        <div class="window">
+          <div class="window-bar"><span class="traffic"><i></i><i></i><i></i></span><span>Zotero Reader</span></div>
+          <div class="zotero-shell">
+            <div class="pdf-area">
+              <div class="paper">
+                <h2>π0.5: Open-World Generalization</h2>
+                <div class="columns">
+                  <p>While most robotic learning systems are evaluated in environments that closely match the training data...</p>
+                  <p><span class="highlight">a number of prior works have explored broader open-world generalization.</span></p>
+                  <p>Training such generalist policies requires new modeling approaches to handle scale and diversity.</p>
+                  <p>We study generalization across new homes, objects, and task instructions.</p>
+                </div>
+              </div>
+            </div>
+            <aside class="sidebar">
+              <div class="ctx-card"><div class="ctx-title">π0.5: a Vision-Language-Action Model</div><div class="ctx-meta">Item ID: 1241</div></div>
+              <div class="messages">
+                <div class="jump-banner"><i class="dot done"></i>已跳转到“全文重点”的回答</div>
+                <div class="bubble bubble-user"><div class="bubble-body">全文重点</div></div>
+                <div class="bubble bubble-assistant flash"><div class="bubble-head"><span class="avatar">AI</span><span class="role">AI</span></div><div class="bubble-body"><p><b>全文重点：</b>本文关注 VLA 模型在开放世界中的泛化能力，而不是只在训练环境附近取得好结果。</p><p>建议高亮 1：多数系统仍在接近训练数据的环境中评估。</p><p>建议高亮 2：开放世界泛化需要覆盖新家庭、新物体和新指令。</p></div></div>
+                <div class="bubble bubble-user"><div class="bubble-body">解释选区</div></div>
+              </div>
+              <div class="composer">
+                <div class="quick-prompts">
+                  <button>总结论文</button><button>🔖 全文重点</button><button>解释选区</button>
+                  <button class="queue-pill">未读 <span class="count">1</span></button>
+                </div>
+                <div class="input-row"><textarea placeholder="问点什么... (Enter 发送，Shift+Enter 换行)"></textarea><span class="web-switch">＋ 联网</span><button class="send-btn">↑</button></div>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </article>
+
+      <article class="screen-card">
+        <div class="screen-label"><b>05 读完后的队列</b><span>已读降权，未读仍然明显</span></div>
+        <div class="window">
+          <div class="window-bar"><span class="traffic"><i></i><i></i><i></i></span><span>Zotero Reader</span></div>
+          <div class="zotero-shell">
+            <div class="pdf-area">
+              <div class="paper">
+                <h2>π0.5: Open-World Generalization</h2>
+                <div class="columns">
+                  <p>While most robotic learning systems are evaluated in environments that closely match the training data...</p>
+                  <p><span class="highlight">a number of prior works have explored broader open-world generalization.</span></p>
+                  <p>Training such generalist policies requires new modeling approaches to handle scale and diversity.</p>
+                  <p>We study generalization across new homes, objects, and task instructions.</p>
+                </div>
+              </div>
+            </div>
+            <aside class="sidebar">
+              <div class="ctx-card"><div class="ctx-title">π0.5: a Vision-Language-Action Model</div><div class="ctx-meta">Item ID: 1241</div></div>
+              <div class="messages"></div>
+              <div class="queue-popover">
+                <div class="queue-head"><div class="queue-title">任务队列 <small>1 未读 / 4 总计</small></div><div class="queue-actions"><button class="mark-read">全部已读</button><button class="clear-queue" disabled title="还有未读或回答中任务，全部已读后才可清空">清空队列</button></div></div>
+                <div class="task-list">
+                  <div class="task-card unread"><span class="task-status"></span><div class="task-main"><div class="task-top"><span class="task-type">解释选区</span><span class="task-time">2 分钟</span></div><div class="task-preview">While most robotic learning systems...</div><div class="task-locator">📍 PDF 第 1 页 · 原选区</div></div><button class="task-action jump-to" data-target="answer-target-selection">查看</button></div>
+                  <div class="task-card read"><span class="task-status"></span><div class="task-main"><div class="task-top"><span class="task-type">全文重点</span><span class="task-time">已读</span></div><div class="task-preview">已查看 5 条建议高亮</div></div><button class="task-action jump-to" data-target="answer-target-highlight">再看</button></div>
+                  <div class="task-card running"><span class="task-status"></span><div class="task-main"><div class="task-top"><span class="task-type">总结论文</span><span class="task-time">回答中</span></div><div class="task-preview">正在整理方法、实验、结论</div></div><div class="task-actions"><button class="task-action cancel" title="取消这个正在回答的任务">取消</button></div></div>
+                </div>
+              </div>
+              <div class="composer">
+                <div class="quick-prompts">
+                  <button>总结论文</button><button>🔖 全文重点</button><button>解释选区</button>
+                  <button class="queue-pill">未读 <span class="count">1</span></button>
+                </div>
+                <div class="input-row"><textarea placeholder="问点什么... (Enter 发送，Shift+Enter 换行)"></textarea><span class="web-switch">＋ 联网</span><button class="send-btn">↑</button></div>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </article>
+
+      <article class="screen-card">
+        <div class="screen-label"><b>06 空状态</b><span>无未读时回到安静状态</span></div>
+        <div class="window">
+          <div class="window-bar"><span class="traffic"><i></i><i></i><i></i></span><span>Zotero Reader</span></div>
+          <div class="zotero-shell">
+            <div class="pdf-area">
+              <div class="paper">
+                <h2>π0.5: Open-World Generalization</h2>
+                <div class="columns">
+                  <p>While most robotic learning systems are evaluated in environments that closely match the training data...</p>
+                  <p><span class="highlight">a number of prior works have explored broader open-world generalization.</span></p>
+                  <p>Training such generalist policies requires new modeling approaches to handle scale and diversity.</p>
+                  <p>We study generalization across new homes, objects, and task instructions.</p>
+                </div>
+              </div>
+            </div>
+            <aside class="sidebar">
+              <div class="ctx-card"><div class="ctx-title">π0.5: a Vision-Language-Action Model</div><div class="ctx-meta">Item ID: 1241</div></div>
+              <div class="messages">
+                <div class="bubble bubble-assistant"><div class="bubble-head"><span class="avatar">AI</span><span class="role">AI</span></div><div class="bubble-body"><p>已就绪。配置模型预设后，可以直接询问当前 Zotero 条目或 PDF 内容。</p></div></div>
+              </div>
+              <div class="composer">
+                <div class="quick-prompts">
+                  <button>总结论文</button><button>🔖 全文重点</button><button>解释选区</button>
+                  <button class="queue-pill" style="background:var(--zai-panel-strong);border-color:var(--zai-border);color:var(--zai-muted)">队列 <span class="count" style="background:#d8c9b6">0</span></button>
+                </div>
+                <div class="input-row"><textarea placeholder="问点什么... (Enter 发送，Shift+Enter 换行)"></textarea><span class="web-switch">＋ 联网</span><button class="send-btn">↑</button></div>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </article>
+
+      <article class="screen-card">
+        <div class="screen-label"><b>07 全部已读后</b><span>清空队列可直接点击</span></div>
+        <div class="window">
+          <div class="window-bar"><span class="traffic"><i></i><i></i><i></i></span><span>Zotero Reader</span></div>
+          <div class="zotero-shell">
+            <div class="pdf-area">
+              <div class="paper">
+                <h2>π0.5: Open-World Generalization</h2>
+                <div class="columns">
+                  <p>While most robotic learning systems are evaluated in environments that closely match the training data...</p>
+                  <p><span class="highlight">a number of prior works have explored broader open-world generalization.</span></p>
+                  <p>Training such generalist policies requires new modeling approaches to handle scale and diversity.</p>
+                  <p>We study generalization across new homes, objects, and task instructions.</p>
+                </div>
+              </div>
+            </div>
+            <aside class="sidebar">
+              <div class="ctx-card"><div class="ctx-title">π0.5: a Vision-Language-Action Model</div><div class="ctx-meta">Item ID: 1241</div></div>
+              <div class="messages"></div>
+              <div class="queue-popover">
+                <div class="queue-head"><div class="queue-title">任务队列 <small>0 未读 / 2 总计</small></div><div class="queue-actions"><button class="mark-read" disabled>全部已读</button><button class="clear-queue" title="全部已读，点击直接清空队列">清空队列</button></div></div>
+                <div class="task-list">
+                  <div class="task-card read"><span class="task-status"></span><div class="task-main"><div class="task-top"><span class="task-type">全文重点</span><span class="task-time">已读</span></div><div class="task-preview">已查看 5 条建议高亮</div></div><button class="task-action jump-to" data-target="answer-target-highlight">再看</button></div>
+                  <div class="task-card read"><span class="task-status"></span><div class="task-main"><div class="task-top"><span class="task-type">解释选区</span><span class="task-time">已读</span></div><div class="task-preview">已查看选区解释</div></div><button class="task-action jump-to" data-target="answer-target-selection">再看</button></div>
+                </div>
+              </div>
+              <div class="composer">
+                <div class="quick-prompts">
+                  <button>总结论文</button><button>🔖 全文重点</button><button>解释选区</button>
+                  <button class="queue-pill" style="background:var(--zai-panel-strong);border-color:var(--zai-border);color:var(--zai-muted)">队列 <span class="count" style="background:#d8c9b6">0</span></button>
+                </div>
+                <div class="input-row"><textarea placeholder="问点什么... (Enter 发送，Shift+Enter 换行)"></textarea><span class="web-switch">＋ 联网</span><button class="send-btn">↑</button></div>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </article>
+
+      <article class="screen-card" id="answer-target-cancelled">
+        <div class="screen-label"><b>08 取消单个任务</b><span>只影响这一条任务，其他回答不受影响</span></div>
+        <div class="window">
+          <div class="window-bar"><span class="traffic"><i></i><i></i><i></i></span><span>Zotero Reader</span></div>
+          <div class="zotero-shell">
+            <div class="pdf-area">
+              <div class="paper">
+                <h2>π0.5: Open-World Generalization</h2>
+                <div class="columns">
+                  <p>While most robotic learning systems are evaluated in environments that closely match the training data...</p>
+                  <p><span class="highlight">a number of prior works have explored broader open-world generalization.</span></p>
+                  <p>Training such generalist policies requires new modeling approaches to handle scale and diversity.</p>
+                  <p>We study generalization across new homes, objects, and task instructions.</p>
+                </div>
+              </div>
+            </div>
+            <aside class="sidebar">
+              <div class="ctx-card"><div class="ctx-title">π0.5: a Vision-Language-Action Model</div><div class="ctx-meta">Item ID: 1241</div></div>
+              <div class="messages">
+                <div class="bubble bubble-user"><div class="bubble-body">总结论文</div></div>
+                <div class="bubble bubble-assistant"><div class="bubble-head"><span class="avatar">AI</span><span class="role">AI</span></div><div class="bubble-body"><p>已取消本次回答。你可以重新发送，或从队列中移除这条记录。</p></div></div>
+              </div>
+              <div class="queue-popover">
+                <div class="queue-head"><div class="queue-title">任务队列 <small>1 未读 / 3 总计</small></div><div class="queue-actions"><button class="mark-read">全部已读</button><button class="clear-queue" disabled title="还有未读任务，全部已读后才可清空">清空队列</button></div></div>
+                <div class="task-list">
+                  <div class="task-card unread"><span class="task-status"></span><div class="task-main"><div class="task-top"><span class="task-type">解释选区</span><span class="task-time">未读</span></div><div class="task-preview">开放世界泛化的背景解释</div><div class="task-locator">📍 PDF 第 1 页 · 原选区</div></div><button class="task-action jump-to" data-target="answer-target-selection">查看</button></div>
+                  <div class="task-card cancelled"><span class="task-status"></span><div class="task-main"><div class="task-top"><span class="task-type">总结论文</span><span class="task-time">已取消</span></div><div class="task-preview">用户手动取消，未生成完整回答</div></div><button class="task-action">移除</button></div>
+                  <div class="task-card read"><span class="task-status"></span><div class="task-main"><div class="task-top"><span class="task-type">全文重点</span><span class="task-time">已读</span></div><div class="task-preview">已查看 5 条建议高亮</div></div><button class="task-action jump-to" data-target="answer-target-highlight">再看</button></div>
+                </div>
+              </div>
+              <div class="composer">
+                <div class="quick-prompts">
+                  <button>总结论文</button><button>🔖 全文重点</button><button>解释选区</button>
+                  <button class="queue-pill">未读 <span class="count">1</span></button>
+                </div>
+                <div class="input-row"><textarea placeholder="问点什么... (Enter 发送，Shift+Enter 换行)"></textarea><span class="web-switch">＋ 联网</span><button class="send-btn">↑</button></div>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </article>
+
+      <article class="screen-card" id="answer-target-selection">
+        <div class="screen-label"><b>09 查看选区任务</b><span>解释选区/手动选中文字提问都同步定位</span></div>
+        <div class="window">
+          <div class="window-bar"><span class="traffic"><i></i><i></i><i></i></span><span>Zotero Reader</span></div>
+          <div class="zotero-shell">
+            <div class="pdf-area">
+              <div class="paper">
+                <span class="pdf-jump-label">📍 已定位到原选区</span>
+                <h2>π0.5: Open-World Generalization</h2>
+                <div class="columns">
+                  <p><span class="pdf-focus">While most robotic learning systems are evaluated in environments that closely match the training data, a number of prior works have explored broader open-world generalization.</span></p>
+                  <p>Training such generalist policies requires new modeling approaches to handle scale and diversity.</p>
+                  <p>Visual-language-action models provide an attractive solution by fine-tuning pretrained vision-language models for robot control.</p>
+                  <p>We study generalization across new homes, objects, and task instructions.</p>
+                </div>
+              </div>
+            </div>
+            <aside class="sidebar">
+              <div class="ctx-card"><div class="ctx-title">π0.5: a Vision-Language-Action Model</div><div class="ctx-meta">Item ID: 1241</div></div>
+              <div class="messages">
+                <div class="jump-banner"><i class="dot done"></i>已跳转到选区任务回答，并定位 PDF 原文</div>
+                <div class="bubble bubble-user"><div class="bubble-body">请解释当前 PDF 选区的文字</div></div>
+                <div class="bubble bubble-assistant flash"><div class="bubble-head"><span class="avatar">AI</span><span class="role">AI</span></div><div class="bubble-body"><p>这句话指出：多数机器人学习系统仍在接近训练数据的环境中评估，但已有研究开始关注更广泛的开放世界泛化。</p><p>它在上下文中起到承接/转折作用：先说明现有评估局限，再引出本文为什么要强调更强的泛化测试。</p></div></div>
+              </div>
+              <div class="composer">
+                <div class="quick-prompts">
+                  <button>总结论文</button><button>🔖 全文重点</button><button>解释选区</button>
+                  <button class="queue-pill">未读 <span class="count">1</span></button>
+                </div>
+                <div class="input-row"><textarea placeholder="问点什么... (Enter 发送，Shift+Enter 换行)"></textarea><span class="web-switch">＋ 联网</span><button class="send-btn">↑</button></div>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="notes">
+      <div class="note"><b>建议实现顺序</b><p>先做“未读 N + 查看跳转 + 高亮”，再做完整队列弹窗；这样改动小，能快速验证体验。</p></div>
+      <div class="note"><b>状态保存</b><p>任务阅读状态建议本地保存，不走坚果云；聊天记录仍按现有逻辑保存，避免多设备阅读状态互相干扰。</p></div>
+      <div class="note"><b>清空队列</b><p>必须全部已读且没有回答中任务才可点击；点击后直接清空，不需要确认。</p></div>
+      <div class="note"><b>取消单个任务</b><p>排队中任务直接移除；回答中任务先 abort 当前请求，再标记为已取消，可单独移除。</p></div>
+      <div class="note"><b>选区任务定位元数据</b><p>解释选区、翻译选区、手动选中文字提问都记录 attachmentID、pageIndex、rects/sortIndex、原选区文本；查看时同时跳转 PDF 和聊天回答。</p></div>
+    </section>
+  </main>
+
+  <script>
+    document.querySelectorAll('.jump-to').forEach((button) => {
+      button.addEventListener('click', () => {
+        const targetId = button.getAttribute('data-target');
+        const target = targetId ? document.getElementById(targetId) : null;
+        if (!target) return;
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        target.classList.add('mock-jump-focus');
+        window.setTimeout(() => target.classList.remove('mock-jump-focus'), 1600);
+      });
+    });
+  </script>
+</body>
+</html>

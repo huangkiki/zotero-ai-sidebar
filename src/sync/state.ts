@@ -75,7 +75,7 @@ export async function buildSyncSnapshot(prefs: PrefsStore): Promise<SyncSnapshot
     uiSettings: loadUiSettings(prefs),
     quickPrompts: loadQuickPromptSettings(prefs),
     toolSettings: loadToolSettings(prefs),
-    threads,
+    threads: stripLocalTaskStateFromThreads(threads),
     annotations,
   };
 }
@@ -143,7 +143,7 @@ function normalizePortableThreads(value: unknown): PortableThread[] {
     const portable: PortableThread = {
       libraryType,
       updatedAt,
-      messages: messages as PortableThread['messages'],
+      messages: stripLocalTaskState(messages as PortableThread['messages']),
     };
     if (libraryType === 'group' && typeof entry.groupID === 'number') {
       portable.groupID = entry.groupID;
@@ -156,6 +156,24 @@ function normalizePortableThreads(value: unknown): PortableThread[] {
       return [];
     }
     return [portable];
+  });
+}
+
+function stripLocalTaskStateFromThreads(
+  threads: PortableThread[],
+): PortableThread[] {
+  return threads.map((thread) => ({
+    ...thread,
+    messages: stripLocalTaskState(thread.messages),
+  }));
+}
+
+function stripLocalTaskState(
+  messages: PortableThread['messages'],
+): PortableThread['messages'] {
+  return messages.map((message) => {
+    const { task: _task, ...portable } = message;
+    return portable;
   });
 }
 

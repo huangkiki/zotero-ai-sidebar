@@ -24,10 +24,19 @@ export interface ToolSettings {
   webSearchMode: WebSearchMode;
   mcpServers: McpServerSettings[];
   annotationColorGuide: string;
+  // Default font size (PDF points) applied when the user clicks "🅣 新增文字"
+  // without an explicit override. Matches Zotero Reader's "Add Text / 新增
+  // 文字" (T) tool, which clamps text annotations to 8–48; we mirror that
+  // range to keep saved annotations visible-but-not-broken across PDFs.
+  textAnnotationFontSize: number;
   // Legacy arXiv MCP shape kept only for migration/back-compat. The current
   // arXiv reader is a fixed local AgentTool, not a user-configured MCP.
   arxivMcp: ArxivMcpSettings;
 }
+
+export const TEXT_ANNOTATION_FONT_SIZE_MIN = 8;
+export const TEXT_ANNOTATION_FONT_SIZE_MAX = 48;
+export const DEFAULT_TEXT_ANNOTATION_FONT_SIZE = 14;
 
 export const DEFAULT_ANNOTATION_COLOR_GUIDE = [
   'PDF 注释颜色预设（写入 zotero_annotate_passage 时使用）：',
@@ -44,6 +53,7 @@ export const DEFAULT_TOOL_SETTINGS: ToolSettings = {
   webSearchMode: 'disabled',
   mcpServers: [],
   annotationColorGuide: DEFAULT_ANNOTATION_COLOR_GUIDE,
+  textAnnotationFontSize: DEFAULT_TEXT_ANNOTATION_FONT_SIZE,
   arxivMcp: {
     enabled: false,
     serverLabel: 'arxiv',
@@ -90,6 +100,9 @@ export function normalizeToolSettings(value: unknown): ToolSettings {
     annotationColorGuide: normalizeAnnotationColorGuide(
       input.annotationColorGuide,
     ),
+    textAnnotationFontSize: normalizeTextAnnotationFontSize(
+      input.textAnnotationFontSize,
+    ),
     arxivMcp: {
       enabled: rawArxiv.enabled === true,
       serverLabel: normalizeServerLabel(rawArxiv.serverLabel),
@@ -107,6 +120,20 @@ export function normalizeToolSettings(value: unknown): ToolSettings {
 function normalizeAnnotationColorGuide(value: unknown): string {
   const guide = stringValue(value).slice(0, MAX_ANNOTATION_COLOR_GUIDE_CHARS);
   return guide || DEFAULT_ANNOTATION_COLOR_GUIDE;
+}
+
+function normalizeTextAnnotationFontSize(value: unknown): number {
+  const n =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string'
+        ? Number(value)
+        : NaN;
+  if (!Number.isFinite(n)) return DEFAULT_TEXT_ANNOTATION_FONT_SIZE;
+  return Math.min(
+    TEXT_ANNOTATION_FONT_SIZE_MAX,
+    Math.max(TEXT_ANNOTATION_FONT_SIZE_MIN, Math.round(n)),
+  );
 }
 
 function normalizeMcpServers(value: unknown): McpServerSettings[] {

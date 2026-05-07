@@ -2,6 +2,7 @@ import { buildContext } from "../context/builder";
 import {
   createZoteroAgentToolSession,
   saveSelectionAnnotation,
+  saveTextAnnotationNearSelection,
   type SelectionAnnotationDraft,
   type ZoteroAgentToolSession,
 } from "../context/agent-tools";
@@ -17,10 +18,14 @@ import {
 import { DEFAULT_CONTEXT_POLICY } from "../context/policy";
 import { createPdfLocator } from "../context/pdf-locator";
 import { extractPdfRange, searchPdfPassages } from "../context/retrieval";
-import { resolveSelectedTextFromPdfText } from "../context/selection-repair";
 import { zoteroContextSource } from "../context/zotero-source";
 import { getProvider } from "../providers/factory";
-import type { AssistantAnnotationDraft, Message } from "../providers/types";
+import type {
+  AssistantAnnotationDraft,
+  ChatTaskMeta,
+  Message,
+  PdfSelectionLocator,
+} from "../providers/types";
 import { loadChatMessages, saveChatMessages } from "../settings/chat-history";
 import { loadQuickPromptSettings } from "../settings/quick-prompts";
 import { loadPresets, savePresets, zoteroPrefs } from "../settings/storage";
@@ -98,7 +103,9 @@ const ZOTERO_TOOL_MANUAL = [
   "- Use zotero_get_full_pdf when the model decides the whole current Zotero PDF is needed for reading, summary, review, comparison, or analysis. Prior full-PDF sends appear in the ledger as source/range metadata so the model can choose between current history, targeted ranges, fresh full text, or asking the user for a resend.",
   "- Use zotero_search_pdf for targeted concepts, figures, experiments, equations, claims, definitions, section/chapter headings, and local evidence; use zotero_read_pdf_range only to expand cache-based ranges from prior tool output or the ledger.",
   "- Use zotero_get_annotations when the user asks about existing Zotero highlights, notes, comments, annotations, or reading marks.",
+  "- Use zotero_get_current_pdf_selection when the user asks to inspect, print, translate, explain, or reason about the current PDF selection and [Selected PDF text] was not already supplied. This is read-only and follows the Zotero Reader selection snapshot used by annotation creation.",
   "- Use zotero_get_reader_pdf_text when the user explicitly asks to write PDF highlights/annotations or annotate the whole paper. Copy zotero_annotate_passage.text verbatim from zotero_get_reader_pdf_text output so the passage can be located in the Reader text layer.",
+  "- Use zotero_add_text_annotation_to_selection when the user explicitly asks to place visible text directly on the PDF page like Zotero's T text tool. This creates a text-box annotation, not a highlight comment.",
   "- Use zotero_add_annotation_to_selection only when the user explicitly asks to save a note/comment on the current PDF selection.",
   "- Use zotero_annotate_passage only when the user explicitly asks to write highlights/annotations into the PDF. Do not use write tools for ordinary requests like summarizing key points unless the user asks to write/highlight/annotate in Zotero.",
   "- PDF modification requires approval or YOLO mode. If a write tool is blocked, explain that the user must enable YOLO or approve the write, and do not pretend the PDF was modified.",
@@ -134,6 +141,7 @@ const mountedWindows = new Set<Window>();
 const selectedTextByItem = new Map<number, string>();
 const selectedAnnotationByItem = new Map<number, SelectionAnnotationDraft>();
 const ignoredSelectedTextByItem = new Map<number, string>();
+const readerByAttachmentID = new Map<number, unknown>();
 let readerSelectionHandler: ((event: unknown) => void) | null = null;
 const SELECTION_MONITOR_MS = 60;
 
@@ -182,6 +190,10 @@ interface PanelState {
   localUiSettings: LocalUiSettings;
   abort?: AbortController;
   messagesScrollLock?: MessagesScrollLock;
+  activeTaskID?: string;
+  cancellingTaskID?: string;
+  queueOpen?: boolean;
+  processingQueuedTask?: boolean;
 }
 
 interface MessagesScrollSnapshot {
@@ -282,6 +294,9 @@ function renderPanel(mount: HTMLElement, state: PanelState) {
   mount.replaceChildren();
 
   const panel = el(doc, "div", "zai-app native-panel");
+  panel.addEventListener("keydown", (event: KeyboardEvent) => {
+    handleTaskEscape(mount, state, event);
+  });
   applyChatAppearance(panel, state.uiSettings, state.localUiSettings);
   panel.append(renderToolbar(doc, mount, state));
   panel.append(renderContextCard(doc, state.itemID));
@@ -977,6 +992,7 @@ function renderQuickPrompts(
       void sendMessage(mount, state, prompt, {
         explainSelection,
         fullTextHighlight,
+        taskTitle: label.replace(/^🔖\s*/, ""),
       });
     });
     box.append(button);
@@ -994,12 +1010,449 @@ function renderQuickPrompts(
         ? `自定义提示词按钮；PDF 中按 ${custom.shortcut.toUpperCase()} 触发`
         : "自定义提示词按钮";
       button.addEventListener("click", () => {
-        void sendMessage(mount, state, custom.prompt);
+        void sendMessage(mount, state, custom.prompt, {
+          taskTitle: custom.label,
+        });
       });
       box.append(button);
     }
   }
+  box.append(renderTaskQueueTrigger(doc, mount, state));
   return box;
+}
+
+type ChatTaskStatus =
+  | "queued"
+  | "running"
+  | "unread"
+  | "read"
+  | "failed"
+  | "cancelled";
+
+interface ChatTaskView {
+  task: ChatTaskMeta;
+  userIndex: number;
+  assistantIndex: number;
+  status: ChatTaskStatus;
+}
+
+function renderTaskQueueTrigger(
+  doc: Document,
+  mount: HTMLElement,
+  state: PanelState,
+): HTMLElement {
+  // Single-task mode: the entire task-queue concept is irrelevant — there's
+  // never more than one in-flight task and the composer's "停止" button
+  // already covers cancellation. Returning an empty span keeps the parent
+  // grid layout stable without leaving a dangling badge.
+  if (!queueWhileSendingEnabled(state)) {
+    return el(doc, "span", "task-queue-trigger-hidden");
+  }
+  const tasks = visibleChatTasks(state);
+  const unread = tasks.filter((task) => task.status === "unread").length;
+  const running = tasks.filter((task) => task.status === "running").length;
+  const queued = tasks.filter((task) => task.status === "queued").length;
+  const button = buttonEl(doc, "");
+  button.className = [
+    "task-queue-trigger",
+    unread ? "has-unread" : "",
+    running || queued ? "has-running" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  button.title = tasks.length
+    ? "查看任务队列和未读回答"
+    : "暂无任务结果";
+  button.append(
+    doc.createTextNode(unread ? "未读 " : queued ? "排队 " : "队列 "),
+    el(doc, "span", "task-queue-count", String(unread || queued || tasks.length)),
+  );
+  button.addEventListener("click", () => {
+    state.queueOpen = !state.queueOpen;
+    renderPanel(mount, state);
+  });
+  return button;
+}
+
+function renderTaskQueue(
+  doc: Document,
+  mount: HTMLElement,
+  state: PanelState,
+): HTMLElement {
+  const wrap = el(doc, "div", "task-queue-wrap");
+  // Mirror the trigger: when single-task mode is active, the "已完成 / 查看"
+  // unread strip and the popover have nothing to coordinate, so render
+  // nothing. Keeps the composer chrome free of queue scaffolding when the
+  // user has explicitly opted out of multi-task semantics.
+  if (!queueWhileSendingEnabled(state)) return wrap;
+  const tasks = visibleChatTasks(state);
+  const latestUnread = tasks.find((task) => task.status === "unread");
+  if (latestUnread && !state.queueOpen) {
+    const strip = el(doc, "div", "task-completion-strip");
+    strip.append(
+      el(doc, "span", "task-status-dot task-unread-dot"),
+      el(
+        doc,
+        "span",
+        "task-completion-title",
+        `${latestUnread.task.title} 已完成`,
+      ),
+    );
+    if (latestUnread.task.pdfSelection) {
+      strip.append(
+        el(doc, "span", "task-locator-chip", taskLocatorLabel(latestUnread.task)),
+      );
+    }
+    const view = buttonEl(doc, "查看");
+    view.className = "task-link-button";
+    view.addEventListener("click", () => viewChatTask(mount, state, latestUnread));
+    strip.append(view);
+    wrap.append(strip);
+  }
+  if (!state.queueOpen) return wrap;
+
+  const popover = el(doc, "div", "task-queue-popover");
+  const unread = tasks.filter((task) => task.status === "unread").length;
+  const running = tasks.filter((task) => task.status === "running").length;
+  const queued = tasks.filter((task) => task.status === "queued").length;
+  const head = el(doc, "div", "task-queue-head");
+  const summary = queued
+    ? `${unread} 未读 / ${queued} 排队 / ${tasks.length} 总计`
+    : `${unread} 未读 / ${tasks.length} 总计`;
+  head.append(
+    el(doc, "strong", "", "任务队列"),
+    el(doc, "span", "task-queue-summary", summary),
+  );
+  const actions = el(doc, "div", "task-queue-actions");
+  const markRead = buttonEl(doc, "全部已读");
+  markRead.disabled = unread === 0;
+  markRead.addEventListener("click", () => {
+    markAllChatTasksRead(state);
+    void saveChatMessages(state.itemID, state.messages);
+    renderPanel(mount, state);
+  });
+  // Cancel-only-pending: leaves the currently running task alone (the
+  // composer's "停止" button is the right place for that), drops every
+  // task that's still waiting its turn. Useful when the user submitted
+  // several misfires while AI was busy and now wants to drain the
+  // backlog without aborting the current reply.
+  const cancelQueued = buttonEl(doc, "取消待办");
+  cancelQueued.className = "cancel-queued-tasks";
+  cancelQueued.disabled = queued === 0;
+  cancelQueued.title = cancelQueued.disabled
+    ? "没有正在排队等待执行的任务"
+    : "把还没轮到的任务标为已取消，不影响当前正在回答的那一条";
+  cancelQueued.addEventListener("click", () => {
+    cancelQueuedChatTasks(state);
+    void saveChatMessages(state.itemID, state.messages);
+    renderPanel(mount, state);
+  });
+  const clear = buttonEl(doc, "清空队列");
+  clear.className = "clear-task-queue";
+  clear.disabled = unread > 0 || running > 0 || queued > 0 || tasks.length === 0;
+  clear.title = clear.disabled
+    ? "全部已读且没有回答中/排队中任务时才可清空"
+    : "直接清空队列记录，不删除聊天内容";
+  clear.addEventListener("click", () => {
+    clearChatTaskQueue(state);
+    void saveChatMessages(state.itemID, state.messages);
+    renderPanel(mount, state);
+  });
+  const close = buttonEl(doc, "关闭");
+  close.className = "close-task-queue";
+  close.title = "关闭任务队列窗口";
+  close.addEventListener("click", () => {
+    state.queueOpen = false;
+    renderPanel(mount, state);
+  });
+  actions.append(markRead, cancelQueued, clear, close);
+  head.append(actions);
+  popover.append(head);
+
+  const list = el(doc, "div", "task-list");
+  if (tasks.length === 0) {
+    list.append(el(doc, "div", "task-empty", "暂无任务结果"));
+  } else {
+    for (const task of tasks) {
+      list.append(renderTaskRow(doc, mount, state, task));
+    }
+  }
+  popover.append(list);
+  wrap.append(popover);
+  return wrap;
+}
+
+function renderTaskRow(
+  doc: Document,
+  mount: HTMLElement,
+  state: PanelState,
+  view: ChatTaskView,
+): HTMLElement {
+  const row = el(doc, "div", `task-row task-${view.status}`);
+  row.append(el(doc, "span", "task-status-dot"));
+
+  const main = el(doc, "div", "task-main");
+  const top = el(doc, "div", "task-top");
+  top.append(
+    el(doc, "strong", "task-title", view.task.title),
+    el(doc, "span", "task-age", taskStatusLabel(view)),
+  );
+  main.append(top, el(doc, "div", "task-preview", view.task.promptPreview));
+  if (view.task.pdfSelection) {
+    main.append(el(doc, "div", "task-locator-chip", taskLocatorLabel(view.task)));
+  }
+  row.append(main);
+
+  const actions = el(doc, "div", "task-row-actions");
+  if (view.status === "running" || view.status === "queued") {
+    const cancel = buttonEl(doc, "取消");
+    cancel.className = "task-cancel";
+    cancel.disabled = state.cancellingTaskID === view.task.id;
+    cancel.addEventListener("click", () => cancelChatTask(mount, state, view));
+    actions.append(cancel);
+  } else if (view.status === "cancelled") {
+    const remove = buttonEl(doc, "移除");
+    remove.addEventListener("click", () => {
+      hideChatTask(state, view);
+      renderPanel(mount, state);
+    });
+    actions.append(remove);
+  } else {
+    const label = view.status === "read" ? "再看" : "查看";
+    const button = buttonEl(doc, label);
+    button.addEventListener("click", () => viewChatTask(mount, state, view));
+    actions.append(button);
+  }
+  row.append(actions);
+  return row;
+}
+
+function visibleChatTasks(state: PanelState): ChatTaskView[] {
+  const tasks: ChatTaskView[] = [];
+  state.messages.forEach((message, index) => {
+    if (message.role !== "user" || !message.task || message.task.hiddenAt)
+      return;
+    const assistantIndex = findNextAssistantIndex(state.messages, index);
+    tasks.push({
+      task: message.task,
+      userIndex: index,
+      assistantIndex,
+      status: chatTaskStatus(state, message.task),
+    });
+  });
+  return tasks.sort((a, b) => b.task.createdAt - a.task.createdAt);
+}
+
+function chatTaskStatus(
+  state: PanelState,
+  task: ChatTaskMeta,
+): ChatTaskStatus {
+  if (task.cancelledAt) return "cancelled";
+  if (task.error) return "failed";
+  if (state.sending && state.activeTaskID === task.id) return "running";
+  if (!task.completedAt) return "queued";
+  if (task.completedAt && !task.viewedAt) return "unread";
+  return "read";
+}
+
+function findNextAssistantIndex(messages: Message[], userIndex: number): number {
+  for (let index = userIndex + 1; index < messages.length; index++) {
+    if (messages[index].role === "assistant") return index;
+  }
+  return -1;
+}
+
+function taskStatusLabel(view: ChatTaskView): string {
+  if (view.status === "queued") return "排队中";
+  if (view.status === "running") return "回答中";
+  if (view.status === "cancelled") return "已取消";
+  if (view.status === "failed") return "失败";
+  if (view.status === "read") return "已读";
+  return relativeTaskTime(view.task.completedAt ?? view.task.createdAt);
+}
+
+function relativeTaskTime(time: number): string {
+  const seconds = Math.max(0, Math.floor((Date.now() - time) / 1000));
+  if (seconds < 60) return "刚刚";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours} 小时`;
+}
+
+function taskLocatorLabel(task: ChatTaskMeta): string {
+  const locator = task.pdfSelection;
+  if (!locator) return "";
+  const label = locator.pageLabel ?? String((locator.pageIndex ?? 0) + 1);
+  return `📍 PDF 第 ${label} 页 · 原选区`;
+}
+
+function markAllChatTasksRead(state: PanelState) {
+  const now = Date.now();
+  for (const message of state.messages) {
+    if (message.role !== "user" || !message.task) continue;
+    if (chatTaskStatus(state, message.task) === "unread") {
+      message.task.viewedAt = now;
+    }
+  }
+}
+
+function clearChatTaskQueue(state: PanelState) {
+  const now = Date.now();
+  for (const message of state.messages) {
+    if (message.role === "user" && message.task) {
+      message.task.hiddenAt = now;
+    }
+  }
+  state.queueOpen = false;
+}
+
+// Drops every still-waiting task; the running one (if any) is left alone
+// so this works as "drain the backlog" without colliding with the
+// composer's stop button. Pairs with the read-on-load tombstoning in
+// loadPersistedMessages — same `cancelledAt` mechanism, same downstream
+// rendering as "已取消".
+function cancelQueuedChatTasks(state: PanelState) {
+  const now = Date.now();
+  for (const message of state.messages) {
+    if (message.role !== "user" || !message.task) continue;
+    if (chatTaskStatus(state, message.task) === "queued") {
+      message.task.cancelledAt = now;
+    }
+  }
+}
+
+function hideChatTask(state: PanelState, view: ChatTaskView) {
+  view.task.hiddenAt = Date.now();
+  void saveChatMessages(state.itemID, state.messages);
+  state.queueOpen = true;
+}
+
+function cancelChatTask(
+  mount: HTMLElement,
+  state: PanelState,
+  view: ChatTaskView,
+) {
+  if (view.status === "queued") {
+    markMessageTaskCancelled(state.messages[view.userIndex]);
+    void saveChatMessages(state.itemID, state.messages);
+    renderPanel(mount, state);
+    void processNextQueuedChatTask(mount, state);
+    return;
+  }
+  if (!(state.sending && state.activeTaskID === view.task.id)) return;
+  view.task.cancelledAt = Date.now();
+  view.task.completedAt ??= view.task.cancelledAt;
+  state.cancellingTaskID = view.task.id;
+  state.abort?.abort();
+  void saveChatMessages(state.itemID, state.messages);
+  renderPanel(mount, state);
+}
+
+function cancelActiveChatTask(mount: HTMLElement, state: PanelState) {
+  const active = visibleChatTasks(state).find(
+    (view) => view.task.id === state.activeTaskID,
+  );
+  if (active) {
+    cancelChatTask(mount, state, active);
+    return;
+  }
+  state.abort?.abort();
+  renderPanel(mount, state);
+}
+
+function handleTaskEscape(
+  mount: HTMLElement,
+  state: PanelState,
+  event: KeyboardEvent,
+): boolean {
+  if (
+    event.defaultPrevented ||
+    event.key !== "Escape" ||
+    event.isComposing ||
+    event.ctrlKey ||
+    event.altKey ||
+    event.metaKey
+  ) {
+    return false;
+  }
+  if (state.queueOpen) {
+    state.queueOpen = false;
+    renderPanel(mount, state);
+  } else if (state.sending) {
+    cancelActiveChatTask(mount, state);
+  } else {
+    return false;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  return true;
+}
+
+function viewChatTask(
+  mount: HTMLElement,
+  state: PanelState,
+  view: ChatTaskView,
+) {
+  view.task.viewedAt = Date.now();
+  state.queueOpen = false;
+  void saveChatMessages(state.itemID, state.messages);
+  renderPanel(mount, state);
+  afterRender(mount, () => {
+    jumpToTaskMessage(mount, view);
+    if (view.task.pdfSelection) {
+      void jumpToPdfSelection(mount, state, view.task.pdfSelection);
+    }
+  });
+}
+
+function jumpToTaskMessage(mount: HTMLElement, view: ChatTaskView) {
+  const index = view.assistantIndex >= 0 ? view.assistantIndex : view.userIndex;
+  const root = mount.querySelector(
+    `[data-message-index="${index}"]`,
+  ) as HTMLElement | null;
+  if (!root) return;
+  root.scrollIntoView({ block: "center", behavior: "smooth" });
+  root.classList.add("bubble-task-jump");
+  const win = mount.ownerDocument?.defaultView;
+  win?.setTimeout(() => root.classList.remove("bubble-task-jump"), 1800);
+}
+
+async function jumpToPdfSelection(
+  mount: HTMLElement,
+  state: PanelState,
+  locator: PdfSelectionLocator,
+) {
+  const win = mount.ownerDocument?.defaultView;
+  const activeReader = getActiveReader(win);
+  const activeConversationID = win ? activeReaderConversationItemID(win) : null;
+  const reader =
+    readerAttachmentID(activeReader) === locator.attachmentID ||
+    activeConversationID === state.itemID
+      ? activeReader
+      : getActiveReaderForItem(win, state.itemID);
+  if (!reader || typeof reader.navigate !== "function") {
+    debugZai("task.pdf-selection.jump.unavailable", {
+      attachmentID: locator.attachmentID,
+      itemID: state.itemID,
+      activeAttachmentID: readerAttachmentID(activeReader),
+      activeConversationID,
+    });
+    return;
+  }
+  try {
+    await reader.navigate({ position: locator.position });
+    debugZai("task.pdf-selection.jump", {
+      attachmentID: locator.attachmentID,
+      pageIndex: locator.pageIndex,
+      text: textDebugInfo(locator.selectedText, 120),
+    });
+  } catch (err) {
+    debugZai("task.pdf-selection.jump.failed", {
+      error: errorMessage(err),
+      attachmentID: locator.attachmentID,
+    });
+  }
 }
 
 function fullTextHighlightDisabledReason(
@@ -1056,10 +1509,14 @@ function renderInput(doc: Document, mount: HTMLElement, state: PanelState) {
   const status = el(doc, "div", "composer-status");
 
   const preset = selectedChatPreset(state);
-  const ready = !!preset?.apiKey && !!preset.model && !state.sending;
+  const queueAllowed = queueWhileSendingEnabled(state);
+  const canSubmit =
+    !!preset?.apiKey && !!preset.model && (!state.sending || queueAllowed);
   input.placeholder = preset
     ? state.sending
-      ? "可以先写下一条，当前回复结束后再发送"
+      ? queueAllowed
+        ? "AI 回答中…当前回复结束后将按顺序执行队列里的消息"
+        : "AI 回答中…等待结束后再发送（设置可开启发送中排队）"
       : "问点什么... (Enter 发送，Shift+Enter 换行)"
     : "先添加一个模型预设。";
   input.disabled = !preset;
@@ -1088,8 +1545,15 @@ function renderInput(doc: Document, mount: HTMLElement, state: PanelState) {
       event.preventDefault();
       return;
     }
+    // Default: blocked while sending. Enable the "queue while sending"
+    // toggle (UiSettings.composerQueueWhileSending) to allow Enter to
+    // register new messages onto the queue. The actual queue handling is
+    // sequential: streamAssistant sets state.sending = true for the duration
+    // of one task, processNextQueuedChatTask only iterates once it returns
+    // to false, so messages run strictly one-at-a-time after the current
+    // task completes.
     const shouldSend =
-      !state.sending &&
+      (!state.sending || queueWhileSendingEnabled(state)) &&
       event.key === "Enter" &&
       !event.isComposing &&
       (!event.shiftKey || event.ctrlKey || event.metaKey);
@@ -1150,35 +1614,17 @@ function renderInput(doc: Document, mount: HTMLElement, state: PanelState) {
     status,
   );
 
-  if (state.sending) {
-    const stop = buttonEl(doc, "停止");
-    stop.className = "stop-btn";
-    stop.addEventListener("click", () => {
-      state.abort?.abort();
-      state.sending = false;
-      renderPanel(mount, state);
-    });
-    row.append(stop, renderSelectionBadge(doc, mount, state));
-    composer.append(
-      renderQuickPrompts(doc, mount, state),
-      row,
-      renderComposerFooter(
-        doc,
-        mount,
-        state,
-        status,
-        screenshotAttach,
-        imageAttach,
-      ),
-    );
-    return composer;
-  }
-
-  const send = buttonEl(doc, "↑");
-  send.className = "send-btn";
-  send.disabled = !ready;
-  send.title = preset && !ready ? "请先填写 API Key 和 Model ID" : "发送";
-  send.setAttribute("aria-label", "发送");
+  const send = buttonEl(doc, state.sending ? "↑ 排队" : "↑");
+  send.className = state.sending ? "send-btn send-queue-btn" : "send-btn";
+  send.disabled = !canSubmit;
+  send.title = preset
+    ? !preset.apiKey || !preset.model
+      ? "请先填写 API Key 和 Model ID"
+      : state.sending
+        ? "加入队列：当前回复结束后按顺序执行"
+        : "发送"
+    : "发送";
+  send.setAttribute("aria-label", state.sending ? "加入队列" : "发送");
   send.addEventListener(
     "click",
     () =>
@@ -1189,9 +1635,19 @@ function renderInput(doc: Document, mount: HTMLElement, state: PanelState) {
         { fromComposer: true },
       ),
   );
-  row.append(send, renderSelectionBadge(doc, mount, state));
+  row.append(send);
+  if (state.sending) {
+    const stop = buttonEl(doc, "停止");
+    stop.className = "stop-btn";
+    stop.addEventListener("click", () => {
+      cancelActiveChatTask(mount, state);
+    });
+    row.append(stop);
+  }
+  row.append(renderSelectionBadge(doc, mount, state));
   composer.append(
     renderQuickPrompts(doc, mount, state),
+    renderTaskQueue(doc, mount, state),
     row,
     renderComposerFooter(
       doc,
@@ -1207,6 +1663,10 @@ function renderInput(doc: Document, mount: HTMLElement, state: PanelState) {
 
 function composerMessageContent(raw: string, state: PanelState): string {
   return expandSlashCommandMessage(expandPasteMarkers(raw, state));
+}
+
+function queueWhileSendingEnabled(state: PanelState): boolean {
+  return state.uiSettings.composerQueueWhileSending === true;
 }
 
 interface SlashCommandTarget {
@@ -2351,6 +2811,7 @@ interface SendMessageOptions {
   explainSelection?: boolean;
   fullTextHighlight?: boolean;
   fromComposer?: boolean;
+  taskTitle?: string;
 }
 
 // User-message → wire-message pipeline.
@@ -2378,8 +2839,7 @@ async function sendMessage(
   const images = state.draftImages
     .filter((image) => text.includes(image.marker))
     .map((image) => ({ ...image }));
-  if ((!baseContent && images.length === 0) || !preset || state.sending)
-    return;
+  if ((!baseContent && images.length === 0) || !preset) return;
   await ensureHistoryLoaded(mount, state);
   if (states.get(mount) !== state) return;
   if (!preset.apiKey || !preset.model) {
@@ -2387,7 +2847,6 @@ async function sendMessage(
     return;
   }
 
-  const history = state.messages.slice();
   const rawSelectedText = options.fullTextHighlight
     ? ""
     : await getSelectedTextForPrompt(mount, state.itemID);
@@ -2411,9 +2870,19 @@ async function sendMessage(
   const annotationColorGuide = selectionQuestionAnnotationEnabled
     ? loadToolSettings(zoteroPrefs()).annotationColorGuide.trim()
     : "";
+  const snapshot =
+    options.explainSelection || selectionQuestionAnnotationEnabled
+      ? selectedSnapshot
+      : null;
   const userMessage: Message = {
     role: "user",
     content: baseContent,
+    task: createChatTaskMeta(
+      baseContent,
+      options,
+      selectedText,
+      selectedSnapshot,
+    ),
     ...(images.length ? { images } : {}),
     ...(selectedText
       ? {
@@ -2425,15 +2894,28 @@ async function sendMessage(
               annotationSuggestion: true,
             }),
             ...(annotationColorGuide ? { annotationColorGuide } : {}),
+            // Capture the snapshot + color flag onto the message itself so
+            // the queue processor can recover them later. Without this,
+            // queued tasks would lose their anchor to the original PDF
+            // selection (and the matching color-guide flag).
+            ...(snapshot
+              ? {
+                  queuedAnnotationSnapshot: {
+                    text: snapshot.text,
+                    attachmentID: snapshot.attachmentID,
+                    annotation: detachAnnotationSnapshot(snapshot.annotation),
+                  },
+                  queuedAnnotationColorEnabled:
+                    selectionQuestionAnnotationEnabled,
+                }
+              : {}),
             ...selectionContext,
           },
         }
       : {}),
   };
-  const snapshot =
-    options.explainSelection || selectionQuestionAnnotationEnabled
-      ? selectedSnapshot
-      : null;
+  const shouldQueue = state.sending;
+  const history = shouldQueue ? [] : state.messages.slice();
   state.messages.push(userMessage);
   state.draftText = "";
   state.draftSelectionStart = 0;
@@ -2445,11 +2927,66 @@ async function sendMessage(
   state.autoFollowMessages = true;
   state.scrollToBottom = true;
   void saveChatMessages(state.itemID, state.messages);
+  if (shouldQueue) {
+    state.queueOpen = true;
+    renderPanel(mount, state);
+    return;
+  }
   await streamAssistant(mount, state, history, userMessage, {
     annotationSnapshot: snapshot,
     annotationColorEnabled: selectionQuestionAnnotationEnabled,
     fullTextHighlight: options.fullTextHighlight,
+    taskID: userMessage.task?.id,
   });
+  void processNextQueuedChatTask(mount, state);
+}
+
+async function processNextQueuedChatTask(
+  mount: HTMLElement,
+  state: PanelState,
+): Promise<void> {
+  if (state.processingQueuedTask) return;
+  state.processingQueuedTask = true;
+  try {
+    while (states.get(mount) === state && !state.sending) {
+      const next = firstQueuedChatTask(state);
+      if (!next) break;
+      const userMessage = state.messages[next.userIndex];
+      if (!userMessage || userMessage.role !== "user") break;
+      const history = state.messages.slice(0, next.userIndex);
+      // Restore whatever annotation context was captured at queue time.
+      // INVARIANT: a queued message always uses the PDF selection that was
+      // active when it was submitted, NEVER the live selection now —
+      // otherwise users would see "建议注释" cards aimed at whatever's
+      // currently highlighted in the Reader, which is rarely what they
+      // typed against minutes ago.
+      const queuedSnapshot = userMessage.context?.queuedAnnotationSnapshot;
+      await streamAssistant(mount, state, history, userMessage, {
+        annotationSnapshot: queuedSnapshot
+          ? {
+              text: queuedSnapshot.text,
+              attachmentID: queuedSnapshot.attachmentID,
+              annotation: detachAnnotationSnapshot(queuedSnapshot.annotation),
+            }
+          : null,
+        annotationColorEnabled:
+          userMessage.context?.queuedAnnotationColorEnabled === true,
+        fullTextHighlight: userMessage.task?.kind === "full_text",
+        taskID: userMessage.task?.id,
+      });
+    }
+  } finally {
+    state.processingQueuedTask = false;
+  }
+}
+
+function firstQueuedChatTask(state: PanelState): ChatTaskView | null {
+  for (const view of visibleChatTasks(state)
+    .slice()
+    .sort((a, b) => a.task.createdAt - b.task.createdAt)) {
+    if (view.status === "queued") return view;
+  }
+  return null;
 }
 
 async function buildSelectionPromptContext(
@@ -2466,29 +3003,12 @@ async function buildSelectionPromptContext(
   try {
     const pdfText = await zoteroContextSource.getFullText(itemID);
     if (!pdfText) return { selectedText, context: {} };
-    const rawMatches = searchPdfPassages(
-      pdfText,
-      selectionContextQuery(selectedText),
-      contextPolicy.searchCandidateCount,
-      contextPolicy,
-    );
-    const resolvedText = resolveSelectedTextFromPdfText(
-      selectedText,
-      pdfText,
-      rawMatches,
-    );
-    if (resolvedText !== selectedText) {
-      debugZai("selection.fulltext-repair", {
-        raw: textDebugInfo(selectedText, 120),
-        resolved: textDebugInfo(resolvedText, 120),
-      });
-    }
     return {
-      selectedText: resolvedText,
-      context: buildSelectionNearbyContextFromPdfText(resolvedText, pdfText),
+      selectedText,
+      context: buildSelectionNearbyContextFromPdfText(selectedText, pdfText),
     };
   } catch (err) {
-    debugZai("selection.fulltext-repair.failed", {
+    debugZai("selection.context.failed", {
       error: errorMessage(err),
       raw: textDebugInfo(selectedText, 120),
     });
@@ -2544,14 +3064,105 @@ function cloneSelectionAnnotationDraft(
   return {
     text: draft.text,
     attachmentID: draft.attachmentID,
-    annotation: { ...draft.annotation },
+    annotation: detachAnnotationSnapshot(draft.annotation),
   };
+}
+
+// Detaches a Reader-event annotation payload from the iframe compartment it
+// was emitted in. WHY: Zotero Reader emits `annotation` objects whose nested
+// `position` (and `position.rects`) are iframe-scope references. If we keep
+// just `{ ...annotation }` in our cache, those nested refs survive the
+// initial save but become inaccessible after the iframe re-renders or its
+// next save cycle — subsequent reads then throw "Permission denied to pass
+// object to privileged code", which is what produced the "first save works,
+// second save fails" pattern. JSON round-tripping at capture time copies the
+// data into the addon compartment as plain values, immune to whatever the
+// Reader iframe does later. The try/catch is a safety net for the rare case
+// where the source object is already partially detached at capture time.
+function detachAnnotationSnapshot(
+  annotation: Record<string, unknown>,
+): Record<string, unknown> {
+  try {
+    return JSON.parse(JSON.stringify(annotation));
+  } catch {
+    return { ...annotation };
+  }
+}
+
+function createChatTaskMeta(
+  content: string,
+  options: SendMessageOptions,
+  selectedText: string,
+  selectedSnapshot: SelectionAnnotationDraft | null,
+): ChatTaskMeta {
+  const pdfSelection =
+    selectedText && selectedSnapshot
+      ? pdfSelectionLocatorFromDraft(selectedSnapshot, selectedText)
+      : null;
+  return {
+    id: makeTaskID(),
+    kind: pdfSelection
+      ? "selection"
+      : options.fullTextHighlight
+        ? "full_text"
+        : "general",
+    title:
+      options.taskTitle ||
+      (pdfSelection ? "选中文字提问" : contentPreview(content, 14) || "提问"),
+    promptPreview: contentPreview(selectedText || content, 90),
+    createdAt: Date.now(),
+    ...(pdfSelection ? { pdfSelection } : {}),
+  };
+}
+
+function pdfSelectionLocatorFromDraft(
+  draft: SelectionAnnotationDraft,
+  selectedText: string,
+): PdfSelectionLocator | null {
+  const position = clonePlainRecord(draft.annotation.position);
+  if (!position) return null;
+  const pageIndex =
+    typeof position.pageIndex === "number" && Number.isFinite(position.pageIndex)
+      ? Math.floor(position.pageIndex)
+      : undefined;
+  return {
+    attachmentID: draft.attachmentID,
+    selectedText,
+    ...(pageIndex != null
+      ? { pageIndex, pageLabel: String(pageIndex + 1) }
+      : {}),
+    position,
+  };
+}
+
+function clonePlainRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  try {
+    const cloned = JSON.parse(JSON.stringify(value)) as unknown;
+    return cloned && typeof cloned === "object" && !Array.isArray(cloned)
+      ? (cloned as Record<string, unknown>)
+      : null;
+  } catch {
+    return { ...(value as Record<string, unknown>) };
+  }
+}
+
+function makeTaskID(): string {
+  return `task-${Date.now()}-${Zotero.Utilities.randomString(6)}`;
+}
+
+function contentPreview(text: string, maxChars: number): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized.length > maxChars
+    ? `${normalized.slice(0, maxChars - 1)}…`
+    : normalized;
 }
 
 interface StreamAssistantOptions {
   annotationSnapshot?: SelectionAnnotationDraft | null;
   annotationColorEnabled?: boolean;
   fullTextHighlight?: boolean;
+  taskID?: string;
 }
 
 // streamAssistant: the project's OUTER loop wrapping the provider's inner
@@ -2587,11 +3198,14 @@ async function streamAssistant(
   state.scrollToBottom = true;
   state.focusInput = true;
   renderPanel(mount, state);
-  const assistantIndex = state.messages.length;
+  const userIndex = state.messages.indexOf(userMessage);
+  const assistantIndex =
+    userIndex >= 0 ? userIndex + 1 : state.messages.length;
   const assistant: Message = { role: "assistant", content: "" };
-  state.messages.push(assistant);
+  state.messages.splice(assistantIndex, 0, assistant);
   state.activeAssistantIndex = assistantIndex;
   state.activeAssistantStage = "building_context";
+  state.activeTaskID = options.taskID;
   state.scrollToBottom = true;
   state.focusInput = true;
   renderPanel(mount, state);
@@ -2644,7 +3258,7 @@ async function streamAssistant(
       selectionAnnotation: () => getStoredSelectionAnnotation(state.itemID),
       fullTextHighlight: options.fullTextHighlight,
       getActiveReader: () =>
-        getActiveReaderForItem(mount.ownerDocument!.defaultView, state.itemID),
+        getReaderForCurrentSelection(mount.ownerDocument!.defaultView, state.itemID),
       // Curry the live document and itemID so the model writes to whatever
       // is selected at call time (not at session-creation time). Refresh
       // the visible note panel after the write so the user sees the
@@ -2707,16 +3321,27 @@ async function streamAssistant(
         updateMessageBubble(mount, assistantIndex, assistant);
       } else if (chunk.type === "error") {
         state.activeAssistantDetail = undefined;
+        markMessageTaskError(userMessage, chunk.message);
         assistant.content += `\n[Error] ${chunk.message}`;
         updateMessageBubble(mount, assistantIndex, assistant);
         break;
       }
     }
   } catch (err) {
-    assistant.content += `\n[Error] ${err instanceof Error ? err.message : String(err)}`;
+    const message = err instanceof Error ? err.message : String(err);
+    if (isAbortError(err) || controller.signal.aborted) {
+      if (!assistant.content.trim()) {
+        assistant.content = "已取消本次回答。";
+      }
+      markMessageTaskCancelled(userMessage);
+    } else {
+      markMessageTaskError(userMessage, message);
+      assistant.content += `\n[Error] ${message}`;
+    }
     updateMessageBubble(mount, assistantIndex, assistant);
   } finally {
     toolSession?.dispose();
+    markMessageTaskCompleted(userMessage);
     if (options.annotationSnapshot) {
       attachAnnotationDraft(
         assistant,
@@ -2729,6 +3354,8 @@ async function streamAssistant(
     state.activeAssistantIndex = undefined;
     state.activeAssistantStage = undefined;
     state.activeAssistantDetail = undefined;
+    state.activeTaskID = undefined;
+    state.cancellingTaskID = undefined;
     void saveChatMessages(state.itemID, state.messages);
     state.scrollToBottom = state.autoFollowMessages;
     state.focusInput = true;
@@ -2758,10 +3385,35 @@ function attachAnnotationDraft(
     snapshot: {
       text: snapshot.text,
       attachmentID: snapshot.attachmentID,
-      annotation: { ...snapshot.annotation },
+      annotation: detachAnnotationSnapshot(snapshot.annotation),
     },
     state: { kind: "idle" },
   };
+}
+
+function markMessageTaskCompleted(message: Message) {
+  if (!message.task || message.task.completedAt) return;
+  message.task.completedAt = Date.now();
+}
+
+function markMessageTaskCancelled(message: Message) {
+  if (!message.task) return;
+  const now = Date.now();
+  message.task.cancelledAt ??= now;
+  message.task.completedAt ??= now;
+}
+
+function markMessageTaskError(message: Message, error: string) {
+  if (!message.task) return;
+  message.task.error = error;
+  message.task.completedAt ??= Date.now();
+}
+
+function isAbortError(err: unknown): boolean {
+  return (
+    (err instanceof Error && /abort/i.test(err.name)) ||
+    (err instanceof Error && /abort/i.test(err.message))
+  );
 }
 
 function allowedAnnotationColor(color: string | null): string | null {
@@ -2920,6 +3572,7 @@ async function regenerateLastResponse(mount: HTMLElement, state: PanelState) {
   const previousAssistant = state.messages[assistantIndex];
   const carriedSnapshot = previousAssistant.annotationDraft?.snapshot ?? null;
   const history = state.messages.slice(0, userIndex);
+  resetChatTaskForRetry(userMessage);
   state.messages = [...history, userMessage];
   void saveChatMessages(state.itemID, state.messages);
   await streamAssistant(mount, state, history, userMessage, {
@@ -2930,17 +3583,54 @@ async function regenerateLastResponse(mount: HTMLElement, state: PanelState) {
           annotation: { ...carriedSnapshot.annotation },
         }
       : null,
+    taskID: userMessage.task?.id,
   });
+}
+
+function resetChatTaskForRetry(message: Message) {
+  if (!message.task) return;
+  message.task.createdAt = Date.now();
+  delete message.task.completedAt;
+  delete message.task.viewedAt;
+  delete message.task.hiddenAt;
+  delete message.task.cancelledAt;
+  delete message.task.error;
 }
 
 async function loadPersistedMessages(mount: HTMLElement, state: PanelState) {
   if (state.historyLoaded) return;
   const messages = await loadChatMessages(state.itemID);
   if (states.get(mount) !== state || state.sending) return;
+  // Tombstone any task that was running/queued when Zotero last closed.
+  // Without this, a `task` lacking both `completedAt` and `cancelledAt`
+  // looks "queued" forever and `processNextQueuedChatTask` never picks it
+  // up (no sendMessage triggers it on cold start) — UI would show "排队
+  // 中" badges for ghosts. Marking them cancelled is the conservative
+  // choice: the user can manually retry via 重试 if they actually wanted
+  // those tasks to run, but we don't auto-fire untrusted API calls on
+  // boot.
+  const cancelledStale = cancelStaleQueuedTasks(messages);
   state.messages = messages;
   state.historyLoaded = true;
   state.scrollToBottom = true;
+  if (cancelledStale > 0) {
+    void saveChatMessages(state.itemID, state.messages);
+  }
   renderPanel(mount, state);
+}
+
+function cancelStaleQueuedTasks(messages: Message[]): number {
+  const now = Date.now();
+  let cancelled = 0;
+  for (const message of messages) {
+    if (message.role !== "user" || !message.task) continue;
+    const task = message.task;
+    if (task.completedAt || task.cancelledAt) continue;
+    task.cancelledAt = now;
+    task.error = "Zotero 重启时被中断";
+    cancelled += 1;
+  }
+  return cancelled;
 }
 
 async function ensureHistoryLoaded(mount: HTMLElement, state: PanelState) {
@@ -2977,17 +3667,49 @@ async function getSelectedTextForPrompt(
   const reader = getActiveReader(win);
   const ids = readerItemIDs(reader, itemID);
   const draft = firstUsableStoredSelectionAnnotation(ids);
-  const extracted = draft
+  const rangeText = getActiveReaderSelectionRangeText(reader);
+  const visualSelection = getActiveReaderVisualSelection(reader);
+  const visualText =
+    visualSelection.source === "dom-rects" ? visualSelection.text : "";
+  const liveText = getActiveReaderSelection(reader);
+  if (rangeText) {
+    rememberReaderSelection(reader, itemID, rangeText, draft?.annotation);
+  } else if (liveText) {
+    rememberReaderSelection(reader, itemID, liveText);
+  }
+  const rectText = draft
     ? await extractSelectionTextFromAnnotationPosition(reader, draft)
     : "";
-  if (draft && extracted) {
-    rememberReaderSelection(reader, itemID, extracted, draft.annotation);
-    return shouldIgnoreSelectedText(ids, extracted) ? "" : extracted;
+  if (rectText && draft) {
+    rememberReaderSelection(reader, itemID, rectText, draft.annotation);
   }
-  return (
-    refreshActiveReaderSelection(win, itemID, false) ||
-    getStoredSelectedText(itemID)
-  );
+  const storedText = firstUsableStoredSelectedText(ids);
+  const selectedText =
+    rangeText || rectText || visualText || liveText || draft?.text || storedText;
+  debugZai("selection.official-text", {
+    chosen: rangeText
+      ? "reader-selection-ranges"
+      : rectText
+      ? "position-rects"
+      : visualText
+        ? visualSelection.source
+        : liveText
+        ? "live"
+        : draft?.text
+          ? "reader-event"
+          : "stored",
+    range: textDebugInfo(rangeText, 120),
+    visual: textDebugInfo(visualSelection.text, 120),
+    visualSource: visualSelection.source,
+    visualRects: visualSelection.rectCount,
+    rectText: textDebugInfo(rectText, 120),
+    live: textDebugInfo(liveText, 120),
+    readerEvent: textDebugInfo(draft?.text ?? "", 120),
+    stored: textDebugInfo(storedText, 120),
+  });
+  return selectedText && !shouldIgnoreSelectedText(ids, selectedText)
+    ? selectedText
+    : "";
 }
 
 function getStoredSelectedText(itemID: number | null): string {
@@ -3040,6 +3762,375 @@ function getActiveReaderSelection(reader: unknown): string {
   ]);
 }
 
+function getActiveReaderSelectionRangeText(reader: unknown): string {
+  for (const view of activeReaderViews(reader as any)) {
+    const text = selectionRangeTextFromView(view);
+    if (text) return text;
+  }
+  return "";
+}
+
+function activeReaderViews(reader: any): any[] {
+  const views: any[] = [];
+  const add = (view: unknown) => {
+    if (view && !views.includes(view)) views.push(view);
+  };
+  add(reader?._internalReader?._primaryView);
+  add(reader?._internalReader?._secondaryView);
+  return views;
+}
+
+function selectionRangeTextFromView(view: any): string {
+  const ranges: any[] = Array.isArray(view?._selectionRanges)
+    ? view._selectionRanges
+    : [];
+  if (!ranges.length || ranges[0]?.collapsed) return "";
+  const parts = ranges
+    .slice()
+    .sort(selectionRangeOrder)
+    .map((range) => textFromSelectionRange(view, range))
+    .filter(Boolean);
+  return normalizeSelectedText(parts.join("\n"));
+}
+
+function selectionRangeOrder(left: any, right: any): number {
+  const leftPage = selectionRangePageIndex(left);
+  const rightPage = selectionRangePageIndex(right);
+  if (leftPage !== rightPage) return leftPage - rightPage;
+  return selectionRangeStartOffset(left) - selectionRangeStartOffset(right);
+}
+
+function textFromSelectionRange(view: any, range: any): string {
+  const pageIndex = selectionRangePageIndex(range);
+  const chars = charsForReaderPage(view, pageIndex);
+  const start = selectionRangeStartOffset(range);
+  const end = selectionRangeEndOffset(range);
+  if (chars.length && Number.isFinite(start) && Number.isFinite(end) && end > start) {
+    return textFromReaderChars(chars.slice(start, end));
+  }
+  return typeof range?.text === "string" ? range.text : "";
+}
+
+function selectionRangePageIndex(range: any): number {
+  const pageIndex =
+    range?.position?.pageIndex ?? range?.pageIndex ?? range?.positionPageIndex;
+  return typeof pageIndex === "number" && Number.isFinite(pageIndex)
+    ? Math.floor(pageIndex)
+    : 0;
+}
+
+function selectionRangeStartOffset(range: any): number {
+  return Math.min(selectionRangeOffset(range?.anchorOffset), selectionRangeOffset(range?.headOffset));
+}
+
+function selectionRangeEndOffset(range: any): number {
+  return Math.max(selectionRangeOffset(range?.anchorOffset), selectionRangeOffset(range?.headOffset));
+}
+
+function selectionRangeOffset(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function charsForReaderPage(view: any, pageIndex: number): any[] {
+  const pages = view?._pdfPages;
+  const page = Array.isArray(pages) ? pages[pageIndex] : pages?.[String(pageIndex)];
+  return Array.isArray(page?.chars) ? page.chars : [];
+}
+
+function textFromReaderChars(chars: any[]): string {
+  const text: string[] = [];
+  for (const char of chars) {
+    if (!char || char.ignorable) continue;
+    if (typeof char.c === "string") text.push(char.c);
+    if (char.paragraphBreakAfter) {
+      text.push("\n\n");
+    } else if (char.lineBreakAfter) {
+      text.push("\n");
+    } else if (char.spaceAfter) {
+      text.push(" ");
+    }
+  }
+  return text.join("").trim();
+}
+
+interface VisualSelectionSnapshot {
+  text: string;
+  rectCount: number;
+  source: string;
+}
+
+interface VisualCharFragment {
+  char: string;
+  rect: DOMRect;
+  key: string;
+}
+
+function getActiveReaderVisualSelection(reader: unknown): VisualSelectionSnapshot {
+  for (const win of activeReaderWindows(reader as any)) {
+    const snapshot = visualSelectionFromWindow(win);
+    if (snapshot.text) return snapshot;
+  }
+  return { text: "", rectCount: 0, source: "" };
+}
+
+function visualSelectionFromWindow(win: Window): VisualSelectionSnapshot {
+  try {
+    const selection = win.getSelection();
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+      return { text: "", rectCount: 0, source: "" };
+    }
+    const rects = selectionClientRects(selection);
+    const visualText = normalizeSelectedText(
+      extractVisualTextFromClientRects(win.document, rects),
+    );
+    const rawText = normalizeSelectedText(selection.toString());
+    if (isUsableVisualSelectionText(visualText, rawText)) {
+      return {
+        text: visualText,
+        rectCount: rects.length,
+        source: "dom-rects",
+      };
+    }
+    return {
+      text: rawText,
+      rectCount: rects.length,
+      source: rawText ? "dom-selection" : "",
+    };
+  } catch (err) {
+    debugZai("selection.visual.failed", { error: errorMessage(err) });
+    return { text: "", rectCount: 0, source: "" };
+  }
+}
+
+function selectionClientRects(selection: Selection): DOMRect[] {
+  const rects: DOMRect[] = [];
+  for (let index = 0; index < selection.rangeCount; index++) {
+    const range = selection.getRangeAt(index);
+    rects.push(
+      ...clientRectArray(range.getClientRects()).filter(isUsefulClientRect),
+    );
+  }
+  return rects;
+}
+
+function isUsableVisualSelectionText(visualText: string, rawText: string): boolean {
+  if (!visualText) return false;
+  if (!rawText) return visualText.length >= 2;
+  if (visualText === rawText) return true;
+  return visualText.length >= Math.max(12, rawText.length * 0.25);
+}
+
+function extractVisualTextFromClientRects(
+  doc: Document,
+  selectionRects: DOMRect[],
+): string {
+  if (!selectionRects.length) return "";
+  const bounds = unionClientRects(selectionRects);
+  const fragments = visualCharFragments(doc, selectionRects, bounds);
+  return textFromVisualFragments(fragments);
+}
+
+function visualCharFragments(
+  doc: Document,
+  selectionRects: DOMRect[],
+  bounds: DOMRect,
+): VisualCharFragment[] {
+  const fragments: VisualCharFragment[] = [];
+  const seen = new Set<string>();
+  const range = doc.createRange();
+  const nodes = collectSelectionTextNodes(doc, bounds);
+  nodes.forEach((node, nodeIndex) => {
+    const text = node.nodeValue ?? "";
+    for (const segment of textCodeUnitSegments(text)) {
+      const char = text.slice(segment.start, segment.end);
+      if (!char.trim()) continue;
+      try {
+        range.setStart(node, segment.start);
+        range.setEnd(node, segment.end);
+      } catch {
+        continue;
+      }
+      const rect = bestOverlappingClientRect(
+        clientRectArray(range.getClientRects()).filter(isUsefulClientRect),
+        selectionRects,
+      );
+      if (!rect) continue;
+      const key = `${nodeIndex}:${segment.start}:${segment.end}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      fragments.push({ char, rect, key });
+    }
+  });
+  range.detach?.();
+  return fragments;
+}
+
+function collectSelectionTextNodes(doc: Document, bounds: DOMRect): Text[] {
+  const roots = (Array.from(doc.querySelectorAll(".textLayer")) as Element[])
+    .filter((root) => clientRectListOverlaps(root.getClientRects(), bounds));
+  const searchRoots: Node[] = roots.length
+    ? roots
+    : doc.body
+      ? [doc.body]
+      : [];
+  const nodes: Text[] = [];
+  const showText = doc.defaultView?.NodeFilter?.SHOW_TEXT ?? 4;
+  for (const root of searchRoots) {
+    const walker = doc.createTreeWalker(root, showText);
+    let current = walker.nextNode();
+    while (current) {
+      if (current.nodeType === 3) {
+        const text = current as Text;
+        if (
+          text.nodeValue?.trim() &&
+          text.parentElement &&
+          clientRectListOverlaps(text.parentElement.getClientRects(), bounds)
+        ) {
+          nodes.push(text);
+        }
+      }
+      current = walker.nextNode();
+    }
+  }
+  return nodes;
+}
+
+function textFromVisualFragments(fragments: VisualCharFragment[]): string {
+  if (!fragments.length) return "";
+  const rows: Array<{ y: number; height: number; chars: VisualCharFragment[] }> = [];
+  const sorted = fragments
+    .slice()
+    .sort(
+      (a, b) =>
+        clientRectMidY(a.rect) - clientRectMidY(b.rect) ||
+        a.rect.left - b.rect.left,
+    );
+
+  for (const fragment of sorted) {
+    const y = clientRectMidY(fragment.rect);
+    const height = Math.max(fragment.rect.height, 1);
+    const row = rows.find(
+      (candidate) =>
+        Math.abs(candidate.y - y) <= Math.max(2, Math.min(8, height * 0.6)),
+    );
+    if (row) {
+      row.chars.push(fragment);
+      row.height = Math.max(row.height, height);
+      row.y = (row.y + y) / 2;
+    } else {
+      rows.push({ y, height, chars: [fragment] });
+    }
+  }
+
+  return rows
+    .sort((a, b) => a.y - b.y)
+    .map((row) => visualRowText(row.chars, row.height))
+    .filter(Boolean)
+    .join(" ");
+}
+
+function visualRowText(chars: VisualCharFragment[], rowHeight: number): string {
+  const sorted = chars
+    .slice()
+    .sort((a, b) => a.rect.left - b.rect.left || a.key.localeCompare(b.key));
+  let output = "";
+  let previous: VisualCharFragment | null = null;
+  for (const fragment of sorted) {
+    if (previous) {
+      const gap = fragment.rect.left - previous.rect.right;
+      if (
+        gap > Math.max(2, rowHeight * 0.22) &&
+        shouldInsertVisualSpace(previous.char, fragment.char)
+      ) {
+        output += " ";
+      }
+    }
+    output += fragment.char;
+    previous = fragment;
+  }
+  return output.trim();
+}
+
+function shouldInsertVisualSpace(left: string, right: string): boolean {
+  if (!left || !right) return false;
+  if (/[,.;:!?，。；：！？)]/.test(right)) return false;
+  if (/[(（]$/.test(left)) return false;
+  return /[A-Za-z0-9\u4e00-\u9fff)\]]/.test(left) &&
+    /[A-Za-z0-9\u4e00-\u9fff([（]/.test(right);
+}
+
+function textCodeUnitSegments(
+  text: string,
+): Array<{ start: number; end: number }> {
+  const segments: Array<{ start: number; end: number }> = [];
+  let offset = 0;
+  for (const char of Array.from(text)) {
+    const end = offset + char.length;
+    segments.push({ start: offset, end });
+    offset = end;
+  }
+  return segments;
+}
+
+function bestOverlappingClientRect(
+  candidates: DOMRect[],
+  selectionRects: DOMRect[],
+): DOMRect | null {
+  let best: { rect: DOMRect; area: number } | null = null;
+  for (const rect of candidates) {
+    for (const selectionRect of selectionRects) {
+      const area = clientRectOverlapArea(rect, selectionRect, 1);
+      if (area > 0.5 && (!best || area > best.area)) {
+        best = { rect, area };
+      }
+    }
+  }
+  return best?.rect ?? null;
+}
+
+function clientRectListOverlaps(rects: DOMRectList, bounds: DOMRect): boolean {
+  return clientRectArray(rects).some(
+    (rect) => isUsefulClientRect(rect) && clientRectsOverlap(rect, bounds),
+  );
+}
+
+function clientRectArray(rects: DOMRectList | null): DOMRect[] {
+  return rects ? Array.from(rects) : [];
+}
+
+function unionClientRects(rects: DOMRect[]): DOMRect {
+  const left = Math.min(...rects.map((rect) => rect.left));
+  const top = Math.min(...rects.map((rect) => rect.top));
+  const right = Math.max(...rects.map((rect) => rect.right));
+  const bottom = Math.max(...rects.map((rect) => rect.bottom));
+  return DOMRect.fromRect({
+    x: left,
+    y: top,
+    width: right - left,
+    height: bottom - top,
+  });
+}
+
+function isUsefulClientRect(rect: DOMRect): boolean {
+  return rect.width > 0.5 && rect.height > 0.5;
+}
+
+function clientRectsOverlap(a: DOMRect, b: DOMRect): boolean {
+  return clientRectOverlapArea(a, b) > 0;
+}
+
+function clientRectOverlapArea(a: DOMRect, b: DOMRect, tolerance = 0): number {
+  const left = Math.max(a.left, b.left - tolerance);
+  const right = Math.min(a.right, b.right + tolerance);
+  const top = Math.max(a.top, b.top - tolerance);
+  const bottom = Math.min(a.bottom, b.bottom + tolerance);
+  return Math.max(0, right - left) * Math.max(0, bottom - top);
+}
+
+function clientRectMidY(rect: DOMRect): number {
+  return (rect.top + rect.bottom) / 2;
+}
+
 // Hooks Zotero's Reader event so we capture the annotation snapshot at
 // the same time the selection popup renders. WHY at popup-render time:
 // that's when Zotero has a fully-formed annotation candidate (with
@@ -3056,27 +4147,22 @@ function registerReaderSelectionCapture() {
       reader?: unknown;
       params?: { annotation?: { text?: string } & Record<string, unknown> };
     };
-    const text = normalizeSelectedText(e.params?.annotation?.text);
+    const officialText = normalizeSelectedText(e.params?.annotation?.text);
+    const visualSelection = getActiveReaderVisualSelection(e.reader);
+    const text = officialText || visualSelection.text;
     if (!text) return;
-    const annotation = e.params?.annotation;
+    const annotation = e.params?.annotation
+      ? { ...e.params.annotation, text }
+      : undefined;
     debugZai("selection.event-capture", {
       rects: annotation ? annotationRectCount(annotation) : 0,
+      official: textDebugInfo(officialText, 120),
+      visual: textDebugInfo(visualSelection.text, 120),
+      visualSource: visualSelection.source,
+      visualRects: visualSelection.rectCount,
       text: textDebugInfo(text, 120),
     });
     rememberReaderSelection(e.reader, null, text, annotation);
-    void repairStoredSelectionTextFromAnnotation(
-      e.reader,
-      null,
-      annotation,
-      text,
-    ).then((updated) => {
-      if (!updated) return;
-      for (const win of mountedWindows) {
-        const sidebar = windowSidebars.get(win);
-        if (sidebar)
-          updateSelectionIndicators(sidebar.mount, getSelectedItemID(win));
-      }
-    });
     for (const win of mountedWindows) {
       const sidebar = windowSidebars.get(win);
       if (sidebar)
@@ -3165,6 +4251,9 @@ function rememberReaderSelection(
   if (!normalized) return;
   const ids = readerItemIDs(reader, fallbackItemID);
   const attachmentID = readerAttachmentID(reader);
+  if (attachmentID != null) {
+    readerByAttachmentID.set(attachmentID, reader);
+  }
   for (const id of ids) {
     if (ignoredSelectedTextByItem.get(id) === normalized) {
       continue;
@@ -3174,7 +4263,7 @@ function rememberReaderSelection(
     if (annotation && attachmentID != null) {
       selectedAnnotationByItem.set(id, {
         text: normalized,
-        annotation: { ...annotation },
+        annotation: detachAnnotationSnapshot(annotation),
         attachmentID,
       });
     }
@@ -3268,15 +4357,19 @@ function readerItemIDs(
 }
 
 function readerAttachmentID(reader: unknown): number | null {
-  const r = reader as {
-    itemID?: number;
-    _item?: { id?: number };
-  } | null;
-  return typeof r?._item?.id === "number"
-    ? r._item.id
-    : typeof r?.itemID === "number"
-      ? r.itemID
-      : null;
+  try {
+    const r = reader as {
+      itemID?: number;
+      _item?: { id?: number };
+    } | null;
+    return typeof r?._item?.id === "number"
+      ? r._item.id
+      : typeof r?.itemID === "number"
+        ? r.itemID
+        : null;
+  } catch {
+    return null;
+  }
 }
 
 // Active Reader = the reader instance for the foreground Zotero tab.
@@ -3305,6 +4398,75 @@ function getActiveReaderForItem(
   return activeReaderConversationItemID(win) === itemID ? reader : null;
 }
 
+function getReaderForCurrentSelection(
+  win: Window | null | undefined,
+  itemID: number | null,
+): any {
+  const draft = getStoredSelectionAnnotation(itemID);
+  return getReaderForAttachmentOrItem(win, itemID, draft?.attachmentID ?? null);
+}
+
+function getReaderForAttachmentOrItem(
+  win: Window | null | undefined,
+  itemID: number | null,
+  attachmentID: number | null,
+): any {
+  const active = getActiveReaderForItem(win, itemID);
+  if (!attachmentID || readerHasAttachmentID(active, attachmentID)) {
+    return active;
+  }
+
+  const cached = readerByAttachmentID.get(attachmentID);
+  if (readerHasAttachmentID(cached, attachmentID)) return cached;
+
+  const readers = allZoteroReaders();
+  const exact = readers.filter((reader) =>
+    readerHasAttachmentID(reader, attachmentID),
+  );
+  const sameThread =
+    exact.find((reader) => readerConversationItemID(reader) === itemID) ??
+    exact[0];
+  if (sameThread) return sameThread;
+
+  debugZai("text-annotation.reader-missing", {
+    itemID,
+    attachmentID,
+    activeAttachmentID: readerAttachmentID(active),
+    knownReaders: readers.map((reader) => ({
+      itemID: (reader as any)?.itemID,
+      attachmentID: readerAttachmentID(reader),
+      conversationItemID: readerConversationItemID(reader),
+    })),
+  });
+  return active;
+}
+
+function allZoteroReaders(): any[] {
+  const readerAPI = (Zotero as any).Reader;
+  const readers = Array.isArray(readerAPI?._readers) ? readerAPI._readers : [];
+  return readers.filter(Boolean);
+}
+
+function readerHasAttachmentID(reader: unknown, attachmentID: number): boolean {
+  return readerAttachmentID(reader) === attachmentID;
+}
+
+function readerConversationItemID(reader: unknown): number | null {
+  try {
+    const r = reader as {
+      itemID?: number;
+      _item?: { id?: number; parentID?: number };
+    } | null;
+    return typeof r?._item?.parentID === "number"
+      ? r._item.parentID
+      : typeof r?._item?.id === "number"
+        ? itemIDToParentID(r._item.id)
+        : itemIDToParentID(r?.itemID);
+  } catch {
+    return null;
+  }
+}
+
 function safeSelectionText(win: unknown): string {
   try {
     return normalizeSelectedText(
@@ -3321,48 +4483,89 @@ function firstText(values: string[]): string {
 
 function normalizeSelectedText(text: unknown): string {
   if (typeof text !== "string") return "";
-  const normalized = repairPdfSelectionLineBreaks(text)
-    .replace(/\s+/g, " ")
-    .trim();
+  const normalized = formatSelectedTextSemantically(
+    repairPdfSelectionLineBreaks(text),
+  );
   return normalized.length > contextPolicy.maxSelectedTextChars
     ? normalized.slice(0, contextPolicy.maxSelectedTextChars)
     : normalized;
+}
+
+type SelectedTextBlockKind = "paragraph" | "list" | "heading";
+
+interface SelectedTextBlock {
+  kind: SelectedTextBlockKind;
+  text: string;
+}
+
+function formatSelectedTextSemantically(text: string): string {
+  const blocks: SelectedTextBlock[] = [];
+  let current: SelectedTextBlock | null = null;
+  const flush = () => {
+    if (!current) return;
+    const value = current.text.trim();
+    if (value) blocks.push({ ...current, text: value });
+    current = null;
+  };
+
+  for (const rawLine of text.replace(/\r\n?/g, "\n").split("\n")) {
+    const line = normalizeSelectedTextLine(rawLine);
+    if (!line) {
+      flush();
+      continue;
+    }
+    const kind = selectedTextBlockKind(line);
+    if (kind !== "paragraph") {
+      flush();
+      current = { kind, text: line };
+      continue;
+    }
+    if (!current) {
+      current = { kind: "paragraph", text: line };
+    } else {
+      current.text = `${current.text} ${line}`;
+    }
+  }
+  flush();
+  return joinSelectedTextBlocks(blocks);
+}
+
+function normalizeSelectedTextLine(line: string): string {
+  return line.replace(/\u00a0/g, " ").replace(/[ \t\f\v]+/g, " ").trim();
+}
+
+function selectedTextBlockKind(line: string): SelectedTextBlockKind {
+  if (
+    /^(?:\d{1,3}[\).]|\([a-zA-Z0-9]\)|[a-zA-Z]\))\s+/.test(line)
+  ) {
+    return "list";
+  }
+  if (/^(?:[A-Z]\.|[IVXLC]+\.|Fig(?:ure)?\.?\s*\d+[:.])\s+/.test(line)) {
+    return "heading";
+  }
+  return "paragraph";
+}
+
+function joinSelectedTextBlocks(blocks: SelectedTextBlock[]): string {
+  let output = "";
+  let previous: SelectedTextBlock | null = null;
+  for (const block of blocks) {
+    if (!output) {
+      output = block.text;
+    } else {
+      output +=
+        previous?.kind === "list" && block.kind === "list" ? "\n" : "\n\n";
+      output += block.text;
+    }
+    previous = block;
+  }
+  return output.trim();
 }
 
 function repairPdfSelectionLineBreaks(text: string): string {
   return text
     .replace(/([A-Za-z]{3,})-\s*\r?\n\s*([a-z]{3,})/g, "$1$2")
     .replace(/([A-Za-z]{3,})-\s{2,}([a-z]{3,})/g, "$1$2");
-}
-
-async function repairStoredSelectionTextFromAnnotation(
-  reader: unknown,
-  fallbackItemID: number | null,
-  annotation: Record<string, unknown> | undefined,
-  expectedText: string,
-): Promise<boolean> {
-  if (!annotation) return false;
-  const ids = readerItemIDs(reader, fallbackItemID);
-  const draft = firstUsableStoredSelectionAnnotation(ids);
-  if (!draft || draft.text !== expectedText) return false;
-
-  const extracted = await extractSelectionTextFromAnnotationPosition(
-    reader,
-    draft,
-  );
-  if (!extracted || extracted === draft.text) return false;
-
-  const latest = firstUsableStoredSelectionAnnotation(ids);
-  if (!latest || latest.text !== expectedText) {
-    debugZai("selection.rect-extract.stale", {
-      ids,
-      expected: textDebugInfo(expectedText, 120),
-      latest: latest ? textDebugInfo(latest.text, 120) : null,
-    });
-    return false;
-  }
-  rememberReaderSelection(reader, fallbackItemID, extracted, annotation);
-  return true;
 }
 
 async function extractSelectionTextFromAnnotationPosition(
@@ -3376,16 +4579,16 @@ async function extractSelectionTextFromAnnotationPosition(
     const extracted = normalizeSelectedText(
       await locator.extractTextFromPosition(draft.annotation.position),
     );
-    debugZai(extracted ? "selection.rect-extract" : "selection.rect-empty", {
+    debugZai(extracted ? "selection.position-text" : "selection.position-empty", {
       rects: annotationRectCount(draft.annotation),
-      raw: textDebugInfo(draft.text, 120),
+      official: textDebugInfo(draft.text, 120),
       extracted: textDebugInfo(extracted, 120),
     });
     return extracted;
   } catch (err) {
-    debugZai("selection.rect-extract.failed", {
+    debugZai("selection.position-text.failed", {
       error: errorMessage(err),
-      raw: textDebugInfo(draft.text, 120),
+      official: textDebugInfo(draft.text, 120),
     });
     return "";
   } finally {
@@ -4963,34 +6166,77 @@ function renderAnnotationSuggestionActions(
   const actions = el(doc, "div", "annotation-suggestion-actions");
   const button = buttonEl(doc, "");
   button.classList.add("annotation-save");
-  applyAnnotationButtonState(button, draft);
+  applyAnnotationButtonState(button, draft.state, "annotation");
   button.addEventListener("click", () => {
     button.blur();
     void saveAnnotationDraftFromBubble(mount, state, index);
   });
   actions.append(button);
 
-  if (draft.state.kind === "failed") {
+  const textButton = buttonEl(doc, "");
+  textButton.classList.add("annotation-save", "annotation-save-text");
+  applyAnnotationButtonState(textButton, draft.textState ?? { kind: "idle" }, "text");
+  textButton.addEventListener("click", () => {
+    textButton.blur();
+    void saveTextAnnotationDraftFromBubble(mount, state, index);
+  });
+  actions.append(textButton);
+
+  const failedState =
+    draft.state.kind === "failed"
+      ? draft.state
+      : draft.state.kind !== "saved" && draft.textState?.kind === "failed"
+        ? draft.textState
+        : null;
+  if (failedState) {
+    const failedMode =
+      draft.state.kind === "failed" ? "高亮+评论保存失败" : "新增文字保存失败";
     const err = el(
       doc,
       "div",
       "annotation-suggestion-error",
-      draft.state.error,
+      `${failedMode}: ${friendlyAnnotationError(failedState.error)}`,
     );
     actions.append(err);
   }
   return actions;
 }
 
+function friendlyAnnotationError(raw: string): string {
+  if (/Permission denied to pass object to privileged code/i.test(raw)) {
+    return "插件与 Zotero 主窗口之间的对象权限边界没穿过去——重试一次通常就行；持续失败请反馈日志。";
+  }
+  if (/attachment is no longer available/i.test(raw)) {
+    return "原 PDF 附件已被删除或移走，无法定位选区。";
+  }
+  if (/position data|usable rect data/i.test(raw)) {
+    return "选区缺少有效的 PDF 坐标信息，请重新选取一段文字后再试。";
+  }
+  return raw;
+}
+
 function applyAnnotationButtonState(
   button: HTMLButtonElement,
-  draft: AssistantAnnotationDraft,
+  state: AssistantAnnotationDraft["state"],
+  mode: "annotation" | "text",
 ) {
-  switch (draft.state.kind) {
+  // Wording mirrors Zotero Reader's official toolbar (reader.ftl):
+  //   - `highlight` annotation = "高亮文本 / Highlight Text" (we call the
+  //     comment-bearing variant "高亮+评论").
+  //   - `text` annotation = "新增文字 / Add Text" (the T toolbar tool).
+  // Keeping these labels aligned with Zotero's own UI also lets users speak
+  // about the action with the same vocabulary the model sees in the tool
+  // descriptions, so prompts like "新增文字" route correctly without having
+  // to mention "T 工具".
+  switch (state.kind) {
     case "idle":
-      button.textContent = "💾 保存为注释";
+      button.textContent =
+        mode === "text" ? "🅣 新增文字" : "💾 高亮+评论";
       button.disabled = false;
-      button.title = "将这条建议作为注释写入当前 PDF 选区";
+      button.title =
+        mode === "text"
+          ? "Zotero Reader 的「新增文字 / Add Text」(T 工具)：在选区下方放一段可见文字"
+          : "Zotero Reader 的「高亮文本 / Highlight Text」并附上评论";
       return;
     case "saving":
       button.textContent = "保存中…";
@@ -5000,12 +6246,15 @@ function applyAnnotationButtonState(
     case "saved":
       button.textContent = "✓ 已保存";
       button.disabled = true;
-      button.title = `Zotero annotation #${draft.state.annotationID}`;
+      button.title =
+        state.annotationID > 0
+          ? `Zotero annotation #${state.annotationID}`
+          : "已写入 Zotero（条目 ID 暂未回填）";
       return;
     case "failed":
-      button.textContent = "↻ 重试";
+      button.textContent = mode === "text" ? "↻ 重试新增文字" : "↻ 重试高亮+评论";
       button.disabled = false;
-      button.title = draft.state.error;
+      button.title = state.error;
       return;
   }
 }
@@ -5140,6 +6389,56 @@ async function saveAnnotationDraftFromBubble(
   refreshAnnotationSuggestion(mount, index, scrollSnapshot);
 }
 
+async function saveTextAnnotationDraftFromBubble(
+  mount: HTMLElement,
+  state: PanelState,
+  index: number,
+) {
+  const message = state.messages[index];
+  const draft = message?.annotationDraft;
+  if (!message || !draft) return;
+  const textState = draft.textState ?? { kind: "idle" as const };
+  if (textState.kind === "saving" || textState.kind === "saved") return;
+
+  const scrollSnapshot = lockMessagesScroll(mount);
+  draft.textState = { kind: "saving" };
+  refreshAnnotationSuggestion(mount, index, scrollSnapshot);
+  try {
+    const reader = getActiveReaderForItem(
+      mount.ownerDocument?.defaultView,
+      state.itemID,
+    );
+    const readerForSelection = getReaderForAttachmentOrItem(
+      mount.ownerDocument?.defaultView,
+      state.itemID,
+      draft.snapshot.attachmentID,
+    );
+    const fontSize = loadToolSettings(zoteroPrefs()).textAnnotationFontSize;
+    const { id } = await saveTextAnnotationNearSelection(
+      draft.snapshot,
+      {
+        comment: draft.comment,
+        ...(draft.color ? { color: draft.color } : {}),
+        fontSize,
+        placement: "below",
+      },
+      readerForSelection ?? reader,
+    );
+    lockMessagesScroll(mount, scrollSnapshot);
+    scheduleMessagesScrollRestore(mount, scrollSnapshot);
+    draft.textState = { kind: "saved", annotationID: id, savedAt: Date.now() };
+  } catch (err) {
+    lockMessagesScroll(mount, scrollSnapshot);
+    scheduleMessagesScrollRestore(mount, scrollSnapshot);
+    draft.textState = {
+      kind: "failed",
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+  void saveChatMessages(state.itemID, state.messages);
+  refreshAnnotationSuggestion(mount, index, scrollSnapshot);
+}
+
 function refreshAnnotationSuggestion(
   mount: HTMLElement,
   index: number,
@@ -5165,7 +6464,7 @@ function refreshAnnotationSuggestion(
   );
   // INVARIANT: this is a local in-bubble swap; messages-list scroll position
   // must NOT shift. Without preservation, swapping in a slightly shorter
-  // suggestion (e.g. "✓ 已保存" replacing "💾 保存为注释") clamps scrollTop
+  // suggestion (e.g. "✓ 已保存" replacing "💾 高亮+评论") clamps scrollTop
   // when the user is near the bottom and visually pages the chat backward.
   preserveMessagesScroll(
     mount,
@@ -6351,6 +7650,7 @@ function installReaderPromptShortcutHandler(
     if (!targetWin || installedWindows.has(targetWin)) return;
     installedWindows.add(targetWin);
     const handler = (event: KeyboardEvent) => {
+      if (handleReaderTaskEscape(win, targetWin, sidebar, event)) return;
       void handleReaderPromptShortcut(win, targetWin, sidebar, event);
     };
     targetWin.addEventListener("keydown", handler, true);
@@ -6394,8 +7694,34 @@ async function handleReaderPromptShortcut(
   event.stopImmediatePropagation();
   setColumnCollapsed(win, sidebar, false);
   const state = states.get(sidebar.mount);
-  if (!state || state.sending) return;
-  void sendMessage(sidebar.mount, state, prompt.prompt);
+  if (!state) return;
+  void sendMessage(sidebar.mount, state, prompt.prompt, {
+    taskTitle: prompt.label?.trim() || `快捷键 ${key.toUpperCase()}`,
+  });
+}
+
+function handleReaderTaskEscape(
+  win: Window,
+  sourceWin: Window,
+  sidebar: WindowSidebarState,
+  event: KeyboardEvent,
+): boolean {
+  if (
+    event.defaultPrevented ||
+    event.key !== "Escape" ||
+    event.isComposing ||
+    event.ctrlKey ||
+    event.altKey ||
+    event.metaKey ||
+    !isReaderShortcutContext(win, sourceWin, event)
+  ) {
+    return false;
+  }
+  const state = states.get(sidebar.mount);
+  if (!state || (!state.queueOpen && !state.sending)) return false;
+  const handled = handleTaskEscape(sidebar.mount, state, event);
+  if (handled) event.stopImmediatePropagation();
+  return handled;
 }
 
 function shortcutKeyFromEvent(event: KeyboardEvent): string {

@@ -40,6 +40,7 @@ describe('tool settings storage', () => {
       webSearchMode: 'live',
       mcpServers: [],
       annotationColorGuide: 'custom guide',
+      textAnnotationFontSize: DEFAULT_TOOL_SETTINGS.textAnnotationFontSize,
       arxivMcp: {
         enabled: true,
         serverLabel: 'arxiv-search',
@@ -69,6 +70,7 @@ describe('tool settings storage', () => {
       webSearchMode: 'disabled',
       mcpServers: [],
       annotationColorGuide: DEFAULT_TOOL_SETTINGS.annotationColorGuide,
+      textAnnotationFontSize: DEFAULT_TOOL_SETTINGS.textAnnotationFontSize,
       arxivMcp: {
         enabled: true,
         serverLabel: 'arxiv-search',
@@ -77,6 +79,32 @@ describe('tool settings storage', () => {
         requireApproval: 'never',
       },
     });
+  });
+
+  it('clamps textAnnotationFontSize to the 8–48 range and rounds non-integers', () => {
+    const prefs = memPrefs();
+    prefs.set(
+      'extensions.zotero-ai-sidebar.toolSettings',
+      JSON.stringify({ textAnnotationFontSize: 99 }),
+    );
+    expect(loadToolSettings(prefs).textAnnotationFontSize).toBe(48);
+    prefs.set(
+      'extensions.zotero-ai-sidebar.toolSettings',
+      JSON.stringify({ textAnnotationFontSize: 4 }),
+    );
+    expect(loadToolSettings(prefs).textAnnotationFontSize).toBe(8);
+    prefs.set(
+      'extensions.zotero-ai-sidebar.toolSettings',
+      JSON.stringify({ textAnnotationFontSize: 16.7 }),
+    );
+    expect(loadToolSettings(prefs).textAnnotationFontSize).toBe(17);
+    prefs.set(
+      'extensions.zotero-ai-sidebar.toolSettings',
+      JSON.stringify({ textAnnotationFontSize: 'oops' }),
+    );
+    expect(loadToolSettings(prefs).textAnnotationFontSize).toBe(
+      DEFAULT_TOOL_SETTINGS.textAnnotationFontSize,
+    );
   });
 
   it('round trips generic MCP server settings', () => {

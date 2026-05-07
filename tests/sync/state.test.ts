@@ -99,6 +99,7 @@ describe('sync snapshot round trip', () => {
       chatFontFamily: 'Noto Serif CJK SC, serif',
       userProfile: { label: 'me', avatar: '🙂' },
       assistantProfile: { label: 'ai', avatar: '🤖' },
+      composerQueueWhileSending: true,
     });
     saveQuickPromptSettings(prefs, {
       builtIns: {
@@ -112,6 +113,7 @@ describe('sync snapshot round trip', () => {
     saveToolSettings(prefs, {
       webSearchMode: 'live',
       mcpServers: [],
+      textAnnotationFontSize: 22,
       arxivMcp: {
         enabled: false,
         serverLabel: 'arxiv',
@@ -122,7 +124,18 @@ describe('sync snapshot round trip', () => {
     });
     saveLocalUiSettings(prefs, { chatFontSizePx: 18 });
     await saveChatMessages(42, [
-      { role: 'user', content: 'hello' },
+      {
+        role: 'user',
+        content: 'hello',
+        task: {
+          id: 'task-local',
+          kind: 'selection',
+          title: '选中文字提问',
+          promptPreview: 'hello',
+          createdAt: 1,
+          completedAt: 2,
+        },
+      },
       { role: 'assistant', content: 'hi there' },
     ]);
 
@@ -137,12 +150,15 @@ describe('sync snapshot round trip', () => {
     expect(snapshot.quickPrompts.customButtons[0].shortcut).toBe('t');
     expect(snapshot.quickPrompts.selectionQuestionAnnotationEnabled).toBe(true);
     expect(snapshot.toolSettings.webSearchMode).toBe('live');
+    expect(snapshot.toolSettings.textAnnotationFontSize).toBe(22);
+    expect(snapshot.uiSettings.composerQueueWhileSending).toBe(true);
     expect(snapshot.threads).toHaveLength(1);
     expect(snapshot.threads[0]).toMatchObject({
       libraryType: 'user',
       itemKey: 'AAAA1111',
     });
     expect(snapshot.threads[0].messages).toHaveLength(2);
+    expect(snapshot.threads[0].messages[0]).not.toHaveProperty('task');
     expect(snapshot.annotations).toEqual([]);
   });
 
@@ -154,6 +170,11 @@ describe('sync snapshot round trip', () => {
       chatFontFamily: 'LXGW WenKai, serif',
       userProfile: { label: 'YOU', avatar: '' },
       assistantProfile: { label: 'AI', avatar: '' },
+      composerQueueWhileSending: true,
+    });
+    saveToolSettings(sourcePrefs, {
+      ...loadToolSettings(sourcePrefs),
+      textAnnotationFontSize: 24,
     });
     await saveChatMessages(42, [{ role: 'user', content: 'first device' }]);
     const snapshot = await buildSyncSnapshot(sourcePrefs);
@@ -170,6 +191,8 @@ describe('sync snapshot round trip', () => {
     expect(loadPresets(targetPrefs)).toEqual([]);
     expect(loadQuickPromptSettings(targetPrefs).builtIns.summary).toBeTruthy();
     expect(loadToolSettings(targetPrefs).webSearchMode).toBe('disabled');
+    expect(loadToolSettings(targetPrefs).textAnnotationFontSize).toBe(24);
+    expect(loadUiSettings(targetPrefs).composerQueueWhileSending).toBe(true);
     expect(await loadChatMessages(42)).toHaveLength(1);
   });
 

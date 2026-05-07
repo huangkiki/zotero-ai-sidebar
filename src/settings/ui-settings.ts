@@ -14,6 +14,13 @@ export interface UiSettings {
   chatFontFamily: string;
   userProfile: ChatProfileSettings;
   assistantProfile: ChatProfileSettings;
+  // When ON, the composer can submit a new message while a previous task is
+  // still streaming — the new one is registered into the queue and runs
+  // after the current task finishes (the original PDF selection at queue
+  // time is captured with the message). When OFF (default) Enter and the
+  // send button are blocked while sending, matching the historical
+  // single-task-at-a-time behavior.
+  composerQueueWhileSending: boolean;
 }
 
 export const DEFAULT_UI_SETTINGS: UiSettings = {
@@ -22,6 +29,7 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
   chatFontFamily: '',
   userProfile: { label: 'YOU', avatar: '' },
   assistantProfile: { label: 'AI', avatar: '' },
+  composerQueueWhileSending: false,
 };
 
 const KEY = 'extensions.zotero-ai-sidebar.uiSettings';
@@ -60,6 +68,9 @@ export function normalizeUiSettings(value: unknown): UiSettings {
       input.assistantProfile,
       DEFAULT_UI_SETTINGS.assistantProfile,
     ),
+    // Strict boolean — only `true` enables; anything else (undefined, legacy
+    // shapes, garbage) keeps the conservative default-off behavior.
+    composerQueueWhileSending: input.composerQueueWhileSending === true,
   };
 }
 

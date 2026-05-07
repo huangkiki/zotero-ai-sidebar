@@ -250,10 +250,12 @@ export function createZoteroAgentToolSession(
     },
     ...createPaperTools(policy),
     createGetReaderPdfTextTool(policy, highlightSession),
+    createGetCurrentPdfSelectionTool(options),
+    createTextAnnotationNearSelectionTool(policy, options),
     {
       name: "zotero_add_annotation_to_selection",
       description:
-        "Create a Zotero PDF annotation/comment on the user's current selected PDF text. Use only when the user explicitly asks to add, write, or save an annotation/comment/note to the selected passage. This is a write tool and requires approval or YOLO mode.",
+        "Create a Zotero PDF `highlight` annotation (Zotero Reader toolbar tool 'Highlight Text / 高亮文本') with a comment attached to the user's current selected PDF text. Use this when the user asks for a highlight, a comment on the highlight, or a 高亮 / 高亮+评论 / 划线评论 — the result colors the selected text and attaches the comment. Do NOT use this when the user asks for a visible text BOX placed on the page (use zotero_add_text_annotation_to_selection / 新增文字 / Add Text for that). Write tool, requires approval or YOLO mode.",
       requiresApproval: true,
       parameters: objectSchema(
         {
@@ -311,6 +313,139 @@ export function createZoteroAgentToolSession(
   ];
 
   return { tools, dispose: highlightSession.dispose };
+}
+
+// Read-only companion to `zotero_add_annotation_to_selection`.
+// The selection snapshot is captured in the sidebar from Zotero Reader's
+// `renderTextSelectionPopup` event, which is the same official path used
+// when Zotero builds a highlight candidate from `_selectionRanges`.
+// REF: Zotero Reader `pdf-view.js` `_getAnnotationFromSelectionRanges(...)`.
+function createGetCurrentPdfSelectionTool(
+  options: ToolFactoryOptions,
+): AgentTool {
+  return {
+    name: "zotero_get_current_pdf_selection",
+    description:
+      "Read the user's current selected text in the active Zotero PDF Reader, preserving semantic paragraph/list structure when available. Use when the user asks to inspect, print, translate, explain, or reason about the current PDF selection and the selection was not already supplied in [Selected PDF text]. This is read-only and does not create annotations.",
+    parameters: objectSchema({}),
+    execute: async () => {
+      const draft = options.selectionAnnotation?.();
+      if (!draft) {
+        return errorResult(
+          "No live PDF text selection is available. Select text in the Zotero PDF reader first.",
+        );
+      }
+      const itemID = currentItemID(options);
+      const sourceContext =
+        itemID == null ? {} : await zoteroSourceContext(options, itemID);
+      const pageLabel = selectionPageLabel(draft);
+      const rectCount = selectionRectCount(draft);
+      return {
+        output: [
+          "[Current PDF selection]",
+          "Source: active Zotero Reader text selection",
+          `Attachment ID: ${draft.attachmentID}`,
+          pageLabel ? `Page: ${pageLabel}` : "",
+          `Rects: ${rectCount}`,
+          `Chars: ${draft.text.length}`,
+          "",
+          draft.text,
+        ]
+          .filter((line) => line !== "")
+          .join("\n"),
+        summary: `读取当前 PDF 选区 ${draft.text.length} 字`,
+        context: {
+          planMode: "selected_text",
+          ...sourceContext,
+          selectedText: draft.text,
+        },
+      };
+    },
+  };
+}
+
+function selectionPageLabel(draft: SelectionAnnotationDraft): string {
+  const label = stringValue(draft.annotation.pageLabel);
+  if (label) return label;
+  const position = draft.annotation.position;
+  if (!position || typeof position !== "object") return "";
+  const pageIndex = (position as { pageIndex?: unknown }).pageIndex;
+  return typeof pageIndex === "number" && Number.isFinite(pageIndex)
+    ? String(Math.floor(pageIndex) + 1)
+    : "";
+}
+
+function selectionRectCount(draft: SelectionAnnotationDraft): number {
+  const position = draft.annotation.position;
+  if (!position || typeof position !== "object") return 0;
+  const rects = (position as { rects?: unknown }).rects;
+  return Array.isArray(rects) ? rects.length : 0;
+}
+
+function createTextAnnotationNearSelectionTool(
+  policy: ContextPolicy,
+  options: ToolFactoryOptions,
+): AgentTool {
+  return {
+    name: "zotero_add_text_annotation_to_selection",
+    description:
+      "Create a Zotero PDF `text` annotation — the Zotero Reader toolbar tool 'Add Text / 新增文字' (the T tool). This places a visible text box on the page near the user's current PDF text selection. Use this when the user asks for 新增文字 / 加文字 / 写到 PDF 上 / 文字框 / a 'text' annotation / the T tool / 'Add Text' — anything that means 'put visible text on the page', as opposed to highlighting words. The selected text is the anchor; the text box appears below (or above/over) it. This creates annotation type `text`, NOT a highlight + comment (use zotero_add_annotation_to_selection / 高亮+评论 for that). Requires a current PDF selection. Write tool, requires approval or YOLO mode.",
+    requiresApproval: true,
+    parameters: objectSchema(
+      {
+        comment: stringSchema(
+          "Visible text to place on the PDF page, for example a short Chinese note.",
+        ),
+        color: stringSchema(
+          "Optional text color, such as #ffd400. If omitted, Zotero/default annotation color is used.",
+        ),
+        fontSize: numberSchema(
+          "Optional font size in PDF points. Defaults to 14.",
+        ),
+        placement: stringSchema(
+          "Optional placement relative to the current selection: below, above, or over. Defaults to below.",
+        ),
+      },
+      ["comment"],
+    ),
+    execute: async (args) => {
+      const draft = options.selectionAnnotation?.();
+      if (!draft) {
+        return errorResult(
+          "No live PDF text selection is available for anchoring a visible text annotation. Select text in the Zotero PDF reader first.",
+        );
+      }
+      const parsed = objectArgs(args);
+      const comment = truncate(
+        stringArg(parsed, "comment"),
+        policy.maxAnnotationCommentChars,
+      );
+      if (!comment) {
+        return errorResult(
+          "zotero_add_text_annotation_to_selection requires a non-empty comment.",
+        );
+      }
+      const saved = await saveTextAnnotationNearSelection(draft, {
+        comment,
+        color: stringArg(parsed, "color") || undefined,
+        fontSize: numberArg(parsed, "fontSize") ?? undefined,
+        placement: textAnnotationPlacementArg(parsed),
+      }, options.getActiveReader?.());
+      return {
+        output: [
+          "[Saved Zotero PDF text annotation]",
+          textAnnotationSavedLine(saved),
+          `Anchor text: ${draft.text}`,
+          `Visible text: ${comment}`,
+        ].join("\n"),
+        summary: `新增 PDF 文字（T 工具） ${comment.length} 字`,
+        context: {
+          planMode: "annotation_write",
+          selectedText: draft.text,
+        },
+      };
+    },
+  };
 }
 
 async function getToolPdfText(
@@ -539,7 +674,10 @@ function createAnnotatePassageTool(
         sortIndex: result.sortIndex,
         position: { pageIndex: result.pageIndex, rects: result.rects },
       };
-      const saved = await Z.Annotations.saveFromJSON(attachment, json);
+      const saved = await Z.Annotations.saveFromJSON(
+        attachment,
+        annotationJSONForZotero(json),
+      );
       return {
         output: [
           `[Saved annotation #${saved.id}]`,
@@ -896,8 +1034,458 @@ function annotationTypeArg(
   return undefined;
 }
 
+function textAnnotationPlacementArg(
+  args: Record<string, unknown>,
+): "below" | "above" | "over" {
+  const value = stringArg(args, "placement");
+  if (value === "above" || value === "over") return value;
+  return "below";
+}
+
 function truncate(text: string, maxChars: number): string {
   return text.length > maxChars ? text.slice(0, maxChars) : text;
+}
+
+export async function saveTextAnnotationNearSelection(
+  draft: SelectionAnnotationDraft,
+  patch: {
+    comment: string;
+    color?: string;
+    fontSize?: number;
+    placement?: "below" | "above" | "over";
+  },
+  reader?: unknown | null,
+): Promise<{ id: number; key?: string; pending?: boolean }> {
+  const Z = getZoteroAnnotationAPI();
+  const attachment = await Z.Items.getAsync(draft.attachmentID);
+  if (!attachment)
+    throw new Error("Selected PDF attachment is no longer available.");
+
+  const json = textAnnotationJSONFromSelection(draft, patch, Z);
+  const key = stringValue(json.key) || stringValue(json.id);
+  debugAgentTool("text-annotation.save.start", {
+    attachmentID: draft.attachmentID,
+    pageLabel: json.pageLabel,
+    sortIndex: json.sortIndex,
+    commentChars: patch.comment.length,
+    rects: textAnnotationRectCount(json),
+  });
+
+  // Single-path strategy: write straight through chrome saveFromJSON. Zotero's
+  // notify pipeline forwards the new annotation to any open Reader for this
+  // attachment, which renders the text box itself — we don't go through
+  // Reader._annotationManager.addAnnotation. WHY: doing both produces
+  // double-rendering and, more importantly, a save failure inside the Reader
+  // pipeline drops the Reader into read-only state, blocking subsequent text
+  // annotations until the PDF is reopened. saveFromJSON is unaffected by that
+  // UI-level read-only flag — it only requires attachment.isEditable() — so
+  // skipping the Reader path makes the operation idempotent and recoverable.
+  const item = await runSaveFromJSON(Z, attachment, json, key);
+  debugAgentTool("text-annotation.save.direct.ok", { itemID: item.id });
+
+  // Best-effort UI niceties on whatever Reader is currently showing this
+  // attachment: clear any stale read-only flag left by a previous failed save,
+  // and select the new annotation so it's visually highlighted. Both are
+  // strictly cosmetic — failures here MUST NOT mask the successful DB write.
+  const targetReader =
+    reader ?? findOpenReaderForAttachment(attachment.id);
+  if (targetReader) {
+    nudgeReaderAfterSave(targetReader, attachment, key);
+  }
+
+  return { id: item.id };
+}
+
+// Attempts the chrome-side save through multiple compartment-crossing
+// strategies, in order of "most isolated from addon-sandbox quirks" first.
+// We log whichever step throws so the Zotero debug log pinpoints exactly
+// where the "Permission denied to pass object to privileged code" is
+// happening — this used to be opaque because every prior strategy swallowed
+// the error and silently fell through.
+async function runSaveFromJSON(
+  fallbackZ: ZoteroAnnotationAPI,
+  attachment: ZoteroAnnotationItem,
+  json: Record<string, unknown>,
+  key: string,
+): Promise<ZoteroAnnotationItem> {
+  const chromeWin = zoteroMainWindowForClone() as any;
+  const jsonString = JSON.stringify(json);
+
+  debugAgentTool("text-annotation.save.attempt", {
+    hasChromeWin: !!chromeWin,
+    hasChromeJSON: !!chromeWin?.JSON,
+    hasChromeZotero: !!chromeWin?.Zotero?.Annotations?.saveFromJSON,
+    hasGlobalComponents:
+      typeof (globalThis as any).Components?.utils?.cloneInto === "function",
+    hasChromeComponents:
+      typeof chromeWin?.Components?.utils?.cloneInto === "function",
+  });
+
+  // Strategy A: invoke chrome window's saveFromJSON with chrome-window-parsed
+  // JSON. Every object in the call lives in the chrome compartment, so no
+  // cross-compartment wrapping happens. This is the most robust path.
+  const chromeSave = chromeWin?.Zotero?.Annotations?.saveFromJSON;
+  if (typeof chromeSave === "function" && typeof chromeWin?.JSON?.parse === "function") {
+    try {
+      const chromeJSON = chromeWin.JSON.parse(jsonString);
+      const result = await chromeSave.call(
+        chromeWin.Zotero.Annotations,
+        attachment,
+        chromeJSON,
+      );
+      debugAgentTool("text-annotation.save.A.chrome-window.ok", {
+        itemID: result?.id,
+      });
+      return result as ZoteroAnnotationItem;
+    } catch (err) {
+      debugAgentTool("text-annotation.save.A.chrome-window.failed", {
+        error: errorMessage(err),
+      });
+    }
+  }
+
+  // Strategy B: addon-scope saveFromJSON with explicit Components.utils.cloneInto
+  // into chrome. Use chrome window's Cu (more reliable than addon's globalThis).
+  const Cu = chromeWin?.Components?.utils ?? (globalThis as any).Components?.utils;
+  if (Cu?.cloneInto && chromeWin) {
+    try {
+      const plain = JSON.parse(jsonString);
+      const cloned = Cu.cloneInto(plain, chromeWin);
+      const result = await fallbackZ.Annotations.saveFromJSON(attachment, cloned);
+      debugAgentTool("text-annotation.save.B.cu-cloneInto.ok", {
+        itemID: result?.id,
+      });
+      return result;
+    } catch (err) {
+      debugAgentTool("text-annotation.save.B.cu-cloneInto.failed", {
+        error: errorMessage(err),
+      });
+    }
+  }
+
+  // Strategy C: bare addon-scope path. If we got here, neither cross-scope
+  // method worked — saveFromJSON likely throws "Permission denied" again, but
+  // we attempt one more time so the Notifier observation can rescue it.
+  try {
+    const plain = JSON.parse(jsonString);
+    const result = await fallbackZ.Annotations.saveFromJSON(attachment, plain);
+    debugAgentTool("text-annotation.save.C.bare.ok", { itemID: result?.id });
+    return result;
+  } catch (err) {
+    debugAgentTool("text-annotation.save.C.bare.failed", {
+      error: errorMessage(err),
+    });
+    // Race-condition safety net: occasionally Zotero writes the item to DB
+    // before the cross-compartment promise rejects cleanly. Poll for the key.
+    const observed = key
+      ? await waitForSavedAnnotationItem(attachment, key, 250).catch(() => null)
+      : null;
+    if (observed) {
+      debugAgentTool("text-annotation.save.observed-after-failure", {
+        itemID: observed.id,
+        key,
+      });
+      return observed;
+    }
+    throw err;
+  }
+}
+
+function nudgeReaderAfterSave(
+  reader: unknown,
+  attachment: ZoteroAnnotationItem,
+  key: string,
+): void {
+  if (readerAttachmentIDForTool(reader) !== attachment.id) return;
+  const internalReader = internalReaderForTool(reader);
+  if (!internalReader) return;
+
+  if (attachmentLooksEditable(attachment)) {
+    clearStaleReaderReadOnly(internalReader);
+  }
+  if (!key || typeof internalReader.setSelectedAnnotations !== "function") {
+    return;
+  }
+  try {
+    const iframeWindow = readerIframeWindowForTool(reader);
+    internalReader.setSelectedAnnotations(
+      clonePlainJSONForTargetScope([key], iframeWindow),
+      true,
+    );
+  } catch (err) {
+    debugAgentTool("text-annotation.reader.select-failed", {
+      error: errorMessage(err),
+    });
+  }
+}
+
+function clearStaleReaderReadOnly(internalReader: any): void {
+  const manager = internalReader?._annotationManager;
+  const isReadOnly = !!(manager?._readOnly || internalReader?._state?.readOnly);
+  if (!isReadOnly) return;
+  debugAgentTool("text-annotation.reader.clear-readonly", {});
+  try {
+    if (typeof internalReader.setReadOnly === "function") {
+      internalReader.setReadOnly(false);
+    }
+  } catch {}
+  try {
+    if (typeof manager?.setReadOnly === "function") {
+      manager.setReadOnly(false);
+    } else if (manager && "_readOnly" in manager) {
+      manager._readOnly = false;
+    }
+  } catch {}
+}
+
+function attachmentLooksEditable(attachment: ZoteroAnnotationItem): boolean {
+  try {
+    const candidate = attachment as ZoteroAnnotationItem & {
+      isEditable?: () => boolean;
+      deleted?: boolean;
+      parentItem?: { deleted?: boolean };
+    };
+    if (candidate.deleted || candidate.parentItem?.deleted) return false;
+    return typeof candidate.isEditable === "function"
+      ? candidate.isEditable()
+      : true;
+  } catch {
+    return false;
+  }
+}
+
+function textAnnotationSavedLine(saved: { id: number }): string {
+  return `Annotation item ID: ${saved.id}`;
+}
+
+function clonePlainJSONForTargetScope<T>(value: T, targetScope?: unknown): T {
+  const plain = JSON.parse(JSON.stringify(value)) as T;
+  const targetJSON = (targetScope as { JSON?: JSON } | null)?.JSON;
+  if (typeof targetJSON?.parse === "function") {
+    try {
+      return targetJSON.parse(JSON.stringify(plain)) as T;
+    } catch {}
+  }
+  return cloneForTargetScope(plain, targetScope);
+}
+
+async function waitForSavedAnnotationItem(
+  attachment: ZoteroAnnotationItem,
+  key: string,
+  timeoutMs = 5000,
+): Promise<ZoteroAnnotationItem | null> {
+  const Z = getZoteroAnnotationAPI();
+  if (
+    typeof attachment.libraryID !== "number" ||
+    typeof Z.Items.getByLibraryAndKey !== "function"
+  ) {
+    return null;
+  }
+
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const item = Z.Items.getByLibraryAndKey(attachment.libraryID, key);
+    if (item && typeof item.id === "number") return item;
+    await delay(80);
+  }
+  return null;
+}
+
+function internalReaderForTool(reader: unknown): any {
+  try {
+    const r = reader as any;
+    return (
+      r?._internalReader ??
+      r?._iframeWindow?.wrappedJSObject?._reader ??
+      r?._iframeWindow?._reader ??
+      null
+    );
+  } catch (err) {
+    debugAgentTool("text-annotation.reader.internal-reader-failed", {
+      error: errorMessage(err),
+    });
+    return null;
+  }
+}
+
+function readerAttachmentIDForTool(reader: unknown): number | null {
+  try {
+    const r = reader as any;
+    const id = r?._item?.id ?? r?.itemID;
+    return typeof id === "number" && Number.isFinite(id) ? id : null;
+  } catch (err) {
+    debugAgentTool("text-annotation.reader.attachment-id-failed", {
+      error: errorMessage(err),
+    });
+    return null;
+  }
+}
+
+function findOpenReaderForAttachment(attachmentID: number): unknown | null {
+  try {
+    const Z = (globalThis as any).Zotero;
+    const readers = Array.isArray(Z?.Reader?._readers)
+      ? Z.Reader._readers
+      : [];
+    return (
+      readers.find(
+        (reader: unknown) => readerAttachmentIDForTool(reader) === attachmentID,
+      ) ?? null
+    );
+  } catch {
+    return null;
+  }
+}
+
+function readerIframeWindowForTool(reader: unknown): unknown {
+  try {
+    const r = reader as any;
+    const internal = internalReaderForTool(reader);
+    return (
+      r?._iframeWindow ??
+      internal?._iframeWindow ??
+      internal?._primaryView?._iframeWindow ??
+      internal?._secondaryView?._iframeWindow ??
+      null
+    );
+  } catch (err) {
+    debugAgentTool("text-annotation.reader.iframe-window-failed", {
+      error: errorMessage(err),
+    });
+    return null;
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function textAnnotationJSONFromSelection(
+  draft: SelectionAnnotationDraft,
+  patch: {
+    comment: string;
+    color?: string;
+    fontSize?: number;
+    placement?: "below" | "above" | "over";
+  },
+  Z: ZoteroAnnotationAPI,
+): Record<string, unknown> {
+  const base = draft.annotation;
+  const basePosition = base.position;
+  if (!basePosition || typeof basePosition !== "object") {
+    throw new Error(
+      "Selected PDF text does not include Zotero annotation position data.",
+    );
+  }
+  const anchor = textAnnotationAnchor(basePosition);
+  if (!anchor) {
+    throw new Error("Selected PDF text does not include usable rect data.");
+  }
+
+  const key = Z.DataObjectUtilities.generateKey();
+  const fontSize = clampTextAnnotationFontSize(patch.fontSize);
+  const rect = textAnnotationRect(
+    anchor.rect,
+    patch.comment,
+    fontSize,
+    patch.placement,
+  );
+  return {
+    id: key,
+    key,
+    type: "text",
+    text: "",
+    comment: patch.comment,
+    color:
+      patch.color || stringValue(base.color) || Z.Annotations.DEFAULT_COLOR,
+    pageLabel: stringValue(base.pageLabel) || String(anchor.pageIndex + 1),
+    sortIndex:
+      stringValue(base.sortIndex) ||
+      fallbackSortIndex(anchor.pageIndex, rect),
+    position: {
+      pageIndex: anchor.pageIndex,
+      fontSize,
+      rotation: 0,
+      rects: [rect],
+    },
+  };
+}
+
+function textAnnotationAnchor(
+  position: object,
+): { pageIndex: number; rect: [number, number, number, number] } | null {
+  const pageIndex = numberValue((position as { pageIndex?: unknown }).pageIndex);
+  const rects = (position as { rects?: unknown }).rects;
+  if (pageIndex == null || !Array.isArray(rects)) return null;
+  const usable = rects.flatMap((rect) => {
+    if (!Array.isArray(rect) || rect.length < 4) return [];
+    const values = rect.slice(0, 4).map(numberValue);
+    return values.every((value) => value != null)
+      ? [values as [number, number, number, number]]
+      : [];
+  });
+  if (!usable.length) return null;
+  return { pageIndex, rect: boundingRect(usable) };
+}
+
+function numberValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function boundingRect(
+  rects: Array<[number, number, number, number]>,
+): [number, number, number, number] {
+  return [
+    Math.min(...rects.map((rect) => rect[0])),
+    Math.min(...rects.map((rect) => rect[1])),
+    Math.max(...rects.map((rect) => rect[2])),
+    Math.max(...rects.map((rect) => rect[3])),
+  ];
+}
+
+function clampTextAnnotationFontSize(value: number | undefined): number {
+  return clamp(Math.round(value ?? 14), 8, 48);
+}
+
+function textAnnotationRect(
+  anchor: [number, number, number, number],
+  comment: string,
+  fontSize: number,
+  placement: "below" | "above" | "over" = "below",
+): [number, number, number, number] {
+  const anchorWidth = Math.max(fontSize * 6, anchor[2] - anchor[0]);
+  const width = Math.min(
+    Math.max(
+      anchorWidth,
+      fontSize * Math.min(18, Math.max(4, comment.length)) * 0.62,
+    ),
+    fontSize * 28,
+  );
+  const lines = Math.max(
+    1,
+    Math.ceil((comment.length * fontSize * 0.62) / width),
+  );
+  const height = Math.max(fontSize * 1.4, lines * fontSize * 1.25);
+  const gap = fontSize * 0.55;
+  const left = anchor[0];
+  const top =
+    placement === "above"
+      ? anchor[1] - height - gap
+      : placement === "over"
+        ? anchor[1]
+        : anchor[3] + gap;
+  return [left, top, left + width, top + height];
+}
+
+function fallbackSortIndex(
+  pageIndex: number,
+  rect: [number, number, number, number],
+): string {
+  return [
+    String(Math.max(0, pageIndex)).padStart(5, "0"),
+    "000000",
+    String(Math.max(0, Math.round(rect[3]))).padStart(5, "0"),
+  ].join("|");
 }
 
 export async function saveSelectionAnnotation(
@@ -935,8 +1523,83 @@ export async function saveSelectionAnnotation(
     position,
   };
 
-  const item = await Z.Annotations.saveFromJSON(attachment, json);
+  const item = await Z.Annotations.saveFromJSON(
+    attachment,
+    annotationJSONForZotero(json),
+  );
   return { id: item.id };
+}
+
+function annotationJSONForZotero(
+  json: Record<string, unknown>,
+): Record<string, unknown> {
+  // The payload originates in the addon sandbox. Zotero.Annotations.saveFromJSON
+  // runs in the chrome window scope and reads properties privileged-side; if we
+  // hand it a sandbox-scope object directly, we trigger
+  // "Permission denied to pass object to privileged code".
+  //
+  // We can't rely on Components.utils.cloneInto here because the addon sandbox
+  // sometimes can't reach a usable Components.utils, and the previous
+  // cloneForTargetScope helper would *silently* no-op in that case — exactly
+  // the case that was leaking sandbox objects into chrome saveFromJSON.
+  // Round-tripping through the chrome window's own JSON.parse always produces
+  // objects in chrome scope, no Components.utils required.
+  const plain = JSON.parse(JSON.stringify(json)) as Record<string, unknown>;
+  return clonePlainJSONForTargetScope(plain, zoteroMainWindowForClone());
+}
+
+function cloneForTargetScope<T>(value: T, targetScope?: unknown): T {
+  const cu = componentsUtilsForClone();
+  if (!targetScope || typeof cu?.cloneInto !== "function") return value;
+  try {
+    return cu.cloneInto(value, targetScope, {
+      wrapReflectors: true,
+      cloneFunctions: true,
+    }) as T;
+  } catch {
+    return value;
+  }
+}
+
+function componentsUtilsForClone(): { cloneInto?: Function } | null {
+  try {
+    const globalUtils = (globalThis as any).Components?.utils;
+    if (globalUtils) return globalUtils;
+  } catch {}
+  try {
+    const winUtils = (zoteroMainWindowForClone() as any)?.Components?.utils;
+    if (winUtils) return winUtils;
+  } catch {}
+  return null;
+}
+
+function zoteroMainWindowForClone(): unknown {
+  try {
+    const Z = (globalThis as any).Zotero;
+    return typeof Z?.getMainWindow === "function" ? Z.getMainWindow() : null;
+  } catch {
+    return null;
+  }
+}
+
+function textAnnotationRectCount(json: Record<string, unknown>): number {
+  const position = json.position;
+  if (!position || typeof position !== "object") return 0;
+  const rects = (position as { rects?: unknown }).rects;
+  return Array.isArray(rects) ? rects.length : 0;
+}
+
+function debugAgentTool(topic: string, data: Record<string, unknown>): void {
+  try {
+    const Z = (globalThis as any).Zotero;
+    if (typeof Z?.debug === "function") {
+      Z.debug(`[Zotero AI Sidebar] ${topic}: ${JSON.stringify(data)}`);
+    }
+  } catch {}
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 function selectedAnnotationType(
@@ -954,10 +1617,18 @@ function stringValue(value: unknown): string {
 
 interface ZoteroAnnotationItem {
   id: number;
+  libraryID?: number;
+  key?: string;
 }
 
 interface ZoteroAnnotationAPI {
-  Items: { getAsync(id: number): Promise<ZoteroAnnotationItem | null> };
+  Items: {
+    getAsync(id: number): Promise<ZoteroAnnotationItem | null>;
+    getByLibraryAndKey?(
+      libraryID: number,
+      key: string,
+    ): ZoteroAnnotationItem | false | null | undefined;
+  };
   DataObjectUtilities: { generateKey(): string };
   Annotations: {
     DEFAULT_COLOR: string;
