@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { PrefsStore } from '../../src/settings/storage';
+import { saveTranslateSettings } from '../../src/translate/settings';
+import { saveCache as saveTranslateCacheState } from '../../src/translate/cache';
+import { DEFAULT_TRANSLATE_SETTINGS } from '../../src/settings/types';
 import { savePresets } from '../../src/settings/storage';
 import { saveQuickPromptSettings } from '../../src/settings/quick-prompts';
 import { saveToolSettings } from '../../src/settings/tool-settings';
@@ -225,5 +228,35 @@ describe('sync snapshot round trip', () => {
     const result = await applySyncSnapshot(prefs, parseSyncSnapshot(json));
     expect(result.threads.unresolved).toBe(1);
     expect(result.threads.imported).toBe(0);
+  });
+
+  it('round-trips translateSettings and translateCache', async () => {
+    const prefs = memPrefs();
+    saveTranslateSettings(prefs, { ...DEFAULT_TRANSLATE_SETTINGS, enabled: true, model: 'gpt-5.4' });
+    saveTranslateCacheState(prefs, {
+      entries: { k1: { text: '你好', model: 'gpt-5.4', createdAt: 1 } },
+    });
+    const snap = await buildSyncSnapshot(prefs);
+    const json = JSON.stringify(snap);
+    const reparsed = parseSyncSnapshot(json);
+    expect(reparsed.translateSettings?.enabled).toBe(true);
+    expect(reparsed.translateSettings?.model).toBe('gpt-5.4');
+    expect(reparsed.translateCache?.entries.k1?.text).toBe('你好');
+  });
+
+  it('accepts snapshots missing translate fields (back-compat)', () => {
+    const json = JSON.stringify({
+      schema: SYNC_SCHEMA,
+      exportedAt: '',
+      presets: [],
+      uiSettings: {},
+      quickPrompts: {},
+      toolSettings: {},
+      threads: [],
+      annotations: [],
+    });
+    const snap = parseSyncSnapshot(json);
+    expect(snap.translateSettings).toBeUndefined();
+    expect(snap.translateCache).toBeUndefined();
   });
 });

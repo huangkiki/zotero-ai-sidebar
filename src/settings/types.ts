@@ -79,3 +79,29 @@ export function newPreset(provider: ProviderKind): ModelPreset {
       : undefined,
   };
 }
+
+export type TranslateThinking = 'none' | 'low' | 'medium' | 'high';
+export type TranslateContextLevel = 'none' | 'paragraph' | 'page';
+export type TranslateOverlayPosition = 'above' | 'below';
+
+export interface TranslateSettings {
+  enabled: boolean;
+  presetId: string;
+  model: string;
+  thinking: TranslateThinking;
+  ctxLevel: TranslateContextLevel;
+  overlayPosition: TranslateOverlayPosition;
+  prevSentenceKey: string;
+  nextSentenceKey: string;
+}
+
+export const DEFAULT_TRANSLATE_SETTINGS: TranslateSettings = {
+  enabled: false,
+  presetId: '',
+  model: '',
+  thinking: 'low',
+  ctxLevel: 'none',
+  overlayPosition: 'above',
+  prevSentenceKey: 'Shift+Enter',
+  nextSentenceKey: 'Enter',
+};

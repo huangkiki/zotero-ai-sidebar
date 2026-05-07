@@ -28,7 +28,17 @@ import {
   saveToolSettings,
   type ToolSettings,
 } from '../settings/tool-settings';
-import type { ModelPreset } from '../settings/types';
+import type { ModelPreset, TranslateSettings } from '../settings/types';
+import {
+  loadTranslateSettings,
+  normalizeTranslateSettings,
+  saveTranslateSettings,
+} from '../translate/settings';
+import {
+  loadCache as loadTranslateCacheState,
+  saveCache as saveTranslateCacheState,
+  type TranslateCacheState,
+} from '../translate/cache';
 import {
   loadUiSettings,
   normalizeUiSettings,
@@ -56,6 +66,10 @@ export interface SyncSnapshot {
   // stays optional on the wire — older payloads without it parse fine
   // and just yield zero imports.
   annotations: PortableAnnotation[];
+  // Added v1.1 (still under SYNC_SCHEMA v1 — both fields are optional on
+  // the wire). Older payloads without these parse to defaults.
+  translateSettings?: TranslateSettings;
+  translateCache?: TranslateCacheState;
 }
 
 export interface ApplySnapshotResult {
@@ -77,6 +91,8 @@ export async function buildSyncSnapshot(prefs: PrefsStore): Promise<SyncSnapshot
     toolSettings: loadToolSettings(prefs),
     threads: stripLocalTaskStateFromThreads(threads),
     annotations,
+    translateSettings: loadTranslateSettings(prefs),
+    translateCache: loadTranslateCacheState(prefs),
   };
 }
 
@@ -104,6 +120,10 @@ export function parseSyncSnapshot(raw: string): SyncSnapshot {
     toolSettings: normalizeToolSettings(parsed.toolSettings),
     threads: normalizePortableThreads(parsed.threads),
     annotations: normalizePortableAnnotations(parsed.annotations),
+    translateSettings: parsed.translateSettings === undefined
+      ? undefined
+      : normalizeTranslateSettings(parsed.translateSettings),
+    translateCache: normalizeTranslateCache(parsed.translateCache),
   };
 }
 
@@ -120,6 +140,8 @@ export async function applySyncSnapshot(
   saveUiSettings(prefs, snapshot.uiSettings);
   saveQuickPromptSettings(prefs, snapshot.quickPrompts);
   saveToolSettings(prefs, snapshot.toolSettings);
+  if (snapshot.translateSettings) saveTranslateSettings(prefs, snapshot.translateSettings);
+  if (snapshot.translateCache) saveTranslateCacheState(prefs, snapshot.translateCache);
   const [threads, annotations] = await Promise.all([
     importAllThreads(snapshot.threads),
     importAllAnnotations(snapshot.annotations),
@@ -222,4 +244,20 @@ function normalizePortableAnnotations(value: unknown): PortableAnnotation[] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeTranslateCache(value: unknown): TranslateCacheState | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return { entries: {} };
+  const entries = (value as { entries?: Record<string, unknown> }).entries;
+  if (!entries || typeof entries !== 'object') return { entries: {} };
+  const out: TranslateCacheState['entries'] = {};
+  for (const [k, v] of Object.entries(entries)) {
+    if (!v || typeof v !== 'object') continue;
+    const e = v as Partial<{ text: string; model: string; createdAt: number }>;
+    if (typeof e.text === 'string' && typeof e.model === 'string' && typeof e.createdAt === 'number') {
+      out[k] = { text: e.text, model: e.model, createdAt: e.createdAt };
+    }
+  }
+  return { entries: out };
 }
