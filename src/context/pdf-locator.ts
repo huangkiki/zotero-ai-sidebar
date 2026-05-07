@@ -32,10 +32,20 @@ export interface LocateResult {
   confidence: number;
 }
 
+export interface PdfPageContent {
+  pageIndex: number;
+  pageLabel: string;
+  pageText: string;
+  normalizedText: string;
+  normalizedToOriginal: number[];
+  viewBox?: PdfRect;
+}
+
 export interface PdfLocator {
   attachmentID: number;
   getFullText(): Promise<string>;
   extractTextFromPosition(position: unknown): Promise<string>;
+  getPageContent(pageIndex: number): Promise<PdfPageContent | null>;
   locate(
     needle: string,
     opts?: { minConfidence?: number },
@@ -242,6 +252,18 @@ export async function createPdfLocator(reader: unknown): Promise<PdfLocator> {
         if (text) pages.push(text);
       }
       return pages.join("\n");
+    },
+    async getPageContent(pageIndex) {
+      const page = await bundleFor(pageIndex);
+      if (!page) return null;
+      return {
+        pageIndex: page.pageIndex,
+        pageLabel: page.pageLabel,
+        pageText: page.pageText,
+        normalizedText: page.normalizedText,
+        normalizedToOriginal: page.normalizedToOriginal,
+        viewBox: page.viewBox,
+      };
     },
     // Two-stage match. WHY two stages: most model-supplied passages match
     // verbatim (they were copied from getFullText output), so an O(N) page
