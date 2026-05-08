@@ -1,3 +1,5 @@
+import { splitSentences } from "../translate/sentence-splitter";
+
 // Locator that maps a verbatim text passage to PDF coordinates so we can
 // write a Zotero highlight at the correct rectangle.
 //
@@ -32,6 +34,17 @@ export interface LocateResult {
   confidence: number;
 }
 
+export interface LocatedSentence {
+  text: string;
+  pageIndex: number;
+  pageLabel: string;
+  rects: PdfRect[];
+  sortIndex: string;
+  pageSentenceIndex: number;
+  pageSentenceCount: number;
+  paragraphContext: string;
+}
+
 export interface PdfPageContent {
   pageIndex: number;
   pageLabel: string;
@@ -46,9 +59,21 @@ export interface PdfLocator {
   getFullText(): Promise<string>;
   extractTextFromPosition(position: unknown): Promise<string>;
   getPageContent(pageIndex: number): Promise<PdfPageContent | null>;
+  closestTextOffset?(
+    pageIndex: number,
+    point: { x: number; y: number },
+  ): Promise<number | null>;
+  sentenceAtPoint?(
+    pageIndex: number,
+    point: { x: number; y: number },
+  ): Promise<LocatedSentence | null>;
+  sentenceAtIndex?(
+    pageIndex: number,
+    sentenceIndex: number,
+  ): Promise<LocatedSentence | null>;
   locate(
     needle: string,
-    opts?: { minConfidence?: number },
+    opts?: { minConfidence?: number; pageIndex?: number },
   ): Promise<LocateResult | null>;
   dispose(): void;
 }
@@ -93,6 +118,7 @@ interface ItemAnchor {
   height: number;
   itemString: string;
   lineBreakAfter?: boolean;
+  paragraphBreakAfter?: boolean;
   source?: "textContent" | "processed";
 }
 
@@ -265,6 +291,25 @@ export async function createPdfLocator(reader: unknown): Promise<PdfLocator> {
         viewBox: page.viewBox,
       };
     },
+    async closestTextOffset(pageIndex, point) {
+      const page = await bundleFor(pageIndex);
+      if (!page) return null;
+      return closestTextOffset(page.anchors, point);
+    },
+    async sentenceAtPoint(pageIndex, point) {
+      const page = await bundleFor(pageIndex);
+      if (!page) return null;
+      return sentenceAtPointOnPage(page, point, await cumulativeOffset(pageIndex));
+    },
+    async sentenceAtIndex(pageIndex, sentenceIndex) {
+      const page = await bundleFor(pageIndex);
+      if (!page) return null;
+      return sentenceAtIndexOnPage(
+        page,
+        sentenceIndex,
+        await cumulativeOffset(pageIndex),
+      );
+    },
     // Two-stage match. WHY two stages: most model-supplied passages match
     // verbatim (they were copied from getFullText output), so an O(N) page
     // scan with `indexOf` finds them fast. We only fall back to the O(N·k)
@@ -280,8 +325,15 @@ export async function createPdfLocator(reader: unknown): Promise<PdfLocator> {
       if (!normalizedNeedle) return null;
 
       const minConfidence = opts?.minConfidence ?? DEFAULT_MIN_CONFIDENCE;
+      const pageIndexes =
+        typeof opts?.pageIndex === "number" &&
+        Number.isInteger(opts.pageIndex) &&
+        opts.pageIndex >= 0 &&
+        opts.pageIndex < source.pageCount
+          ? [opts.pageIndex]
+          : Array.from({ length: source.pageCount }, (_, index) => index);
       let bestFuzzy: NormalizedMatch | null = null;
-      for (let pageIndex = 0; pageIndex < source.pageCount; pageIndex++) {
+      for (const pageIndex of pageIndexes) {
         const page = await bundleFor(pageIndex);
         if (!page || !page.normalizedText) continue;
 
@@ -793,17 +845,19 @@ function buildProcessedPageBundle(
     const end = start + charText.length;
     const rect = rectValue(char.inlineRect) ?? rectValue(char.rect);
     if (charText && rect) {
+      const inlineRect = rectValue(char.inlineRect) ?? rect;
       anchors.push({
         itemIndex: charIndex,
         pageIndex,
         startOffset: start,
         endOffset: end,
-        x: rect[0],
-        y: rect[1],
-        width: Math.max(0, rect[2] - rect[0]),
-        height: Math.max(0, rect[3] - rect[1]),
+        x: inlineRect[0],
+        y: inlineRect[1],
+        width: Math.max(0, inlineRect[2] - inlineRect[0]),
+        height: Math.max(0, inlineRect[3] - inlineRect[1]),
         itemString: charText,
         lineBreakAfter: !!char.lineBreakAfter,
+        paragraphBreakAfter: !!char.paragraphBreakAfter,
         source: "processed",
       });
     }
@@ -1143,6 +1197,274 @@ function rectsForRange(
   return mergeRectParts(parts);
 }
 
+interface SentenceSegment {
+  text: string;
+  startAnchor: number;
+  endAnchor: number;
+  paragraphStartAnchor: number;
+  paragraphEndAnchor: number;
+}
+
+function sentenceAtPointOnPage(
+  page: PageBundle,
+  point: { x: number; y: number },
+  pageGlobalOffset: number,
+): LocatedSentence | null {
+  const anchorIndex = closestAnchorIndex(page.anchors, point);
+  if (anchorIndex == null) return null;
+  const segments = sentenceSegmentsForPage(page);
+  if (!segments.length) return null;
+  const segment =
+    segments.find(
+      (entry) => anchorIndex >= entry.startAnchor && anchorIndex <= entry.endAnchor,
+    ) ?? closestSentenceSegment(segments, anchorIndex);
+  return segment
+    ? locatedSentenceFromSegment(page, segments, segment, pageGlobalOffset)
+    : null;
+}
+
+function sentenceAtIndexOnPage(
+  page: PageBundle,
+  sentenceIndex: number,
+  pageGlobalOffset: number,
+): LocatedSentence | null {
+  const segments = sentenceSegmentsForPage(page);
+  const segment = Number.isInteger(sentenceIndex)
+    ? segments[sentenceIndex]
+    : undefined;
+  return segment
+    ? locatedSentenceFromSegment(page, segments, segment, pageGlobalOffset)
+    : null;
+}
+
+function locatedSentenceFromSegment(
+  page: PageBundle,
+  segments: SentenceSegment[],
+  segment: SentenceSegment,
+  pageGlobalOffset: number,
+): LocatedSentence | null {
+  const start = page.anchors[segment.startAnchor]?.startOffset;
+  const end = page.anchors[segment.endAnchor]?.endOffset;
+  if (start == null || end == null || end <= start) return null;
+  const rects = rectsForRange(page.anchors, start, end);
+  if (!rects.length) return null;
+  const paraStart = page.anchors[segment.paragraphStartAnchor]?.startOffset ?? start;
+  const paraEnd = page.anchors[segment.paragraphEndAnchor]?.endOffset ?? end;
+  const text = page.pageText.slice(start, end).replace(/\s+/g, " ").trim();
+  const pageSentenceIndex = segments.indexOf(segment);
+  return {
+    text: text || segment.text,
+    pageIndex: page.pageIndex,
+    pageLabel: page.pageLabel,
+    rects,
+    sortIndex: buildSortIndex(
+      page.pageIndex,
+      sortOffsetForRange(page, start, end, pageGlobalOffset),
+      sortTopForPage(page, rects),
+    ),
+    pageSentenceIndex,
+    pageSentenceCount: segments.length,
+    paragraphContext: page.pageText
+      .slice(paraStart, paraEnd)
+      .replace(/\s+/g, " ")
+      .trim(),
+  };
+}
+
+function closestAnchorIndex(
+  anchors: ItemAnchor[],
+  point: { x: number; y: number },
+): number | null {
+  let bestIndex: number | null = null;
+  let bestDistance = Infinity;
+  const pointRect: PdfRect = [point.x, point.y, point.x, point.y];
+  anchors.forEach((anchor, index) => {
+    const distance = rectsDist(fullAnchorRect(anchor), pointRect);
+    if (distance < bestDistance) {
+      bestIndex = index;
+      bestDistance = distance;
+    }
+  });
+  return bestIndex;
+}
+
+function closestSentenceSegment(
+  segments: SentenceSegment[],
+  anchorIndex: number,
+): SentenceSegment | null {
+  let best: SentenceSegment | null = null;
+  let bestDistance = Infinity;
+  for (const segment of segments) {
+    const distance =
+      anchorIndex < segment.startAnchor
+        ? segment.startAnchor - anchorIndex
+        : anchorIndex > segment.endAnchor
+          ? anchorIndex - segment.endAnchor
+          : 0;
+    if (distance < bestDistance) {
+      best = segment;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+function sentenceSegmentsForPage(page: PageBundle): SentenceSegment[] {
+  const paragraphs = paragraphAnchorRanges(page.anchors);
+  const segments: SentenceSegment[] = [];
+  for (const [paragraphStartAnchor, paragraphEndAnchor] of paragraphs) {
+    const anchors = page.anchors.slice(
+      paragraphStartAnchor,
+      paragraphEndAnchor + 1,
+    );
+    const { text, anchorIndexByTextIndex } = segmenterTextForAnchors(
+      page.pageText,
+      anchors,
+    );
+    const raw = splitSentencesForPdfText(text);
+    for (const sentence of raw) {
+      const startAnchor = anchorIndexByTextRange(
+        anchorIndexByTextIndex,
+        sentence.start,
+        sentence.end,
+        true,
+      );
+      const endAnchor = anchorIndexByTextRange(
+        anchorIndexByTextIndex,
+        sentence.start,
+        sentence.end,
+        false,
+      );
+      if (startAnchor == null || endAnchor == null || endAnchor < startAnchor) {
+        continue;
+      }
+      segments.push({
+        text: sentence.text,
+        startAnchor: paragraphStartAnchor + startAnchor,
+        endAnchor: paragraphStartAnchor + endAnchor,
+        paragraphStartAnchor,
+        paragraphEndAnchor,
+      });
+    }
+  }
+  return segments;
+}
+
+function paragraphAnchorRanges(anchors: ItemAnchor[]): Array<[number, number]> {
+  const lines: Array<{
+    start: number;
+    end: number;
+    rect: PdfRect;
+    text: string;
+  }> = [];
+  let lineStart = 0;
+  const pushLine = (end: number) => {
+    const lineAnchors = anchors.slice(lineStart, end + 1);
+    const rects = lineAnchors.map(fullAnchorRect);
+    lines.push({
+      start: lineStart,
+      end,
+      rect: unionRects(rects),
+      text: lineAnchors.map((anchor) => anchor.itemString).join("").trim(),
+    });
+    lineStart = end + 1;
+  };
+  for (let i = 0; i < anchors.length; i++) {
+    const anchor = anchors[i]!;
+    if (anchor.lineBreakAfter || i === anchors.length - 1) pushLine(i);
+  }
+  if (!lines.length) return [];
+
+  const ranges: Array<[number, number]> = [];
+  let startLine = 0;
+  for (let i = 1; i < lines.length; i++) {
+    const prev = lines[i - 1]!;
+    const current = lines[i]!;
+    const previousAnchor = anchors[prev.end]!;
+    const hasBreak =
+      previousAnchor.paragraphBreakAfter ||
+      (previousAnchor.lineBreakAfter &&
+        current.rect[0] > prev.rect[0] + 10 &&
+        lineEndsSentence(prev.text));
+    if (hasBreak) {
+      ranges.push([lines[startLine]!.start, prev.end]);
+      startLine = i;
+    }
+  }
+  ranges.push([lines[startLine]!.start, lines[lines.length - 1]!.end]);
+  return ranges;
+}
+
+function lineEndsSentence(text: string): boolean {
+  return /[.!?。？！][)"'\]\u2019\u201d]*$/.test(text.trim());
+}
+
+function unionRects(rects: PdfRect[]): PdfRect {
+  return [
+    Math.min(...rects.map((rect) => rect[0])),
+    Math.min(...rects.map((rect) => rect[1])),
+    Math.max(...rects.map((rect) => rect[2])),
+    Math.max(...rects.map((rect) => rect[3])),
+  ];
+}
+
+function segmenterTextForAnchors(
+  pageText: string,
+  anchors: ItemAnchor[],
+): {
+  text: string;
+  anchorIndexByTextIndex: number[];
+} {
+  const parts: string[] = [];
+  const anchorIndexByTextIndex: number[] = [];
+  let length = 0;
+  anchors.forEach((anchor, index) => {
+    for (let j = 0; j < anchor.itemString.length; j++) {
+      anchorIndexByTextIndex[length + j] = index;
+    }
+    parts.push(anchor.itemString);
+    length += anchor.itemString.length;
+
+    const next = anchors[index + 1];
+    const gap = next
+      ? pageText.slice(anchor.endOffset, next.startOffset).replace(/\s/g, " ")
+      : "";
+    // Zotero stores word/line gaps as char flags; pageText already expands
+    // those gaps, so use anchor offsets to preserve them for sentence splits.
+    if (gap) {
+      parts.push(gap);
+      length += gap.length;
+    }
+  });
+  return {
+    text: parts.join(""),
+    anchorIndexByTextIndex,
+  };
+}
+
+function splitSentencesForPdfText(
+  text: string,
+): Array<{ text: string; start: number; end: number }> {
+  return splitSentences(text).filter(
+    (segment) => segment.end > segment.start && segment.text.trim(),
+  );
+}
+
+function anchorIndexByTextRange(
+  map: number[],
+  start: number,
+  end: number,
+  forward: boolean,
+): number | null {
+  let i = forward ? start : end - 1;
+  const step = forward ? 1 : -1;
+  const stop = forward ? end : start - 1;
+  for (; i !== stop; i += step) {
+    if (map[i] !== undefined) return map[i]!;
+  }
+  return null;
+}
+
 interface RectPart {
   rect: PdfRect;
   itemIndex: number;
@@ -1425,6 +1747,48 @@ function fullAnchorRect(anchor: ItemAnchor): PdfRect {
       anchor.y + anchor.height,
     ]
   );
+}
+
+function closestTextOffset(
+  anchors: ItemAnchor[],
+  point: { x: number; y: number },
+): number | null {
+  let best: ItemAnchor | null = null;
+  let bestDistance = Infinity;
+  const pointRect: PdfRect = [point.x, point.y, point.x, point.y];
+  for (const anchor of anchors) {
+    const distance = rectsDist(fullAnchorRect(anchor), pointRect);
+    if (distance < bestDistance) {
+      best = anchor;
+      bestDistance = distance;
+    }
+  }
+  if (!best) return null;
+  if (best.source === "processed" || best.itemString.length <= 1) {
+    return best.startOffset;
+  }
+  const left = Math.min(best.x, best.x + best.width);
+  const width = Math.max(Math.abs(best.width), 1);
+  const ratio = clamp01((point.x - left) / width);
+  const localOffset = Math.floor(ratio * best.itemString.length);
+  return Math.min(best.endOffset - 1, best.startOffset + localOffset);
+}
+
+function rectsDist(a: PdfRect, b: PdfRect): number {
+  const left = b[2] < a[0];
+  const right = a[2] < b[0];
+  const bottom = b[3] < a[1];
+  const top = a[3] < b[1];
+
+  if (top && left) return Math.hypot(a[0] - b[2], b[1] - a[3]);
+  if (left && bottom) return Math.hypot(a[0] - b[2], a[1] - b[3]);
+  if (bottom && right) return Math.hypot(a[2] - b[0], a[1] - b[3]);
+  if (right && top) return Math.hypot(b[0] - a[2], b[1] - a[3]);
+  if (left) return a[0] - b[2];
+  if (right) return b[0] - a[2];
+  if (bottom) return a[1] - b[3];
+  if (top) return b[1] - a[3];
+  return 0;
 }
 
 function rectsOverlap(a: PdfRect, b: PdfRect): boolean {

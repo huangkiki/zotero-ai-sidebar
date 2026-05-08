@@ -79,6 +79,55 @@
     </html:div>
 
     <html:div class="zai-pref-card">
+      <html:div class="zai-pref-title">逐句翻译设置</html:div>
+      <html:p class="zai-pref-help">
+        侧边栏和 PDF Reader 里只保留「译」开关；模型、思考程度、上下文和快捷键在这里统一保存。翻译设置会参与 WebDAV 云同步。
+      </html:p>
+      <html:div class="zai-pref-grid">
+        <html:label for="zai-translate-preset">GPT 配置</html:label>
+        <html:select id="zai-translate-preset"></html:select>
+        <html:label for="zai-translate-model">模型</html:label>
+        <html:select id="zai-translate-model"></html:select>
+        <html:label for="zai-translate-thinking">思考程度</html:label>
+        <html:select id="zai-translate-thinking">
+          <html:option value="low">Low - 省 token，推荐翻译使用</html:option>
+          <html:option value="medium">Medium - 平衡</html:option>
+          <html:option value="high">High - 更强推理</html:option>
+          <html:option value="xhigh">Extra high - 最强推理</html:option>
+        </html:select>
+        <html:label for="zai-translate-context">上下文</html:label>
+        <html:select id="zai-translate-context">
+          <html:option value="none">仅本句</html:option>
+          <html:option value="paragraph">本段</html:option>
+          <html:option value="page">整页</html:option>
+        </html:select>
+        <html:label for="zai-translate-position">结果位置</html:label>
+        <html:select id="zai-translate-position">
+          <html:option value="above">句上方</html:option>
+          <html:option value="below">句下方</html:option>
+        </html:select>
+        <html:label for="zai-translate-size">翻译框大小</html:label>
+        <html:select id="zai-translate-size">
+          <html:option value="compact">紧凑（固定小框）</html:option>
+          <html:option value="adaptive">自适应（尽量展开）</html:option>
+        </html:select>
+        <html:label for="zai-translate-trigger">触发方式</html:label>
+        <html:select id="zai-translate-trigger">
+          <html:option value="single">单击翻译</html:option>
+          <html:option value="double">双击翻译</html:option>
+        </html:select>
+        <html:label for="zai-translate-next-key">下一句快捷键</html:label>
+        <html:input id="zai-translate-next-key" type="text" placeholder="例如：Enter 或 Alt+N" />
+        <html:label for="zai-translate-prev-key">上一句快捷键</html:label>
+        <html:input id="zai-translate-prev-key" type="text" placeholder="例如：Shift+Enter 或 Alt+P" />
+      </html:div>
+      <html:div class="zai-pref-actions">
+        <html:button id="zai-translate-save" type="button">保存翻译设置</html:button>
+        <html:span id="zai-translate-status" class="zai-pref-status"></html:span>
+      </html:div>
+    </html:div>
+
+    <html:div class="zai-pref-card">
       <html:div class="zai-pref-title">PDF 注释颜色预设</html:div>
       <html:p class="zai-pref-help">
         配置 AI 写入 PDF 注释时允许使用的颜色分类。保存后会追加到 Zotero tool manual；Reset 可恢复默认预设。
@@ -190,7 +239,7 @@
     <html:div class="zai-pref-card">
       <html:div class="zai-pref-title">配置备份</html:div>
       <html:p class="zai-pref-help">
-        备份/恢复账号、快捷提示词和联网/MCP 配置。备份文件可能包含 API Key，请保存在可信位置。
+        备份/恢复账号、快捷提示词、联网/MCP 和逐句翻译配置。备份文件可能包含 API Key，请保存在可信位置。
       </html:p>
       <html:div class="zai-pref-actions">
         <html:button id="zai-config-export-file" type="button">导出配置文件</html:button>
@@ -215,7 +264,7 @@
     <html:div class="zai-pref-card">
       <html:div class="zai-pref-title">云同步（WebDAV）</html:div>
       <html:p class="zai-pref-help">
-        把账号预设、快捷提示词、联网/MCP 设置、显示设置和对话历史同步到 WebDAV
+        把账号预设、快捷提示词、联网/MCP 设置、显示设置、逐句翻译设置和对话历史同步到 WebDAV
         云盘（坚果云 / NextCloud / ownCloud / Synology 等）。论文 PDF 和元数据请继续使用
         Zotero 自带的同步（设置 → 同步 → 文件同步 → WebDAV，可指向同一个 WebDAV 账号）。
       </html:p>

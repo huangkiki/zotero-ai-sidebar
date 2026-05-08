@@ -47,7 +47,7 @@ export function splitSentences(text: string): SentenceSpan[] {
       const next = text[i + 1];
       if (next !== undefined && !isWhitespace(next)) continue;
       if (endsWithAbbreviation(text, i)) continue;
-      if (isAcronymPeriod(text, i)) continue;
+      if (isAcronymPeriod(text, i) && !startsLikelyNextSentence(text, i + 1)) continue;
     }
 
     const slice = text.slice(cursor, i + 1).trim();
@@ -63,6 +63,15 @@ export function splitSentences(text: string): SentenceSpan[] {
     out.push({ text: tail, start, end: start + tail.length });
   }
   return out;
+}
+
+function startsLikelyNextSentence(text: string, from: number): boolean {
+  for (let i = from; i < text.length; i++) {
+    const ch = text[i]!;
+    if (isWhitespace(ch)) continue;
+    return /[A-Z\u4e00-\u9fff]/.test(ch);
+  }
+  return false;
 }
 
 function skipLeadingWhitespace(text: string, from: number, to: number): number {

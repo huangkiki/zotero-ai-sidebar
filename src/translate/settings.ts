@@ -4,6 +4,8 @@ import {
   type TranslateSettings,
   type TranslateThinking,
   type TranslateContextLevel,
+  type TranslateTriggerMode,
+  type TranslateOverlaySize,
 } from '../settings/types';
 
 const KEY = 'extensions.zotero-ai-sidebar.translateSettings';
@@ -31,6 +33,8 @@ export function normalizeTranslateSettings(value: unknown): TranslateSettings {
     thinking: pickThinking(input.thinking),
     ctxLevel: pickCtxLevel(input.ctxLevel),
     overlayPosition: input.overlayPosition === 'below' ? 'below' : 'above',
+    overlaySize: pickOverlaySize(input.overlaySize),
+    triggerMode: pickTriggerMode(input.triggerMode),
     prevSentenceKey: typeof input.prevSentenceKey === 'string' && input.prevSentenceKey
       ? input.prevSentenceKey : DEFAULT_TRANSLATE_SETTINGS.prevSentenceKey,
     nextSentenceKey: typeof input.nextSentenceKey === 'string' && input.nextSentenceKey
@@ -39,9 +43,21 @@ export function normalizeTranslateSettings(value: unknown): TranslateSettings {
 }
 
 function pickThinking(v: unknown): TranslateThinking {
-  return v === 'none' || v === 'low' || v === 'medium' || v === 'high' ? v : 'low';
+  return v === 'low' || v === 'medium' || v === 'high' || v === 'xhigh'
+    ? v
+    : DEFAULT_TRANSLATE_SETTINGS.thinking;
 }
 
 function pickCtxLevel(v: unknown): TranslateContextLevel {
-  return v === 'none' || v === 'paragraph' || v === 'page' ? v : 'none';
+  return v === 'none' || v === 'paragraph' || v === 'page'
+    ? v
+    : DEFAULT_TRANSLATE_SETTINGS.ctxLevel;
+}
+
+function pickTriggerMode(v: unknown): TranslateTriggerMode {
+  return v === 'double' ? 'double' : DEFAULT_TRANSLATE_SETTINGS.triggerMode;
+}
+
+function pickOverlaySize(v: unknown): TranslateOverlaySize {
+  return v === 'adaptive' ? 'adaptive' : DEFAULT_TRANSLATE_SETTINGS.overlaySize;
 }

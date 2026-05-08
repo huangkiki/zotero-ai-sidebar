@@ -32,6 +32,14 @@ describe('splitSentences', () => {
     expect(result).toHaveLength(1);
   });
 
+  it('can split after an acronym at a sentence boundary', () => {
+    const result = splitSentences('I live in the U.S.A. Next sentence.');
+    expect(result.map((r) => r.text)).toEqual([
+      'I live in the U.S.A.',
+      'Next sentence.',
+    ]);
+  });
+
   it('requires whitespace after period to split', () => {
     const result = splitSentences('foo.bar. Next sentence.');
     expect(result.map((r) => r.text)).toEqual(['foo.bar.', 'Next sentence.']);

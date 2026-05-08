@@ -71,20 +71,6 @@ import {
 } from "../ui/math";
 import { serializeSelectionAsMarkdown } from "../ui/selection-serialize";
 import { TranslateModeController } from "../translate/translate-mode";
-import {
-  loadTranslateSettings,
-  saveTranslateSettings,
-} from "../translate/settings";
-import {
-  parseKeybinding,
-  formatKeybinding,
-} from "../translate/keybinding";
-import type {
-  TranslateSettings,
-  TranslateThinking,
-  TranslateContextLevel,
-  TranslateOverlayPosition,
-} from "../settings/types";
 
 const translateControllers = new WeakMap<Window, TranslateModeController>();
 
@@ -97,6 +83,8 @@ const NOTE_ROOT_ID = "zai-note-root";
 const ROOT_ID = "zai-root";
 const TOGGLE_BUTTON_ID = "zai-toggle-button";
 const FLOATING_TOGGLE_ID = "zai-floating-toggle";
+const READER_TRANSLATE_GROUP_ID = "zai-reader-translate-group";
+const READER_TRANSLATE_STYLE_ID = "zai-reader-translate-style";
 const contextPolicy = DEFAULT_CONTEXT_POLICY;
 const IMAGE_PROMPT_MAX_DIMENSION = 2048;
 const SELECTION_CONTEXT_RADIUS_CHARS = 2500;
@@ -145,6 +133,8 @@ interface WindowSidebarState {
   copyHandlerCleanup?: () => void;
   selectionMenuCleanup?: () => void;
   promptShortcutCleanup?: () => void;
+  readerTranslateToolbarCleanup?: () => void;
+  initialRefreshCleanup?: () => void;
   lastCopySelection?: { text: string; updatedAt: number };
   toggleButton?: Element;
   floatingButton?: HTMLElement;
@@ -154,6 +144,7 @@ interface WindowSidebarState {
 }
 
 const windowSidebars = new WeakMap<Window, WindowSidebarState>();
+const windowRegisterRetries = new WeakMap<Window, number>();
 const mountedWindows = new Set<Window>();
 const selectedTextByItem = new Map<number, string>();
 const selectedAnnotationByItem = new Map<number, SelectionAnnotationDraft>();
@@ -211,6 +202,7 @@ interface PanelState {
   cancellingTaskID?: string;
   queueOpen?: boolean;
   processingQueuedTask?: boolean;
+  renderRecoveryAttempts?: number;
 }
 
 interface MessagesScrollSnapshot {
@@ -307,19 +299,35 @@ function renderMount(mount: HTMLElement, itemID: number | null) {
 function renderPanel(mount: HTMLElement, state: PanelState) {
   const doc = mount.ownerDocument!;
   capturePanelState(mount, state);
-  refreshActiveReaderSelection(doc.defaultView, state.itemID, false);
+  try {
+    refreshActiveReaderSelection(doc.defaultView, state.itemID, false);
+  } catch (err) {
+    debugZai("sidebar.selection-refresh.failed", { error: errorMessage(err) });
+  }
+
+  let panel: HTMLElement;
+  try {
+    panel = el(doc, "div", "zai-app native-panel");
+    panel.addEventListener("keydown", (event: KeyboardEvent) => {
+      handleTaskEscape(mount, state, event);
+    });
+    applyChatAppearance(panel, state.uiSettings, state.localUiSettings);
+    panel.append(renderToolbar(doc, mount, state));
+    panel.append(renderContextCard(doc, state.itemID));
+    panel.append(renderMessages(doc, mount, state));
+    panel.append(renderInput(doc, mount, state));
+  } catch (err) {
+    debugZai("sidebar.render.failed", {
+      error: errorMessage(err),
+      itemID: state.itemID,
+    });
+    mount.replaceChildren(renderPanelRecovery(doc, mount, state, err));
+    schedulePanelRecovery(mount, state);
+    return;
+  }
+
+  state.renderRecoveryAttempts = 0;
   mount.replaceChildren();
-
-  const panel = el(doc, "div", "zai-app native-panel");
-  panel.addEventListener("keydown", (event: KeyboardEvent) => {
-    handleTaskEscape(mount, state, event);
-  });
-  applyChatAppearance(panel, state.uiSettings, state.localUiSettings);
-  panel.append(renderToolbar(doc, mount, state));
-  panel.append(renderContextCard(doc, state.itemID));
-  panel.append(renderMessages(doc, mount, state));
-  panel.append(renderInput(doc, mount, state));
-
   mount.append(panel);
   const shouldScroll = state.scrollToBottom;
   const shouldFocus = state.focusInput;
@@ -334,6 +342,49 @@ function renderPanel(mount: HTMLElement, state: PanelState) {
     }
     restoreChatInput(mount, state, !!shouldFocus);
   });
+}
+
+function renderPanelRecovery(
+  doc: Document,
+  mount: HTMLElement,
+  state: PanelState,
+  err: unknown,
+): HTMLElement {
+  const box = el(doc, "div", "zai-app native-panel");
+  box.setAttribute(
+    "style",
+    [
+      "box-sizing:border-box",
+      "height:100%",
+      "padding:14px",
+      "font:13px/1.45 sans-serif",
+      "background:#fbfaf7",
+      "color:#24211d",
+    ].join(";"),
+  );
+  box.append(
+    el(doc, "strong", "", "AI 对话正在恢复"),
+    el(doc, "div", "", "Zotero 刚加载时界面还没稳定，插件会自动重试。"),
+  );
+  const detail = el(doc, "div", "", errorMessage(err));
+  detail.style.cssText = "margin-top:8px;color:#8a5a44;font-size:12px;";
+  const retry = buttonEl(doc, "立即重试");
+  retry.style.cssText = "margin-top:12px;";
+  retry.addEventListener("click", () => renderPanel(mount, state));
+  box.append(detail, retry);
+  return box;
+}
+
+function schedulePanelRecovery(mount: HTMLElement, state: PanelState): void {
+  const win = mount.ownerDocument?.defaultView;
+  if (!win) return;
+  const attempts = (state.renderRecoveryAttempts ?? 0) + 1;
+  state.renderRecoveryAttempts = attempts;
+  if (attempts > 8) return;
+  const delay = Math.min(1600, 150 * attempts);
+  win.setTimeout(() => {
+    if (states.get(mount) === state) renderPanel(mount, state);
+  }, delay);
 }
 
 function applyChatAppearance(
@@ -498,14 +549,11 @@ function renderToolbar(doc: Document, mount: HTMLElement, state: PanelState) {
   bottomRow.append(settings);
   const win = mount.ownerDocument!.defaultView!;
   const translateBtn = buttonEl(doc, "译");
-  translateBtn.title = "逐句翻译模式（点击切换，右键设置）";
-  syncTranslateBtnState(translateBtn);
+  translateBtn.className = "zai-sidebar-translate-button";
+  translateBtn.title = "逐句翻译模式（点击切换开关）";
+  syncTranslateBtnState(win, translateBtn);
   translateBtn.addEventListener("click", () => {
     void toggleTranslateMode(win, translateBtn);
-  });
-  translateBtn.addEventListener("contextmenu", (ev) => {
-    ev.preventDefault();
-    openTranslateSettingsPopover(win, translateBtn);
   });
   bottomRow.append(translateBtn);
   const hide = buttonEl(doc, "隐藏");
@@ -954,14 +1002,34 @@ function renderPresetEditor(
 }
 
 function renderContextCard(doc: Document, itemID: number | null) {
-  const item = itemID == null ? null : Zotero.Items.get(itemID);
-  const title = item?.getField("title") || "未选择条目";
+  const item = safeGetItem(itemID);
+  const title =
+    item && typeof item.getField === "function"
+      ? item.getField("title") || "未选择条目"
+      : "未选择条目";
   const card = el(doc, "div", "ctx-card");
   card.append(
     el(doc, "div", "ctx-title", title),
     el(doc, "div", "ctx-meta", `Item ID: ${itemID ?? "none"}`),
   );
   return card;
+}
+
+function safeGetItem(itemID: number | null): { getField?: (field: string) => string } | null {
+  if (itemID == null) return null;
+  try {
+    const item = Zotero.Items.get(itemID) as
+      | { getField?: (field: string) => string }
+      | false
+      | null;
+    return item || null;
+  } catch (err) {
+    debugZai("sidebar.item.get.failed", {
+      itemID,
+      error: errorMessage(err),
+    });
+    return null;
+  }
 }
 
 function renderQuickPrompts(
@@ -3769,8 +3837,8 @@ function refreshActiveReaderSelection(
   clearWhenEmpty: boolean,
 ): string {
   const reader = getActiveReader(win);
-  const text = getActiveReaderSelection(reader);
   const ids = readerItemIDs(reader, itemID);
+  const text = getActiveReaderSelection(reader);
   if (text) {
     rememberReaderSelection(reader, itemID, text);
     return shouldIgnoreSelectedText(ids, text) ? "" : text;
@@ -4195,7 +4263,7 @@ function registerReaderSelectionCapture() {
     for (const win of mountedWindows) {
       const sidebar = windowSidebars.get(win);
       if (sidebar)
-        updateSelectionIndicators(sidebar.mount, getSelectedItemID(win));
+        updateSelectionIndicators(sidebar.mount, safeSelectedItemID(win));
     }
   };
   readerAPI.registerEventListener(
@@ -4218,7 +4286,7 @@ function unregisterReaderSelectionCapture() {
 function startSelectionMonitor(win: Window, sidebar: WindowSidebarState) {
   if (sidebar.selectionMonitorID != null) return;
   sidebar.selectionMonitorID = win.setInterval(() => {
-    const itemID = getSelectedItemID(win);
+    const itemID = safeSelectedItemID(win);
     const before = getStoredSelectedText(itemID);
     const focusInSidebar =
       isFocusInside(sidebar.mount) || isFocusInside(sidebar.noteMount);
@@ -7558,9 +7626,10 @@ export function registerSidebarForWindow(win: Window) {
   const contextPane = doc.getElementById("zotero-context-pane");
   const parent = contextPane?.parentElement;
   if (!contextPane || !parent) {
-    Zotero.debug("[Zotero AI Sidebar] Could not find Zotero pane container");
+    scheduleWindowRegisterRetry(win);
     return;
   }
+  windowRegisterRetries.delete(win);
 
   doc.getElementById(SPLITTER_ID)?.remove();
   doc.getElementById(COLUMN_ID)?.remove();
@@ -7667,7 +7736,153 @@ export function registerSidebarForWindow(win: Window) {
   installSidebarSelectionMenu(win, state);
   installReaderPromptShortcutHandler(win, state);
   renderWindowSidebar(win);
+  scheduleInitialSidebarRefresh(win, state);
 }
+
+function scheduleWindowRegisterRetry(win: Window): void {
+  const attempt = (windowRegisterRetries.get(win) ?? 0) + 1;
+  windowRegisterRetries.set(win, attempt);
+  if (attempt > 24) {
+    Zotero.debug("[Zotero AI Sidebar] Could not find Zotero pane container");
+    return;
+  }
+  win.setTimeout(() => registerSidebarForWindow(win), 250);
+}
+
+function installReaderTranslateToolbar(
+  win: Window,
+  state: WindowSidebarState,
+): void {
+  const mountedGroups: HTMLElement[] = [];
+
+  const mountIntoActiveReader = () => {
+    const reader = getActiveReader(win) as any;
+    for (const readerWin of activeReaderWindows(reader)) {
+      const doc = readerWin.document;
+      if (!doc || doc.getElementById(READER_TRANSLATE_GROUP_ID)) {
+        if (doc) syncReaderTranslateButtons(win, doc);
+        continue;
+      }
+      const toolbar = findReaderToolbar(doc);
+      if (!toolbar) continue;
+      ensureReaderTranslateToolbarStyle(doc);
+      const group = doc.createElement("span");
+      group.id = READER_TRANSLATE_GROUP_ID;
+      group.className = "zai-reader-translate-group";
+
+      const translateBtn = doc.createElement("button");
+      translateBtn.type = "button";
+      translateBtn.className = "zai-reader-translate-button";
+      translateBtn.textContent = "译";
+      translateBtn.title = "逐句翻译模式 (Alt+T)，翻译参数在插件设置中配置";
+      translateBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void toggleTranslateMode(win, translateBtn);
+      });
+
+      group.append(translateBtn);
+      insertReaderTranslateGroup(toolbar, group);
+      mountedGroups.push(group);
+      syncReaderTranslateButtons(win, doc);
+    }
+  };
+
+  mountIntoActiveReader();
+  const monitorID = win.setInterval(mountIntoActiveReader, 500);
+  state.readerTranslateToolbarCleanup = () => {
+    win.clearInterval(monitorID);
+    for (const group of mountedGroups) group.remove();
+  };
+}
+
+function findReaderToolbar(doc: Document): HTMLElement | null {
+  if (!doc.querySelector(".textLayer,.pdfViewer,.page[data-page-number],#viewerContainer")) {
+    return null;
+  }
+  const selectors = [
+    ".reader-toolbar",
+    "#toolbarViewer",
+    "#toolbarViewerLeft",
+    "#toolbarContainer",
+    "[role='toolbar']",
+    ".toolbar",
+    ".toolbar-container",
+  ];
+  for (const selector of selectors) {
+    for (const candidate of Array.from(doc.querySelectorAll(selector))) {
+      const toolbar = candidate as HTMLElement;
+      if (typeof toolbar.querySelector === "function" && toolbar.querySelector("button,toolbarbutton")) {
+        return toolbar;
+      }
+    }
+  }
+  return null;
+}
+
+function insertReaderTranslateGroup(toolbar: HTMLElement, group: HTMLElement): void {
+  const before =
+    toolbar.querySelector("spacer[flex='1'], .spacer, .toolbar-spacer") ??
+    toolbar.querySelector("#scaleSelectContainer, #numPages") ??
+    null;
+  toolbar.insertBefore(group, before);
+}
+
+function syncReaderTranslateButtons(win: Window, doc?: Document): void {
+  const targetDoc = doc ?? win.document;
+  const enabled = translateControllers.get(win)?.isEnabled() ?? false;
+  const buttons = Array.from(
+    targetDoc.querySelectorAll(".zai-reader-translate-button"),
+  ) as HTMLElement[];
+  for (const button of buttons) {
+    button.classList.toggle("zai-reader-translate-button--active", enabled);
+    setTranslateButtonLabel(button, enabled);
+  }
+}
+
+function ensureReaderTranslateToolbarStyle(doc: Document): void {
+  if (doc.getElementById(READER_TRANSLATE_STYLE_ID)) return;
+  const style = doc.createElement("style");
+  style.id = READER_TRANSLATE_STYLE_ID;
+  style.textContent = READER_TRANSLATE_STYLE_TEXT;
+  (doc.head ?? doc.documentElement)?.append(style);
+}
+
+const READER_TRANSLATE_STYLE_TEXT = `
+.zai-reader-translate-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-inline: 6px;
+  vertical-align: middle;
+}
+.zai-reader-translate-button {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font: 600 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.zai-reader-translate-button:hover {
+  background: rgba(128, 128, 128, 0.14);
+}
+.zai-reader-translate-button--active {
+  color: #d34a24;
+  background: rgba(239, 91, 43, 0.14);
+  border-color: #ef5b2b;
+}
+body.zai-translate-mode-on .page { cursor: crosshair !important; }
+body.zai-translate-mode-on .textLayer span:hover {
+  background: rgba(74, 140, 247, 0.10);
+  border-radius: 2px;
+}
+`;
 
 function installReaderPromptShortcutHandler(
   win: Window,
@@ -7679,6 +7894,7 @@ function installReaderPromptShortcutHandler(
     if (!targetWin || installedWindows.has(targetWin)) return;
     installedWindows.add(targetWin);
     const handler = (event: KeyboardEvent) => {
+      if (handleTranslateModeShortcut(win, event)) return;
       if (handleReaderTaskEscape(win, targetWin, sidebar, event)) return;
       void handleReaderPromptShortcut(win, targetWin, sidebar, event);
     };
@@ -7700,6 +7916,22 @@ function installReaderPromptShortcutHandler(
   };
 }
 
+function handleTranslateModeShortcut(win: Window, event: KeyboardEvent): boolean {
+  if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false;
+  if (event.key.toLowerCase() !== "t") return false;
+  if (isEditableEventTarget(event.target)) return false;
+  event.preventDefault();
+  event.stopPropagation();
+  const readerDoc = (event.target as Node | null)?.ownerDocument;
+  const button =
+    readerDoc?.querySelector<HTMLElement>(".zai-reader-translate-button") ??
+    win.document.querySelector<HTMLElement>(".zai-reader-translate-button");
+  const fallback = win.document.documentElement as HTMLElement | null;
+  if (!button && !fallback) return true;
+  void toggleTranslateMode(win, button ?? fallback!);
+  return true;
+}
+
 async function handleReaderPromptShortcut(
   win: Window,
   sourceWin: Window,
@@ -7715,7 +7947,7 @@ async function handleReaderPromptShortcut(
   );
   if (!prompt) return;
 
-  const itemID = getSelectedItemID(win);
+  const itemID = safeSelectedItemID(win);
   const selectedText = await getSelectedTextForPrompt(sidebar.mount, itemID);
   if (!selectedText) return;
 
@@ -8541,6 +8773,8 @@ export function unregisterSidebarForWindow(win: Window) {
   const state = windowSidebars.get(win);
   if (!state) return;
 
+  disableTranslateMode(win);
+
   const pane = (win as any).ZoteroPane;
   if (
     state.originalItemSelected &&
@@ -8561,6 +8795,10 @@ export function unregisterSidebarForWindow(win: Window) {
   state.selectionMenuCleanup = undefined;
   state.promptShortcutCleanup?.();
   state.promptShortcutCleanup = undefined;
+  state.readerTranslateToolbarCleanup?.();
+  state.readerTranslateToolbarCleanup = undefined;
+  state.initialRefreshCleanup?.();
+  state.initialRefreshCleanup = undefined;
   state.noteColumn.remove();
   state.toggleButton?.remove();
   state.floatingButton?.remove();
@@ -8581,7 +8819,7 @@ function renderWindowSidebar(win: Window) {
   const state = windowSidebars.get(win);
   if (!state) return;
 
-  const itemID = getSelectedItemID(win);
+  const itemID = safeSelectedItemID(win);
   const panelState = states.get(state.mount);
   if (panelState?.sending) {
     updateSelectionIndicators(state.mount, panelState.itemID);
@@ -8591,6 +8829,38 @@ function renderWindowSidebar(win: Window) {
 
   renderMount(state.mount, itemID);
   updateToggleButton(state);
+}
+
+function safeSelectedItemID(win: Window): number | null {
+  try {
+    return getSelectedItemID(win);
+  } catch (err) {
+    debugZai("sidebar.selected-item.failed", { error: errorMessage(err) });
+    return null;
+  }
+}
+
+function scheduleInitialSidebarRefresh(win: Window, state: WindowSidebarState) {
+  const timers: number[] = [];
+  let raf = 0;
+  const refresh = () => {
+    if (windowSidebars.get(win) !== state) return;
+    renderWindowSidebar(win);
+  };
+
+  // On cold start Zotero can call plugin window-load hooks before the item
+  // pane selection and stylesheet layout have fully settled. A few delayed
+  // refreshes mirror the later hide/show path without changing normal chat.
+  if (win.requestAnimationFrame) {
+    raf = win.requestAnimationFrame(refresh);
+  }
+  for (const delay of [0, 100, 400, 1200]) {
+    timers.push(win.setTimeout(refresh, delay));
+  }
+  state.initialRefreshCleanup = () => {
+    if (raf && win.cancelAnimationFrame) win.cancelAnimationFrame(raf);
+    for (const timer of timers) win.clearTimeout(timer);
+  };
 }
 
 function installToggleButton(win: Window, state: WindowSidebarState) {
@@ -8654,6 +8924,7 @@ function setColumnCollapsed(
   const column = state.column as Element & { collapsed?: boolean };
   const splitter = state.splitter as Element & { hidden?: boolean };
   if (collapsed) {
+    disableTranslateMode(win);
     column.collapsed = true;
     splitter.hidden = true;
     state.column.setAttribute("collapsed", "true");
@@ -8806,203 +9077,87 @@ function itemIDToParentID(itemID: unknown): number | null {
 }
 
 async function toggleTranslateMode(win: Window, btn: HTMLElement): Promise<void> {
-  const prefs = zoteroPrefs();
-  const settings = loadTranslateSettings(prefs);
-  const next = !settings.enabled;
-  saveTranslateSettings(prefs, { ...settings, enabled: next });
-
   const ctrl = await getOrCreateTranslateController(win);
   if (!ctrl) {
-    saveTranslateSettings(prefs, { ...settings, enabled: false });
-    syncTranslateBtnState(btn);
+    syncTranslateBtnState(win, btn);
+    flashButton(btn as HTMLButtonElement, "无PDF");
     return;
   }
-  if (next) await ctrl.enable();
-  else ctrl.disable();
-  syncTranslateBtnState(btn);
+  if (ctrl.isEnabled()) {
+    ctrl.disable();
+    translateControllers.delete(win);
+    syncTranslateBtnState(win, btn);
+  } else {
+    try {
+      await ctrl.enable();
+      syncTranslateBtnState(win, btn);
+    } catch (err) {
+      debugZai("translate.enable.failed", { error: errorMessage(err) });
+      syncTranslateBtnState(win, btn);
+      flashButton(btn as HTMLButtonElement, "失败");
+    }
+  }
 }
 
 async function getOrCreateTranslateController(win: Window): Promise<TranslateModeController | null> {
-  const existing = translateControllers.get(win);
-  if (existing) return existing;
   const reader = getActiveReader(win);
   if (!reader) return null;
+  const existing = translateControllers.get(win);
   const prefs = zoteroPrefs();
+  const presets = loadPresets(prefs);
+  if (existing?.isForReader(reader)) {
+    existing.refreshPresets(presets);
+    return existing;
+  }
+  existing?.disable();
   const ctrl = new TranslateModeController({
     prefs,
-    presets: loadPresets(prefs),
+    presets,
     reader,
   });
   translateControllers.set(win, ctrl);
   return ctrl;
 }
 
-function syncTranslateBtnState(btn: HTMLElement): void {
-  const enabled = loadTranslateSettings(zoteroPrefs()).enabled;
+function syncTranslateBtnState(win: Window, btn: HTMLElement): void {
+  const enabled = translateControllers.get(win)?.isEnabled() ?? false;
   btn.classList.toggle("zai-toolbar-icon--active", enabled);
+  btn.classList.toggle("zai-reader-translate-button--active", enabled);
+  setTranslateButtonLabel(btn, enabled);
+  syncReaderTranslateButtons(win, btn.ownerDocument ?? undefined);
 }
 
-function openTranslateSettingsPopover(win: Window, anchor: HTMLElement): void {
-  const doc = win.document;
-  const existing = doc.getElementById("zai-translate-settings-popover");
-  if (existing) { existing.remove(); return; }
-
-  const prefs = zoteroPrefs();
-  let settings = loadTranslateSettings(prefs);
-  const presets = loadPresets(prefs).filter((p) => p.provider === "openai");
-
-  const pop = doc.createElement("div");
-  pop.id = "zai-translate-settings-popover";
-  pop.className = "zai-translate-settings-popover";
-
-  const update = (patch: Partial<TranslateSettings>): void => {
-    settings = { ...settings, ...patch };
-    saveTranslateSettings(prefs, settings);
-    syncTranslateBtnState(anchor);
-  };
-
-  // ON / OFF row
-  pop.append(makeRow(doc, "状态", makeToggle(doc, settings.enabled, async (val) => {
-    update({ enabled: val });
-    const ctrl = await getOrCreateTranslateController(win);
-    if (!ctrl) return;
-    if (val) await ctrl.enable(); else ctrl.disable();
-  })));
-
-  // Preset
-  const presetSelect = doc.createElement("select");
-  presetSelect.append(makeOption(doc, "", "(选择 GPT 配置)"));
-  for (const p of presets) presetSelect.append(makeOption(doc, p.id, p.label));
-  presetSelect.value = settings.presetId;
-  pop.append(makeRow(doc, "API", presetSelect));
-
-  // Model
-  const modelSelect = doc.createElement("select");
-  const refreshModels = (): void => {
-    modelSelect.replaceChildren();
-    const preset = presets.find((p) => p.id === settings.presetId) ?? presets[0];
-    const list = preset?.models?.length ? preset.models : (preset ? [preset.model] : []);
-    for (const m of list) modelSelect.append(makeOption(doc, m, m));
-    modelSelect.value = settings.model && list.includes(settings.model) ? settings.model : (list[0] ?? "");
-    if (modelSelect.value !== settings.model) update({ model: modelSelect.value });
-  };
-  refreshModels();
-  pop.append(makeRow(doc, "模型", modelSelect));
-
-  presetSelect.addEventListener("change", () => {
-    update({ presetId: presetSelect.value, model: "" });
-    refreshModels();
-  });
-  modelSelect.addEventListener("change", () => update({ model: modelSelect.value }));
-
-  pop.append(makeRow(doc, "思考", makeSegmented<TranslateThinking>(doc,
-    [["none", "关"], ["low", "低"], ["medium", "中"], ["high", "高"]],
-    settings.thinking, (v) => update({ thinking: v }))));
-
-  pop.append(makeRow(doc, "上下文", makeSegmented<TranslateContextLevel>(doc,
-    [["none", "无"], ["paragraph", "段落"], ["page", "整页"]],
-    settings.ctxLevel, (v) => update({ ctxLevel: v }))));
-
-  pop.append(makeRow(doc, "位置", makeSegmented<TranslateOverlayPosition>(doc,
-    [["above", "句上方"], ["below", "句下方"]],
-    settings.overlayPosition, (v) => update({ overlayPosition: v }))));
-
-  pop.append(makeRow(doc, "下一句", makeKeyRecorder(doc, settings.nextSentenceKey,
-    (v) => update({ nextSentenceKey: v }))));
-  pop.append(makeRow(doc, "上一句", makeKeyRecorder(doc, settings.prevSentenceKey,
-    (v) => update({ prevSentenceKey: v }))));
-
-  (doc.body ?? doc.documentElement!).append(pop);
-  const anchorRect = anchor.getBoundingClientRect();
-  pop.style.position = "fixed";
-  pop.style.right = `${win.innerWidth - anchorRect.right}px`;
-  pop.style.top = `${anchorRect.bottom + 4}px`;
-  pop.style.zIndex = "9999";
-
-  const dismiss = (ev: Event): void => {
-    if (pop.contains(ev.target as Node)) return;
-    if (anchor === ev.target) return;
-    pop.remove();
-    win.removeEventListener("mousedown", dismiss, true);
-  };
-  win.addEventListener("mousedown", dismiss, true);
+function disableTranslateMode(win: Window): void {
+  translateControllers.get(win)?.disable();
+  translateControllers.delete(win);
+  syncTranslateButtons(win);
 }
 
-function makeRow(doc: Document, label: string, control: HTMLElement): HTMLElement {
-  const row = doc.createElement("div");
-  row.className = "zai-translate-settings-popover__row";
-  const lab = doc.createElement("label");
-  lab.textContent = label;
-  row.append(lab, control);
-  return row;
-}
-
-function makeOption(doc: Document, value: string, label: string): HTMLOptionElement {
-  const o = doc.createElement("option");
-  o.value = value;
-  o.textContent = label;
-  return o;
-}
-
-function makeToggle(doc: Document, value: boolean, onChange: (v: boolean) => void): HTMLElement {
-  const cb = doc.createElement("input");
-  cb.type = "checkbox";
-  cb.checked = value;
-  cb.addEventListener("change", () => onChange(cb.checked));
-  return cb;
-}
-
-function makeSegmented<T extends string>(
-  doc: Document,
-  options: Array<[T, string]>,
-  current: T,
-  onChange: (v: T) => void,
-): HTMLElement {
-  const wrap = doc.createElement("div");
-  wrap.className = "zai-translate-segmented";
-  for (const [val, label] of options) {
-    const btn = doc.createElement("button");
-    btn.type = "button";
-    btn.textContent = label;
-    btn.classList.toggle("zai-translate-segmented__btn--active", val === current);
-    btn.addEventListener("click", () => {
-      for (const c of wrap.children) c.classList.remove("zai-translate-segmented__btn--active");
-      btn.classList.add("zai-translate-segmented__btn--active");
-      onChange(val);
-    });
-    wrap.append(btn);
+function syncTranslateButtons(win: Window): void {
+  const docs = [win.document];
+  const reader = getActiveReader(win) as any;
+  for (const readerWin of activeReaderWindows(reader)) docs.push(readerWin.document);
+  const enabled = translateControllers.get(win)?.isEnabled() ?? false;
+  for (const doc of docs) {
+    const buttons = Array.from(
+      doc.querySelectorAll(".zai-sidebar-translate-button,.zai-reader-translate-button"),
+    ) as HTMLElement[];
+    for (const button of buttons) {
+      button.classList.toggle("zai-toolbar-icon--active", enabled);
+      button.classList.toggle("zai-reader-translate-button--active", enabled);
+      setTranslateButtonLabel(button, enabled);
+    }
   }
-  return wrap;
 }
 
-function makeKeyRecorder(doc: Document, value: string, onChange: (v: string) => void): HTMLElement {
-  const btn = doc.createElement("button");
-  btn.type = "button";
-  btn.className = "zai-translate-keyrecorder";
-  btn.textContent = value || "(未设置)";
-  btn.addEventListener("click", () => {
-    btn.textContent = "按下按键…";
-    btn.classList.add("zai-translate-keyrecorder--listening");
-    const onKey = (ev: KeyboardEvent): void => {
-      ev.preventDefault();
-      ev.stopPropagation();
-      if (["Shift", "Control", "Alt", "Meta"].includes(ev.key)) return;
-      const fmt = formatKeybinding({
-        key: ev.key,
-        shift: ev.shiftKey,
-        ctrl: ev.ctrlKey,
-        alt: ev.altKey,
-        meta: ev.metaKey,
-      });
-      btn.removeEventListener("keydown", onKey, true);
-      btn.classList.remove("zai-translate-keyrecorder--listening");
-      btn.textContent = fmt;
-      onChange(fmt);
-    };
-    btn.addEventListener("keydown", onKey, true);
-    btn.focus();
-  });
-  return btn;
+function setTranslateButtonLabel(btn: HTMLElement, enabled: boolean): void {
+  if (
+    !btn.classList.contains("zai-sidebar-translate-button") &&
+    !btn.classList.contains("zai-reader-translate-button")
+  ) {
+    return;
+  }
+  btn.textContent = enabled ? "译✓" : "译";
 }
 
 declare global {

@@ -51,6 +51,20 @@ describe("pdf locator", () => {
     expect(result?.sortIndex).toMatch(/^00000\|000000\|00690$/);
   });
 
+  it("can restrict locate to a specific page", async () => {
+    const locator = await createPdfLocator(
+      readerWithPages([
+        [item("Repeated sentence.", 0, 100)],
+        [item("Repeated sentence.", 0, 200)],
+      ]),
+    );
+
+    const result = await locator.locate("Repeated sentence.", { pageIndex: 1 });
+
+    expect(result?.pageIndex).toBe(1);
+    expect(result?.rects).toEqual([[0, 200, 180, 210]]);
+  });
+
   it("returns one rect per line for cross-line matches", async () => {
     const locator = await createPdfLocator(
       readerWithPages([
@@ -379,6 +393,69 @@ describe("pdf locator", () => {
 
     await expect(locator.getFullText()).resolves.toBe("fallback");
   });
+
+  it("does not merge sentences across decimal model names", async () => {
+    const text =
+      "We describe π0.5, a new model. π0.5 uses data. Our system works.";
+    const locator = await createPdfLocator(
+      readerWithProcessedPages([processedPage(processedWord(text, 0, 100))]),
+    );
+
+    const hit = await locator.sentenceAtPoint?.(0, {
+      x: text.indexOf("uses") * 10 + 5,
+      y: 105,
+    });
+
+    expect(hit?.text).toBe("π0.5 uses data.");
+    expect(hit?.pageSentenceIndex).toBe(1);
+    expect(hit?.pageSentenceCount).toBe(3);
+  });
+
+  it("splits processed text using Zotero spaceAfter word gaps", async () => {
+    const locator = await createPdfLocator(
+      readerWithProcessedPages([
+        processedPage([
+          ...processedWord("First", 0, 100, { spaceAfter: true }),
+          ...processedWord("sentence.", 60, 100, { spaceAfter: true }),
+          ...processedWord("Second", 180, 100, { spaceAfter: true }),
+          ...processedWord("sentence.", 260, 100),
+        ]),
+      ]),
+    );
+
+    const hit = await locator.sentenceAtPoint?.(0, { x: 185, y: 105 });
+
+    expect(hit?.text).toBe("Second sentence.");
+    expect(hit?.pageSentenceIndex).toBe(1);
+    expect(hit?.pageSentenceCount).toBe(2);
+  });
+
+  it("keeps a sentence together across a column continuation", async () => {
+    const locator = await createPdfLocator(
+      readerWithProcessedPages([
+        processedPage([
+          ...processedWord("First sentence.", 0, 120, {
+            lineBreakAfter: true,
+          }),
+          ...processedWord("Our experiments show long-", 0, 100, {
+            lineBreakAfter: true,
+          }),
+          ...processedWord("horizon skills.", 300, 720, {
+            lineBreakAfter: true,
+          }),
+        ]),
+      ]),
+    );
+
+    const hit = await locator.sentenceAtPoint?.(0, {
+      x: 300 + "horizon".length * 5,
+      y: 725,
+    });
+
+    expect(hit?.text).toBe("Our experiments show long- horizon skills.");
+    expect(hit?.pageSentenceIndex).toBe(1);
+  });
+
 });
 
 function item(

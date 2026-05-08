@@ -80,9 +80,11 @@ export function newPreset(provider: ProviderKind): ModelPreset {
   };
 }
 
-export type TranslateThinking = 'none' | 'low' | 'medium' | 'high';
+export type TranslateThinking = 'low' | 'medium' | 'high' | 'xhigh';
 export type TranslateContextLevel = 'none' | 'paragraph' | 'page';
 export type TranslateOverlayPosition = 'above' | 'below';
+export type TranslateTriggerMode = 'single' | 'double';
+export type TranslateOverlaySize = 'compact' | 'adaptive';
 
 export interface TranslateSettings {
   enabled: boolean;
@@ -91,6 +93,8 @@ export interface TranslateSettings {
   thinking: TranslateThinking;
   ctxLevel: TranslateContextLevel;
   overlayPosition: TranslateOverlayPosition;
+  overlaySize: TranslateOverlaySize;
+  triggerMode: TranslateTriggerMode;
   prevSentenceKey: string;
   nextSentenceKey: string;
 }
@@ -102,6 +106,8 @@ export const DEFAULT_TRANSLATE_SETTINGS: TranslateSettings = {
   thinking: 'low',
   ctxLevel: 'none',
   overlayPosition: 'above',
+  overlaySize: 'compact',
+  triggerMode: 'single',
   prevSentenceKey: 'Shift+Enter',
   nextSentenceKey: 'Enter',
 };

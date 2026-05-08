@@ -1,0 +1,1448 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Zotero AI Sidebar · 逐句翻译设计图</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --bg-2: #161922;
+    --surface: #1d2030;
+    --surface-2: #262a3a;
+    --line: #2a2f42;
+    --line-soft: #1f2330;
+    --text: #e6e8ef;
+    --text-2: #a8acbb;
+    --mute: #6e7286;
+    --accent: #6fa8ff;
+    --accent-2: #4a8cf7;
+    --accent-soft: rgba(111, 168, 255, 0.12);
+    --green: #5dd596;
+    --yellow: #ffd54f;
+    --red: #f0686a;
+    --paper: #f5f1e8;
+    --paper-text: #1d1d1f;
+    --highlight: rgba(255, 213, 79, 0.45);
+    --highlight-strong: rgba(255, 213, 79, 0.85);
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--text); }
+  body {
+    margin: 0;
+    font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  code, pre {
+    font-family: "JetBrains Mono", Consolas, "SF Mono", monospace;
+    font-size: 12.5px;
+  }
+  pre {
+    background: #0a0c12;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    line-height: 1.55;
+    color: #d8dde8;
+  }
+  pre .kw { color: #d29eff; }
+  pre .str { color: #b6e3a8; }
+  pre .num { color: #ffcb6b; }
+  pre .cmt { color: #6e7286; }
+  pre .fn { color: #6fa8ff; }
+  pre .id { color: #e6e8ef; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  header.top {
+    border-bottom: 1px solid var(--line);
+    padding: 28px 48px 22px;
+    background: linear-gradient(180deg, rgba(111, 168, 255, 0.06), transparent);
+  }
+  header.top .crumbs {
+    color: var(--mute);
+    font-size: 11.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  header.top h1 {
+    margin: 0 0 6px;
+    font-size: 26px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  header.top .sub {
+    color: var(--text-2);
+    font-size: 13.5px;
+  }
+
+  main {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 24px 48px 80px;
+  }
+  section {
+    margin: 36px 0 0;
+  }
+  section h2 {
+    margin: 0 0 4px;
+    font-size: 18.5px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+  }
+  section h2 .num {
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+    margin-right: 10px;
+    font-weight: 500;
+  }
+  section h3 {
+    font-size: 14px;
+    color: var(--text-2);
+    margin: 22px 0 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  section .lead {
+    color: var(--text-2);
+    margin: 6px 0 18px;
+    max-width: 780px;
+  }
+
+  /* TL;DR card */
+  .tldr {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-top: 18px;
+  }
+  .tldr .cell {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .tldr .cell .k {
+    font-size: 11px;
+    color: var(--mute);
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    margin-bottom: 6px;
+  }
+  .tldr .cell .v { font-size: 13.5px; color: var(--text); }
+  .tldr .cell .v .accent { color: var(--accent); }
+
+  /* UI mockup styles */
+  .mockup {
+    margin-top: 16px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--bg-2);
+  }
+  .mockup .scen {
+    display: flex;
+    gap: 6px;
+    padding: 10px 14px;
+    background: #0e111a;
+    border-bottom: 1px solid var(--line);
+  }
+  .mockup .scen button {
+    background: transparent;
+    color: var(--text-2);
+    border: 1px solid var(--line);
+    padding: 5px 11px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    cursor: pointer;
+  }
+  .mockup .scen button.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #0a0c12;
+    font-weight: 600;
+  }
+
+  .app {
+    display: grid;
+    grid-template-columns: 200px 1fr 320px;
+    height: 600px;
+  }
+  .left, .chat {
+    background: var(--surface);
+    padding: 12px 14px;
+    color: var(--text-2);
+    border-right: 1px solid var(--line);
+    overflow: auto;
+  }
+  .chat { border-right: 0; border-left: 1px solid var(--line); }
+  .left h4, .chat h4 {
+    font-size: 10.5px;
+    margin: 0 0 10px;
+    color: var(--mute);
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+  }
+  .left ul { list-style: none; margin: 0; padding: 0; font-size: 12.5px; }
+  .left li { padding: 4px 6px; border-radius: 4px; cursor: default; }
+  .left li.active { background: var(--surface-2); color: var(--text); }
+  .chat .empty {
+    color: var(--mute);
+    font-size: 11.5px;
+    border: 1px dashed var(--line);
+    border-radius: 8px;
+    padding: 10px;
+    margin-top: 8px;
+  }
+  .chat .composer {
+    margin-top: 14px;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--mute);
+    background: var(--bg-2);
+    font-size: 11.5px;
+  }
+  .chip {
+    display: inline-block;
+    background: var(--accent-soft);
+    color: var(--accent);
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    margin-bottom: 6px;
+  }
+
+  .reader {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--bg);
+  }
+  .reader-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
+  }
+  .tool {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-2);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .tool:hover { background: var(--surface-2); }
+  .translate-toggle.on {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+  .reader-toolbar .label.on { color: var(--accent); font-size: 11px; }
+  .reader-toolbar .label { color: var(--mute); font-size: 11px; margin-left: 4px; }
+
+  .pdf-area {
+    flex: 1;
+    overflow: auto;
+    padding: 18px;
+    display: flex;
+    justify-content: center;
+    background: #14161b;
+  }
+  .pdf-page {
+    background: var(--paper);
+    color: var(--paper-text);
+    width: 540px;
+    padding: 36px 46px;
+    border-radius: 2px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+    position: relative;
+    font-family: "Times New Roman", "Songti SC", serif;
+    font-size: 12.5px;
+    line-height: 1.7;
+    cursor: default;
+  }
+  body.translate-on .pdf-page { cursor: crosshair; }
+  .pdf-page h1 { font-size: 16px; margin: 0 0 4px; text-align: center; }
+  .pdf-page .auth { text-align: center; font-size: 10.5px; color: #555; margin-bottom: 18px; }
+  .pdf-page h2 {
+    font-size: 12px;
+    margin: 14px 0 6px;
+    font-variant: small-caps;
+  }
+  .pdf-page p { margin: 0 0 10px; text-align: justify; }
+  body.translate-on .sentence:hover {
+    background: rgba(74, 140, 247, 0.10);
+    border-radius: 2px;
+    cursor: pointer;
+  }
+  .sentence.active {
+    background: var(--highlight);
+    box-shadow: 0 0 0 1px var(--highlight-strong) inset;
+    border-radius: 2px;
+  }
+
+  /* Overlay — compact, anchored ABOVE the active sentence so it covers
+     already-read text instead of the next sentence the user is heading toward */
+  .ov {
+    position: absolute;
+    width: 320px;
+    background: #fff;
+    color: #1d1d1f;
+    border: 1px solid #d8d8da;
+    border-radius: 8px;
+    box-shadow: 0 8px 22px rgba(0,0,0,0.22), 0 0 0 1px rgba(255,213,79,0.55);
+    padding: 8px 10px 6px;
+    font-family: -apple-system, "PingFang SC", sans-serif;
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+  /* Down-pointing arrow at bottom: overlay is above sentence */
+  .ov::before {
+    content: "";
+    position: absolute;
+    bottom: -7px;
+    left: 26px;
+    width: 12px; height: 12px;
+    background: #fff;
+    border-right: 1px solid #d8d8da;
+    border-bottom: 1px solid #d8d8da;
+    transform: rotate(45deg);
+  }
+  /* When forced below sentence (no room above), arrow flips to top */
+  .ov.flip-below::before {
+    bottom: auto;
+    top: -7px;
+    border-right: none;
+    border-bottom: none;
+    border-left: 1px solid #d8d8da;
+    border-top: 1px solid #d8d8da;
+  }
+  .ov .meta {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 10px; color: #888; margin-bottom: 4px;
+  }
+  .ov .meta .lang {
+    background: #f1f3f6; color: #555;
+    padding: 1px 6px; border-radius: 999px; font-size: 9.5px;
+  }
+  .ov .dst {
+    color: #1d1d1f; font-size: 13px;
+    line-height: 1.55; margin-bottom: 7px;
+    /* Cap height for very long sentences; scroll within overlay */
+    max-height: 88px;
+    overflow-y: auto;
+  }
+  .ov .cur {
+    display: inline-block; width: 1px; height: 13px;
+    background: #1d1d1f; vertical-align: -2px;
+    animation: blink 1s steps(2) infinite; margin-left: 1px;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  /* Icon-only button row — total height ≈ 26px */
+  .ov .actions { display: flex; gap: 4px; align-items: center; }
+  .ov .actions button {
+    background: #f5f5f7; border: 1px solid #e0e0e3;
+    color: #333; width: 26px; height: 24px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 5px; font-size: 12px; cursor: pointer; padding: 0;
+  }
+  .ov .actions button:hover { background: #ebebef; }
+  .ov .actions button.primary {
+    background: var(--accent-2); border-color: var(--accent-2); color: #fff;
+  }
+  .ov .actions .sp { flex: 1; }
+  .ov .actions .hint {
+    color: #888; font-size: 10px; margin-right: 4px;
+  }
+  .cache-tag {
+    display: inline-flex; align-items: center; gap: 3px;
+    background: #eef6e9; color: #2d6a2a;
+    padding: 1px 6px; border-radius: 3px; font-size: 9.5px;
+  }
+  .ov.error { box-shadow: 0 8px 22px rgba(0,0,0,0.22), 0 0 0 1px rgba(208,69,69,0.5); }
+  .ov.error .dst {
+    color: #b13a3a; font-size: 11.5px;
+    background: #fff4f4; padding: 6px 8px; border-radius: 4px;
+  }
+
+  /* Settings popover anchored under the gear button */
+  .settings-pop {
+    position: absolute;
+    top: 44px; left: 130px;
+    z-index: 50;
+    width: 320px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    box-shadow: 0 12px 30px rgba(0,0,0,0.4);
+    padding: 14px 14px 10px;
+    color: var(--text);
+    font-size: 12.5px;
+  }
+  .settings-pop[hidden] { display: none; }
+  .settings-pop::before {
+    content: "";
+    position: absolute;
+    top: -7px; left: 18px;
+    width: 12px; height: 12px;
+    background: var(--surface);
+    border-left: 1px solid var(--line);
+    border-top: 1px solid var(--line);
+    transform: rotate(45deg);
+  }
+  .settings-pop .row {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 10px;
+  }
+  .settings-pop .row > label {
+    flex: 0 0 80px;
+    color: var(--text-2);
+    font-size: 11.5px;
+  }
+  .settings-pop select {
+    flex: 1;
+    background: var(--bg-2);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-size: 11.5px;
+  }
+  .settings-pop .seg {
+    display: inline-flex; gap: 0;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .settings-pop .seg button {
+    background: transparent;
+    color: var(--text-2);
+    border: 0;
+    padding: 4px 10px;
+    font-size: 11px;
+    cursor: pointer;
+    border-right: 1px solid var(--line);
+  }
+  .settings-pop .seg button:last-child { border-right: 0; }
+  .settings-pop .seg button.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+  .settings-pop .hint-row {
+    color: var(--mute);
+    font-size: 10.5px;
+    margin-left: 90px;
+    margin-top: -4px;
+  }
+  .settings-pop .row.foot {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
+    margin-bottom: 0;
+    justify-content: space-between;
+  }
+  .settings-pop .row.foot .hint-row {
+    margin: 0;
+  }
+  .settings-pop button.primary {
+    background: var(--accent-2);
+    color: #fff;
+    border: 0;
+    padding: 5px 12px;
+    border-radius: 6px;
+    font-size: 11.5px;
+    cursor: pointer;
+  }
+  /* Key recorders: click to capture next keydown as the new binding */
+  .settings-pop .kb-pair {
+    display: flex; align-items: center; gap: 6px;
+    flex: 1;
+  }
+  .settings-pop .kb-label {
+    color: var(--mute);
+    font-size: 11px;
+  }
+  .settings-pop .key-recorder {
+    display: inline-block;
+    background: var(--bg-2);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 2px 8px;
+    font-family: "JetBrains Mono", Consolas, monospace;
+    font-size: 11px;
+    min-width: 70px;
+    text-align: center;
+    cursor: pointer;
+    outline: none;
+    user-select: none;
+  }
+  .settings-pop .key-recorder:hover { border-color: var(--accent); }
+  .settings-pop .key-recorder.recording {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(111, 168, 255, 0.18);
+  }
+  .reader { position: relative; }  /* anchor for .settings-pop */
+
+  /* Pipeline diagram */
+  .pipe {
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 22px 22px 14px;
+    margin-top: 16px;
+    overflow-x: auto;
+  }
+  .pipe svg { display: block; margin: 0 auto; }
+
+  /* Component grid */
+  .comps {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    margin-top: 14px;
+  }
+  .comps .c {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .comps .c h4 {
+    margin: 0 0 8px;
+    font-size: 13.5px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .comps .c h4 .badge {
+    font-size: 10px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+  }
+  .badge.new { background: rgba(93, 213, 150, 0.12); color: var(--green); }
+  .badge.touch { background: rgba(255, 213, 79, 0.12); color: var(--yellow); }
+  .comps .c .body { color: var(--text-2); font-size: 12.5px; line-height: 1.6; }
+  .comps .c code {
+    background: var(--bg-2);
+    color: #b6e3a8;
+    padding: 1px 6px;
+    border-radius: 4px;
+  }
+
+  /* State machine */
+  .states {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 10px;
+    margin-top: 14px;
+  }
+  .states .st {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px 12px 10px;
+    position: relative;
+  }
+  .states .st .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    display: inline-block; margin-right: 6px; vertical-align: 1px;
+  }
+  .states .st .name { font-weight: 600; font-size: 12.5px; }
+  .states .st .desc { color: var(--text-2); font-size: 11.5px; margin-top: 6px; line-height: 1.5; }
+  .st.idle .dot { background: var(--mute); }
+  .st.detecting .dot { background: var(--yellow); animation: pulse 1.4s infinite; }
+  .st.streaming .dot { background: var(--accent); animation: pulse 1s infinite; }
+  .st.done .dot { background: var(--green); }
+  .st.error .dot { background: var(--red); }
+  @keyframes pulse {
+    0%,100% { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
+    50%     { box-shadow: 0 0 0 5px transparent; opacity: 0.55; }
+  }
+
+  /* Cache schema */
+  .schema {
+    margin-top: 14px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .schema table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .schema th, .schema td {
+    text-align: left;
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .schema th {
+    background: #0e111a;
+    color: var(--text-2);
+    font-weight: 500;
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .schema td code {
+    background: var(--bg-2);
+    color: #b6e3a8;
+    padding: 1px 6px;
+    border-radius: 4px;
+  }
+  .schema tr:last-child td { border-bottom: 0; }
+
+  /* File list */
+  .files {
+    margin-top: 14px;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+  .files .f {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 12px;
+  }
+  .files .f .path {
+    font-family: "JetBrains Mono", monospace;
+    color: #b6e3a8;
+    font-size: 11.5px;
+  }
+  .files .f .why { color: var(--text-2); margin-top: 4px; font-size: 11.5px; }
+  .files .f .badge {
+    font-size: 9.5px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    margin-left: 6px;
+    vertical-align: 2px;
+  }
+
+  /* Defaults */
+  .defaults {
+    margin-top: 14px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 18px;
+  }
+  .defaults dl { margin: 0; display: grid; grid-template-columns: 200px 1fr; gap: 10px 18px; }
+  .defaults dt { color: var(--text-2); font-size: 12px; }
+  .defaults dd { margin: 0; font-size: 12.5px; }
+  .defaults dd code { background: var(--bg-2); color: #b6e3a8; padding: 1px 6px; border-radius: 4px; }
+
+  /* Risks */
+  .risks {
+    margin-top: 14px;
+    display: grid;
+    gap: 10px;
+  }
+  .risk {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--yellow);
+    border-radius: 8px;
+    padding: 11px 14px;
+  }
+  .risk .t { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+  .risk .b { color: var(--text-2); font-size: 12.5px; line-height: 1.55; }
+
+  hr { border: 0; border-top: 1px solid var(--line); margin: 30px 0 0; }
+  .footer-note {
+    color: var(--mute);
+    font-size: 11.5px;
+    margin-top: 30px;
+    border-top: 1px solid var(--line);
+    padding-top: 16px;
+  }
+</style>
+</head>
+<body class="translate-on">
+
+<header class="top">
+  <div class="crumbs">Zotero AI Sidebar · 设计图 · 2026-05-08</div>
+  <h1>逐句翻译 (Sentence-by-Sentence Translation)</h1>
+  <div class="sub">
+    点击 PDF 任意一行 → 自动识别整句 → 浮层流式显示译文。线性阅读场景，浮层贴句子，独立缓存随云同步。
+  </div>
+</header>
+
+<main>
+
+  <!-- 1. TL;DR -->
+  <section>
+    <h2><span class="num">01</span>核心决策</h2>
+    <div class="lead">六个维度全部锁定，下面每一条对应后续一节。</div>
+    <div class="tldr">
+      <div class="cell"><div class="k">使用场景</div><div class="v"><span class="accent">线性阅读</span> + 翻译辅助</div></div>
+      <div class="cell"><div class="k">结果显示</div><div class="v">PDF 浮层 · 贴句子下方</div></div>
+      <div class="cell"><div class="k">触发手势</div><div class="v">toggle <span class="accent">逐句翻译模式</span> + 单击</div></div>
+      <div class="cell"><div class="k">句子识别</div><div class="v">caretPositionFromPoint + pdf-locator + abbr 表</div></div>
+      <div class="cell"><div class="k">翻译后端</div><div class="v">复用 AI provider · text→text 流式 · 不走 tool loop</div></div>
+      <div class="cell"><div class="k">持久化</div><div class="v">独立翻译缓存 · 挂进 sync snapshot</div></div>
+    </div>
+  </section>
+
+  <!-- 2. UI mockup -->
+  <section>
+    <h2><span class="num">02</span>交互效果图</h2>
+    <div class="lead">点上方按钮切换场景：浮层在不同状态下的实际样子。点 PDF 里其他句子可以看浮层移动到对应句下。</div>
+
+    <div class="mockup">
+      <div class="scen">
+        <button data-s="streaming" class="active">流式翻译中</button>
+        <button data-s="done">翻译完成</button>
+        <button data-s="cached">命中缓存</button>
+        <button data-s="error">出错状态</button>
+        <button data-s="off">模式关闭</button>
+      </div>
+
+      <div class="app">
+        <aside class="left">
+          <h4>文库</h4>
+          <ul>
+            <li class="active">📄 attention-is-all-you-need.pdf</li>
+            <li>📄 bert-paper.pdf</li>
+            <li>📄 dpo-paper.pdf</li>
+          </ul>
+        </aside>
+
+        <main class="reader">
+          <div class="reader-toolbar">
+            <button class="tool">↖</button>
+            <button class="tool">T</button>
+            <button class="tool">🖍</button>
+            <button class="tool">U</button>
+            <span style="width:1px;height:16px;background:var(--line);margin:0 6px"></span>
+            <button class="tool translate-toggle on" id="modeBtn" title="逐句翻译模式 (alt+T)">译</button>
+            <button class="tool" id="settingsBtn" title="翻译设置">⚙</button>
+            <span style="flex:1"></span>
+            <span style="font-size:10.5px;color:var(--mute)">125%</span>
+          </div>
+
+          <!-- Settings popover anchored under gear button -->
+          <div class="settings-pop" id="settingsPop" hidden>
+            <div class="row mode-row">
+              <label>逐句翻译模式</label>
+              <div class="seg" data-key="mode" id="modeSeg">
+                <button>OFF</button>
+                <button class="active">ON</button>
+              </div>
+              <span class="hint-row" style="margin: 0 0 0 8px; font-size: 10px;">快捷键 alt+T</span>
+            </div>
+            <div class="row">
+              <label>翻译 API</label>
+              <select id="presetSelect" style="flex:1;">
+                <option selected value="p1">主力 OpenAI</option>
+                <option value="p2">快通道（OpenAI）</option>
+                <option value="p3" disabled>Claude 主力 · 暂不支持</option>
+              </select>
+            </div>
+            <div class="row">
+              <label>翻译模型</label>
+              <select id="modelSelect" style="flex:1;">
+                <option selected>gpt-5.4</option>
+                <option>gpt-5.5</option>
+                <option>gpt-5.4-mini</option>
+                <option>gpt-5.3-codex</option>
+                <option>gpt-5.2</option>
+              </select>
+            </div>
+            <div class="hint-row" style="margin: -4px 0 8px 90px;">和 chat 共用一份 preset 列表（添加/编辑去 prefs）· model 可独立选 · 仅 OpenAI preset 可用</div>
+            <div class="row">
+              <label>Thinking 程度</label>
+              <div class="seg" data-key="thinking">
+                <button class="active">关</button>
+                <button>低</button>
+                <button>中</button>
+                <button>高</button>
+              </div>
+            </div>
+            <div class="row">
+              <label>上下文范围</label>
+              <div class="seg" data-key="ctx">
+                <button>仅本句</button>
+                <button class="active">本段</button>
+                <button>本节</button>
+              </div>
+              <div class="hint-row">含上下文能消歧代词/术语，但每次多送 200~600 token</div>
+            </div>
+            <div class="row">
+              <label>浮层位置</label>
+              <div class="seg" data-key="ovpos" id="ovposSeg">
+                <button class="active">句子上方</button>
+                <button>句子下方</button>
+              </div>
+              <span class="hint-row" style="margin: 0 0 0 8px; font-size: 10px;">所选方向无空间会自动让位</span>
+            </div>
+            <div class="row">
+              <label>翻句快捷键</label>
+              <div class="kb-pair">
+                <span class="kb-label">上一句</span>
+                <kbd class="key-recorder" data-action="prev" tabindex="0">Shift+↵</kbd>
+                <span class="kb-label">下一句</span>
+                <kbd class="key-recorder" data-action="next" tabindex="0">↵</kbd>
+              </div>
+            </div>
+            <div class="hint-row" style="margin: -4px 0 8px 90px;">点击重录 · 必须含修饰键或为 ↵/Tab/方向键 · Esc 取消</div>
+            <div class="row foot">
+              <span class="hint-row">设置写入 prefs · 跟随云同步 · 目标语言固定为简体中文</span>
+              <button class="primary" id="settingsClose">完成</button>
+            </div>
+          </div>
+
+          <div class="pdf-area">
+            <div class="pdf-page" id="page">
+              <h1>Attention Is All You Need</h1>
+              <div class="auth">Vaswani et al. — NeurIPS 2017</div>
+
+              <h2>Abstract</h2>
+              <p>
+                <span class="sentence">The dominant sequence transduction models are based on complex recurrent or convolutional neural networks that include an encoder and a decoder.</span>
+                <span class="sentence">The best performing models also connect the encoder and decoder through an attention mechanism.</span>
+                <span class="sentence active" id="targetSent">We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely.</span>
+                <span class="sentence">Experiments on two machine translation tasks show these models to be superior in quality while being more parallelizable and requiring significantly less time to train.</span>
+              </p>
+
+              <h2>1. Introduction</h2>
+              <p>
+                <span class="sentence">Recurrent neural networks, long short-term memory and gated recurrent neural networks in particular, have been firmly established as state of the art approaches in sequence modeling and transduction problems such as language modeling and machine translation.</span>
+                <span class="sentence">Recurrent models typically factor computation along the symbol positions of the input and output sequences.</span>
+                <span class="sentence">This inherently sequential nature precludes parallelization within training examples, which becomes critical at longer sequence lengths.</span>
+              </p>
+
+              <!-- overlay default: ABOVE active sentence, arrow points down -->
+              <div class="ov" id="ov" style="left: 46px; top: 92px;">
+                <div class="meta">
+                  <span class="lang">EN → 简体中文</span>
+                  <span id="status">● 翻译中…</span>
+                </div>
+                <div class="dst" id="dst">我们提出一种新的简单网络架构——Transformer，仅<span class="cur"></span></div>
+                <div class="actions">
+                  <button class="primary" id="btnSave" title="保存为 Zotero 注释 (S)">💾</button>
+                  <button id="btnPrev" title="上一句 (Shift+↵)">▲</button>
+                  <button id="btnNext" title="下一句 (↵)">▼</button>
+                  <span class="sp"></span>
+                  <span class="hint">S 存 · ↵ / ⇧↵ 下/上一句</span>
+                  <button id="btnClose" title="关闭 (Esc)">✕</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </main>
+
+        <aside class="chat">
+          <h4>AI 聊天</h4>
+          <div class="chip">逐句翻译不污染 chat</div>
+          <div class="empty">尚无消息。"让 AI 解释" 按钮才会把当前句作为 chip 推入 composer。</div>
+          <div class="composer">输入消息…</div>
+        </aside>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. End-to-end pipeline -->
+  <section>
+    <h2><span class="num">03</span>端到端流水线</h2>
+    <div class="lead">从用户在 PDF 上的一次点击，到浮层逐字渲染译文的全过程。蓝色实线 = 主路径；灰色虚线 = 显式用户操作的支路。</div>
+
+    <div class="pipe">
+      <svg viewBox="0 0 1100 380" width="100%" height="380" preserveAspectRatio="xMidYMid meet">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6fa8ff"/>
+          </marker>
+          <marker id="arrowGray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6e7286"/>
+          </marker>
+          <linearGradient id="nodeBg" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stop-color="#262a3a"/>
+            <stop offset="100%" stop-color="#1d2030"/>
+          </linearGradient>
+        </defs>
+
+        <!-- nodes -->
+        <!-- row 1 -->
+        <g>
+          <rect x="20" y="40" width="160" height="58" rx="8" fill="url(#nodeBg)" stroke="#2a2f42"/>
+          <text x="100" y="64" fill="#e6e8ef" font-size="12" text-anchor="middle" font-weight="600">①  iframe pointerdown</text>
+          <text x="100" y="82" fill="#a8acbb" font-size="10.5" text-anchor="middle">translate-mode ON</text>
+        </g>
+        <g>
+          <rect x="210" y="40" width="160" height="58" rx="8" fill="url(#nodeBg)" stroke="#2a2f42"/>
+          <text x="290" y="64" fill="#e6e8ef" font-size="12" text-anchor="middle" font-weight="600">②  caretPositionFromPoint</text>
+          <text x="290" y="82" fill="#a8acbb" font-size="10.5" text-anchor="middle">{ span, offset }</text>
+        </g>
+        <g>
+          <rect x="400" y="40" width="160" height="58" rx="8" fill="url(#nodeBg)" stroke="#2a2f42"/>
+          <text x="480" y="64" fill="#e6e8ef" font-size="12" text-anchor="middle" font-weight="600">③  walk textLayer</text>
+          <text x="480" y="82" fill="#a8acbb" font-size="10.5" text-anchor="middle">→ pageOffset (chars)</text>
+        </g>
+        <g>
+          <rect x="590" y="40" width="160" height="58" rx="8" fill="url(#nodeBg)" stroke="#2a2f42"/>
+          <text x="670" y="64" fill="#e6e8ef" font-size="12" text-anchor="middle" font-weight="600">④  pdf-locator bundle</text>
+          <text x="670" y="82" fill="#a8acbb" font-size="10.5" text-anchor="middle">normalized text + map</text>
+        </g>
+        <g>
+          <rect x="780" y="40" width="160" height="58" rx="8" fill="url(#nodeBg)" stroke="#2a2f42"/>
+          <text x="860" y="64" fill="#e6e8ef" font-size="12" text-anchor="middle" font-weight="600">⑤  sentence splitter</text>
+          <text x="860" y="82" fill="#a8acbb" font-size="10.5" text-anchor="middle">±2000 char window · abbr 表</text>
+        </g>
+
+        <!-- row 2 -->
+        <g>
+          <rect x="780" y="160" width="160" height="58" rx="8" fill="url(#nodeBg)" stroke="#2a2f42"/>
+          <text x="860" y="184" fill="#e6e8ef" font-size="12" text-anchor="middle" font-weight="600">⑥  locate(sentence)</text>
+          <text x="860" y="202" fill="#a8acbb" font-size="10.5" text-anchor="middle">→ rects[] · 浮层定位</text>
+        </g>
+        <g>
+          <rect x="590" y="160" width="160" height="58" rx="8" fill="url(#nodeBg)" stroke="#2a2f42"/>
+          <text x="670" y="184" fill="#e6e8ef" font-size="12" text-anchor="middle" font-weight="600">⑦  cache.get(hash)</text>
+          <text x="670" y="202" fill="#a8acbb" font-size="10.5" text-anchor="middle">attachID + sha1(sent+langs)</text>
+        </g>
+        <g>
+          <rect x="400" y="160" width="160" height="58" rx="8" fill="url(#nodeBg)" stroke="#2a2f42"/>
+          <text x="480" y="184" fill="#e6e8ef" font-size="12" text-anchor="middle" font-weight="600">⑧a  AI provider stream</text>
+          <text x="480" y="202" fill="#a8acbb" font-size="10.5" text-anchor="middle">text→text · 仅 miss 时调</text>
+        </g>
+        <g>
+          <rect x="210" y="160" width="160" height="58" rx="8" fill="url(#nodeBg)" stroke="#2a2f42"/>
+          <text x="290" y="184" fill="#e6e8ef" font-size="12" text-anchor="middle" font-weight="600">⑧b  cache.put</text>
+          <text x="290" y="202" fill="#a8acbb" font-size="10.5" text-anchor="middle">写本地 · sync 时上传</text>
+        </g>
+        <g>
+          <rect x="20" y="160" width="160" height="58" rx="8" fill="url(#nodeBg)" stroke="#2a2f42" stroke-width="1.5"/>
+          <text x="100" y="184" fill="#6fa8ff" font-size="12" text-anchor="middle" font-weight="600">⑨  render overlay</text>
+          <text x="100" y="202" fill="#a8acbb" font-size="10.5" text-anchor="middle">流式增量 + 高亮 sentence</text>
+        </g>
+
+        <!-- side branches -->
+        <g>
+          <rect x="20" y="280" width="200" height="58" rx="8" fill="#262a3a" stroke="#2a2f42" stroke-dasharray="4 3"/>
+          <text x="120" y="304" fill="#e6e8ef" font-size="12" text-anchor="middle" font-weight="600">★ 用户点 "保存为注释"</text>
+          <text x="120" y="322" fill="#a8acbb" font-size="10.5" text-anchor="middle">→ Zotero highlight + comment</text>
+        </g>
+        <g>
+          <rect x="350" y="280" width="220" height="58" rx="8" fill="#262a3a" stroke="#2a2f42" stroke-dasharray="4 3"/>
+          <text x="460" y="304" fill="#e6e8ef" font-size="12" text-anchor="middle" font-weight="600">★ ▲ / ▼ 切上下一句</text>
+          <text x="460" y="322" fill="#a8acbb" font-size="10.5" text-anchor="middle">→ 取 splitter 序列中的相邻句重跑</text>
+        </g>
+        <g>
+          <rect x="680" y="280" width="200" height="58" rx="8" fill="#262a3a" stroke="#2a2f42" stroke-dasharray="4 3"/>
+          <text x="780" y="304" fill="#e6e8ef" font-size="12" text-anchor="middle" font-weight="600">★ 关闭 / Esc / 切模式</text>
+          <text x="780" y="322" fill="#a8acbb" font-size="10.5" text-anchor="middle">→ 拆 listener · 销 overlay DOM</text>
+        </g>
+
+        <!-- arrows main -->
+        <path d="M 180 69 L 210 69" stroke="#6fa8ff" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+        <path d="M 370 69 L 400 69" stroke="#6fa8ff" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+        <path d="M 560 69 L 590 69" stroke="#6fa8ff" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+        <path d="M 750 69 L 780 69" stroke="#6fa8ff" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+        <!-- corner: ⑤ -> ⑥ -->
+        <path d="M 860 98 L 860 160" stroke="#6fa8ff" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+        <!-- ⑥ -> ⑦ -->
+        <path d="M 780 189 L 750 189" stroke="#6fa8ff" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+        <!-- ⑦ -> ⑧a (miss) -->
+        <path d="M 590 189 L 560 189" stroke="#6fa8ff" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+        <!-- ⑧a -> ⑧b -->
+        <path d="M 400 189 L 370 189" stroke="#6fa8ff" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+        <!-- ⑧b -> ⑨ -->
+        <path d="M 210 189 L 180 189" stroke="#6fa8ff" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+        <!-- ⑦ hit -> ⑨ short circuit -->
+        <path d="M 670 218 C 670 240, 200 240, 100 218" stroke="#5dd596" stroke-width="1.4" fill="none" marker-end="url(#arrow)" stroke-dasharray="3 2"/>
+        <text x="430" y="252" fill="#5dd596" font-size="10.5" text-anchor="middle">cache hit → 直接渲染</text>
+
+        <!-- side branch arrows from ⑨ -->
+        <path d="M 100 218 L 100 280" stroke="#6e7286" stroke-width="1.2" fill="none" marker-end="url(#arrowGray)" stroke-dasharray="3 2"/>
+        <path d="M 140 218 L 450 280" stroke="#6e7286" stroke-width="1.2" fill="none" marker-end="url(#arrowGray)" stroke-dasharray="3 2"/>
+        <path d="M 170 218 L 740 280" stroke="#6e7286" stroke-width="1.2" fill="none" marker-end="url(#arrowGray)" stroke-dasharray="3 2"/>
+      </svg>
+    </div>
+  </section>
+
+  <!-- 4. Sentence detection -->
+  <section>
+    <h2><span class="num">04</span>句子识别算法</h2>
+    <div class="lead">复用 zotero-pdf-translate 的手写状态机。abbreviations 表照搬。</div>
+
+<pre><span class="cmt">// src/context/sentence-splitter.ts (new)</span>
+<span class="kw">const</span> <span class="id">DIVIDERS</span> = [<span class="str">"."</span>, <span class="str">"?"</span>, <span class="str">"!"</span>, <span class="str">"。"</span>, <span class="str">"？"</span>, <span class="str">"！"</span>];
+<span class="kw">const</span> <span class="id">ABBR</span> = [
+  <span class="str">"a.m."</span>, <span class="str">"p.m."</span>, <span class="str">"vol."</span>, <span class="str">"inc."</span>, <span class="str">"jr."</span>, <span class="str">"dr."</span>, <span class="str">"prof."</span>,
+  <span class="str">"rev."</span>, <span class="str">"hon."</span>, <span class="str">"v.s."</span>, <span class="str">"i.e."</span>, <span class="str">"ie."</span>, <span class="str">"eg."</span>, <span class="str">"e.g."</span>,
+  <span class="str">"al."</span>, <span class="str">"st."</span>, <span class="str">"ph.d."</span>, <span class="str">"capt."</span>, <span class="str">"mr."</span>, <span class="str">"mrs."</span>, <span class="str">"ms."</span>, <span class="str">"fig."</span>,
+];
+
+<span class="kw">export function</span> <span class="fn">splitSentences</span>(<span class="id">text</span>: <span class="kw">string</span>): { <span class="id">sentence</span>: <span class="kw">string</span>; <span class="id">start</span>: <span class="kw">number</span>; <span class="id">end</span>: <span class="kw">number</span> }[] { ... }
+<span class="cmt">// 规则：</span>
+<span class="cmt">//   - "." 后必须接空格才算句末（保护 0.5、www.x.com）</span>
+<span class="cmt">//   - 上下文匹配 ABBR 表则不切（保护 e.g.、Fig.、et al.）</span>
+<span class="cmt">//   - 形如 U.S.A. (>2 段 ≤2 字母) 也视为缩写</span>
+
+<span class="kw">export function</span> <span class="fn">findSentenceAt</span>(
+  <span class="id">pageText</span>: <span class="kw">string</span>,
+  <span class="id">offset</span>: <span class="kw">number</span>,
+): { <span class="id">sentence</span>: <span class="kw">string</span>; <span class="id">start</span>: <span class="kw">number</span>; <span class="id">end</span>: <span class="kw">number</span> } | <span class="kw">null</span> {
+  <span class="cmt">// 取 [offset-2000, offset+2000] 切句子 → 找包含 offset 的那一段</span>
+}
+</pre>
+
+    <h3>上下文范围如何塞进 prompt</h3>
+<pre><span class="cmt">// 三档上下文：用 &lt;target&gt; 标记当前句，让模型只翻它，但能看见周边消歧</span>
+<span class="kw">function</span> <span class="fn">buildPrompt</span>(<span class="id">sentence</span>, <span class="id">level</span>, <span class="id">pageBundle</span>, <span class="id">pageIdx</span>) {
+  <span class="kw">if</span> (<span class="id">level</span> === <span class="str">'sentence'</span>) <span class="kw">return</span> <span class="id">sentence</span>;                  <span class="cmt">// 仅本句 · 最省</span>
+
+  <span class="kw">const</span> <span class="id">para</span> = <span class="fn">paragraphAround</span>(<span class="id">pageBundle</span>, <span class="id">sentence</span>);   <span class="cmt">// 切到 \n\n 边界</span>
+  <span class="kw">const</span> <span class="id">marked</span> = <span class="id">para</span>.<span class="fn">replace</span>(<span class="id">sentence</span>, <span class="str">`&lt;target&gt;${sentence}&lt;/target&gt;`</span>);
+
+  <span class="kw">if</span> (<span class="id">level</span> === <span class="str">'paragraph'</span>) <span class="kw">return</span> <span class="id">marked</span>;                  <span class="cmt">// 默认：本段 + tag</span>
+
+  <span class="kw">const</span> <span class="id">heading</span> = <span class="fn">nearestHeadingAbove</span>(<span class="id">pageBundle</span>, <span class="id">para</span>);  <span class="cmt">// 用 font-size 启发</span>
+  <span class="kw">return</span> <span class="id">heading</span> ? <span class="str">`## ${heading}\n\n${marked}`</span> : <span class="id">marked</span>;       <span class="cmt">// 最足：含章节</span>
+}
+
+<span class="cmt">// 系统 prompt 固定（见第 08 节"系统提示词"）。模型只翻 &lt;target&gt; 内的内容。</span>
+</pre>
+
+    <h3>从点击坐标到字符 offset</h3>
+<pre><span class="cmt">// src/context/sentence-detect.ts (new)</span>
+<span class="kw">export function</span> <span class="fn">detectSentenceFromPoint</span>(
+  <span class="id">iframeDoc</span>: <span class="id">Document</span>,
+  <span class="id">x</span>: <span class="kw">number</span>, <span class="id">y</span>: <span class="kw">number</span>,
+  <span class="id">pageBundle</span>: <span class="id">PageBundle</span>,                      <span class="cmt">// from pdf-locator</span>
+): <span class="kw">null</span> | { <span class="id">text</span>: <span class="kw">string</span>; <span class="id">rects</span>: <span class="id">PdfRect</span>[]; <span class="id">pageIndex</span>: <span class="kw">number</span> } {
+  <span class="kw">const</span> <span class="id">caret</span> = <span class="id">iframeDoc</span>.<span class="fn">caretPositionFromPoint</span>(<span class="id">x</span>, <span class="id">y</span>);
+  <span class="kw">if</span> (!<span class="id">caret</span>) <span class="kw">return</span> <span class="kw">null</span>;
+
+  <span class="kw">const</span> <span class="id">pageOffset</span> = <span class="fn">walkTextLayerToOffset</span>(<span class="id">caret</span>);     <span class="cmt">// span-by-span concat</span>
+  <span class="kw">const</span> <span class="id">normOffset</span> = <span class="id">pageBundle</span>.<span class="fn">rawToNormalized</span>(<span class="id">pageOffset</span>);  <span class="cmt">// pdf-locator helper</span>
+  <span class="kw">const</span> <span class="id">hit</span> = <span class="fn">findSentenceAt</span>(<span class="id">pageBundle</span>.<span class="id">normalizedText</span>, <span class="id">normOffset</span>);
+  <span class="kw">if</span> (!<span class="id">hit</span>) <span class="kw">return</span> <span class="kw">null</span>;
+
+  <span class="kw">const</span> <span class="id">located</span> = <span class="kw">await</span> <span class="id">locator</span>.<span class="fn">locate</span>(<span class="id">hit</span>.<span class="id">sentence</span>);             <span class="cmt">// pdf-locator</span>
+  <span class="kw">return</span> { <span class="id">text</span>: <span class="id">hit</span>.<span class="id">sentence</span>, <span class="id">rects</span>: <span class="id">located</span>.<span class="id">rects</span>, <span class="id">pageIndex</span>: <span class="id">pageBundle</span>.<span class="id">pageIndex</span> };
+}
+</pre>
+  </section>
+
+  <!-- 5. State machine -->
+  <section>
+    <h2><span class="num">05</span>浮层状态机</h2>
+    <div class="lead">浮层在用户做完一次点击后会经过这五个状态。所有状态在交互效果图里都能切到。</div>
+    <div class="states">
+      <div class="st idle"><span class="dot"></span><span class="name">idle</span><div class="desc">模式 OFF 或没点过；没有任何 overlay。</div></div>
+      <div class="st detecting"><span class="dot"></span><span class="name">detecting</span><div class="desc">caret + splitter 工作中。通常 &lt; 30ms，不显示中间状态以免闪烁。</div></div>
+      <div class="st streaming"><span class="dot"></span><span class="name">streaming</span><div class="desc">浮层已挂出，原文已渲染，译文正在按 token 增量。光标闪烁。</div></div>
+      <div class="st done"><span class="dot"></span><span class="name">done</span><div class="desc">译文完成；显示耗时。可保存 / 解释 / 下一句。命中缓存直接进此态。</div></div>
+      <div class="st error"><span class="dot"></span><span class="name">error</span><div class="desc">provider 出错；浮层变红，原文保留，提供"重试"按钮。</div></div>
+    </div>
+  </section>
+
+  <!-- 6. Components -->
+  <section>
+    <h2><span class="num">06</span>模块拆分</h2>
+    <div class="lead">绿色 = 全新文件；黄色 = 现有文件需小改。</div>
+    <div class="comps">
+      <div class="c"><h4>translate-mode <span class="badge new">新</span></h4>
+        <div class="body">Toggle 状态、键盘快捷键 <code>alt+T</code>、cursor 切换、iframe 监听器 install/uninstall。每个 Reader tab 一份实例，跟 reader unload 一起释放。</div></div>
+      <div class="c"><h4>sentence-detect <span class="badge new">新</span></h4>
+        <div class="body">坐标 → caret → pageOffset → 调用 splitter → locate rects。复用 <code>pdf-locator</code> 的页面 bundle 缓存。</div></div>
+      <div class="c"><h4>sentence-splitter <span class="badge new">新</span></h4>
+        <div class="body">移植 zotero-pdf-translate 的算法。纯函数，独立测试。约 80 行 + abbr 表。</div></div>
+      <div class="c"><h4>translator <span class="badge new">新</span></h4>
+        <div class="body"><b>仅 OpenAI</b>。单次 text→text 流式调用 OpenAI Responses API，绕开 chat 的 tool loop 和 context-ledger。<b>API 配置直接复用 chat 的 preset 列表</b>（<code>ModelPreset.apiKey/baseUrl</code>），运行时按 <code>provider==='openai'</code> 过滤。但 <b>model 独立</b>：从该 preset 的 <code>models[]</code> 里挑一个，不强制和 chat 当前选的同款。复用 <code>src/providers/openai.ts</code> 的 fetch/auth 路径，参数独立：<b>preset/model</b>、<b>reasoning.effort</b>（off→省略字段；low/med/high → 直接传）、<b>context window</b>（sentence/paragraph/section → 决定 prompt 拼装时含多少周边文本，模型只翻 <code>&lt;target&gt;</code> 内）。</div></div>
+      <div class="c"><h4>sentence-cache <span class="badge new">新</span></h4>
+        <div class="body">键 = <code>attachID + sha1(normalizedSent + srcLang + tgtLang + model).slice(0,16)</code>。本地 prefs 存储 + sync snapshot 一段。带 LRU 上限。</div></div>
+      <div class="c"><h4>overlay-dom <span class="badge new">新</span></h4>
+        <div class="body">在 iframe document 里挂的浮层 DOM。位置由 sentence rects + viewport transform 推导，跟着页面缩放/滚动走或自动消失。</div></div>
+      <div class="c"><h4>sidebar.ts <span class="badge touch">改</span></h4>
+        <div class="body">新增 toggle 按钮（Reader 工具栏旁）；mode 状态在 <code>WindowSidebarState</code> 加一字段；mount/unmount 时 install/uninstall 事件。</div></div>
+      <div class="c"><h4>sync/state.ts <span class="badge touch">改</span></h4>
+        <div class="body">snapshot schema 加 <code>sentenceTranslations</code> section；apply 时 merge 而非 replace（避免把另一台机器新译的吞掉）。</div></div>
+      <div class="c"><h4>preferences.xhtml + types.ts <span class="badge touch">改</span></h4>
+        <div class="body">新增三个 pref：<code>targetLanguage</code> / <code>fastModelPreset</code> / <code>cacheMaxEntriesPerAttachment</code>。</div></div>
+    </div>
+  </section>
+
+  <!-- 7. Cache schema -->
+  <section>
+    <h2><span class="num">07</span>缓存 + sync 集成</h2>
+    <div class="lead">独立 section 进 <code>state.json</code>，与 annotations / chatHistory / presets 并列。pull 时按时间戳 merge。</div>
+
+    <div class="schema">
+      <table>
+        <thead><tr><th style="width:170px">字段</th><th style="width:160px">类型</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><code>attachmentID</code></td><td><code>number</code></td><td>Zotero PDF attachment ID（外层 key，每个 PDF 一份子表）</td></tr>
+          <tr><td><code>hash</code></td><td><code>string(16)</code></td><td>sha1 前 16 hex(<code>normSent + "|" + src + "→zh" + "|" + baseUrl + "|" + model + "|" + thinking + "|" + ctxLevel</code>)。<b>所有影响输出的请求参数全进 key</b>，防止换 preset/thinking/上下文档之后假命中。<b>不进 key 的：apiKey、presetId</b>——同一 baseUrl + 同一 model 的两份 preset（只是 key 不同）应当能共享缓存。</td></tr>
+          <tr><td><code>thinking</code></td><td><code>string</code></td><td>实际使用的 thinking 程度：<code>off</code>/<code>low</code>/<code>med</code>/<code>high</code></td></tr>
+          <tr><td><code>ctxLevel</code></td><td><code>string</code></td><td>实际使用的上下文范围：<code>sentence</code>/<code>paragraph</code>/<code>section</code></td></tr>
+          <tr><td><code>sentence</code></td><td><code>string</code></td><td>规范化后的原文，跨页连字符已合并；存原文是为了未来支持搜索</td></tr>
+          <tr><td><code>pageIndex</code></td><td><code>number</code></td><td>0-based 页号；UI 上"我之前点过的句子"分组用</td></tr>
+          <tr><td><code>translation</code></td><td><code>string</code></td><td>译文；流式拼好后整体写入</td></tr>
+          <tr><td><code>sourceLang</code></td><td><code>string</code></td><td>BCP-47，如 <code>en</code>；为空则自动检测</td></tr>
+          <tr><td><code>targetLang</code></td><td><code>string</code></td><td>BCP-47，默认 <code>zh-CN</code></td></tr>
+          <tr><td><code>model</code></td><td><code>string</code></td><td>实际调用的 model id；切模型不污染旧缓存</td></tr>
+          <tr><td><code>ts</code></td><td><code>string (ISO)</code></td><td>本地写入时间戳；merge 取较新者</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+<pre><span class="cmt">// src/sync/state.ts: 增量改动</span>
+<span class="kw">export interface</span> <span class="id">SyncSnapshot</span> {
+  <span class="cmt">// ... existing fields</span>
+  <span class="id">sentenceTranslations</span>?: <span class="id">SentenceTranslationCache</span>;   <span class="cmt">// ← new</span>
+}
+
+<span class="cmt">// merge 策略 (在 applySyncSnapshot 里)</span>
+<span class="kw">function</span> <span class="fn">mergeSentenceCaches</span>(<span class="id">local</span>, <span class="id">remote</span>) {
+  <span class="cmt">// 同 hash 时取 ts 大的一边；空白侧直接吸收</span>
+}
+</pre>
+  </section>
+
+  <!-- 8. Defaults -->
+  <section>
+    <h2><span class="num">08</span>默认值与预设</h2>
+    <div class="defaults">
+      <dl>
+        <dt>目标语言</dt><dd><b>固定简体中文</b>，不出 UI、不可改（当前阶段不做多语言）；prompt 里写死 <code>"...translate to Simplified Chinese..."</code></dd>
+        <dt>源语言</dt><dd>auto-detect（句子前 100 字符按 latin/CJK 比例判，主要为了 prompt 里说"from {src}"，识别错也不影响输出）</dd>
+        <dt>翻译 provider 范围</dt>
+        <dd><b>当前阶段仅适配 OpenAI</b>。translator 内部不处理 Anthropic 路径——chat 那边可以照常用 Claude，但翻译走 <code>src/providers/openai.ts</code> 的 Responses API。后续扩 Anthropic 时，translator 抽出 provider 接口即可，不影响其他模块。</dd>
+        <dt>API 配置（preset） <span style="color:var(--accent);font-size:11px">⚙ 弹窗可调</span></dt>
+        <dd><b>直接复用 chat 的 preset 列表</b>（同一份 <code>storage.ts:loadPresets()</code>）。下拉里 <code>provider==='openai'</code> 的 preset 可选，Anthropic preset 显示但 disabled。<br/>默认值：第一个 OpenAI preset 的 <code>id</code>；如果用户一个 OpenAI preset 都没有，弹 inline 提示并打开 prefs。<br/>pref 字段 <code>translatePresetId: string</code></dd>
+        <dt>翻译模型 <span style="color:var(--accent);font-size:11px">⚙ 弹窗可调</span></dt>
+        <dd><b>独立于 chat 当前选的 model</b>——从所选 preset 的 <code>models[]</code> 数组里挑（即 chat 里"添加候选模型"加进去的那些）。<br/>默认值：所选 preset 的 <code>model</code>（即 chat 当前活跃的那个），用户可改。pref 字段 <code>translateModel: string</code>。<br/>切换 preset 时这个字段自动复位到新 preset 的 <code>model</code>。</dd>
+        <dt>Thinking 程度 <span style="color:var(--accent);font-size:11px">⚙ 弹窗可调</span></dt>
+        <dd>默认 <b><code>off</code></b>（一般翻译不需要 reasoning，节省延迟和 token）。可选 <code>low</code> / <code>medium</code> / <code>high</code>，映射到 OpenAI Responses 的 <code>reasoning.effort</code>。pref 字段 <code>translateThinkingLevel: 'off'|'low'|'medium'|'high'</code></dd>
+        <dt>上下文范围 <span style="color:var(--accent);font-size:11px">⚙ 弹窗可调</span></dt>
+        <dd>默认 <b><code>paragraph</code></b>（含本句所在自然段，让代词/术语能消歧）。可选 <code>sentence</code>（仅本句、最省 token）/ <code>section</code>（本节标题 + 整段）。<br/>实现：splitter 已经把页面切成句子序列，"段落"= 当前句相邻无 <code>\\n\\n</code> 的连续句；"章节"= 向前回溯到最近的 heading（用 pdf-locator 的 heading 启发：font-size 突变 / 编号格式）。<br/>构造 prompt 时只把上下文给 LLM 看，要求<b>仅翻译目标句</b>，prompt 里用 <code>&lt;target&gt;...&lt;/target&gt;</code> 标记当前句。<br/>pref 字段 <code>translateContextLevel: 'sentence'|'paragraph'|'section'</code></dd>
+        <dt>固定快捷键</dt><dd>切模式 <code>alt+T</code>（Mac <code>opt+T</code>）；<code>esc</code> 关闭浮层；<code>S</code>/<code>E</code> 保存/解释。这几个写死，不开放自定义。</dd>
+        <dt>翻句快捷键 <span style="color:var(--accent);font-size:11px">⚙ 弹窗可调</span></dt>
+        <dd>设置弹窗里两个 key-recorder 录入：<b>上一句</b>（默认 <code>Shift+Enter</code>）/ <b>下一句</b>（默认 <code>Enter</code>）。点击 recorder 进入录制态，下一次 keydown 即被记录；<code>Esc</code> 取消。<br/>校验规则：必须含 <code>Cmd</code>/<code>Ctrl</code>/<code>Alt</code>/<code>Shift</code> 任一修饰键，<b>或</b>为 <code>Enter</code>/<code>Tab</code>/方向键这种不会和正文输入混淆的"裸键"；纯字母不允许（防止误绑住 chat composer 里打字）。<br/>导航语义：走 splitter 给出的句子序列——同段内向前/后相邻；段末跨到下段首；首/末循环。<br/>pref 字段 <code>translatePrevSentenceShortcut</code>、<code>translateNextSentenceShortcut</code>，存储格式是序列化的组合键字符串如 <code>"Shift+Enter"</code>、<code>"Cmd+ArrowDown"</code>。</dd>
+        <dt>浮层位置 <span style="color:var(--accent);font-size:11px">⚙ 弹窗可调</span></dt><dd>设置弹窗"浮层位置"行：<b>句子上方</b>（默认）/ <b>句子下方</b>。一次设定全局生效，不再每次翻转。所选方向无空间时自动让位到另一侧，箭头朝向自动反转。pref 字段 <code>translateOverlayPosition: 'above'|'below'</code></dd>
+        <dt>缓存上限</dt><dd>每 attachment 最多 2000 条（LRU）；超过则按 <code>ts</code> 淘汰最旧。注意：缓存 key 已经包含 model、thinking、context 三者，所以换设置不会污染之前的缓存。</dd>
+        <dt>"保存为注释" 行为</dt><dd>highlight color 用 <code>#FFD400</code>（Zotero 原生黄）；comment 写 <code>[译] {translation}</code></dd>
+        <dt>系统提示词</dt><dd>"Translate to Simplified Chinese the sentence inside &lt;target&gt; tags. Use the surrounding context only to disambiguate pronouns and technical terms. Output only the translation, no explanation. Preserve technical terms in their original form when commonly used (e.g., Transformer, BLEU)."</dd>
+      </dl>
+    </div>
+  </section>
+
+  <!-- 9. Files to touch -->
+  <section>
+    <h2><span class="num">09</span>文件清单</h2>
+    <div class="lead">绿色 = 新增；黄色 = 现有文件改动。共 6 个新文件 + 5 处现有文件触动。</div>
+    <div class="files">
+      <div class="f"><div class="path">src/translate/translate-mode.ts<span class="badge new" style="background:rgba(93,213,150,0.12);color:var(--green)">新</span></div><div class="why">模式生命周期、toggle 状态、iframe 监听器 install/uninstall</div></div>
+      <div class="f"><div class="path">src/translate/sentence-detect.ts<span class="badge new" style="background:rgba(93,213,150,0.12);color:var(--green)">新</span></div><div class="why">caretPositionFromPoint + textLayer walk + 调度 splitter 与 locate</div></div>
+      <div class="f"><div class="path">src/translate/sentence-splitter.ts<span class="badge new" style="background:rgba(93,213,150,0.12);color:var(--green)">新</span></div><div class="why">纯函数 splitter；可独立单测</div></div>
+      <div class="f"><div class="path">src/translate/translator.ts<span class="badge new" style="background:rgba(93,213,150,0.12);color:var(--green)">新</span></div><div class="why">单次 text→text 流式翻译；不走 tool loop；<b>仅 OpenAI Responses API</b>，复用 <code>src/providers/openai.ts</code> 的请求层</div></div>
+      <div class="f"><div class="path">src/translate/cache.ts<span class="badge new" style="background:rgba(93,213,150,0.12);color:var(--green)">新</span></div><div class="why">本地 prefs cache + LRU；merge 助手</div></div>
+      <div class="f"><div class="path">src/translate/overlay.ts<span class="badge new" style="background:rgba(93,213,150,0.12);color:var(--green)">新</span></div><div class="why">浮层 DOM 创建/销毁/重定位；状态机驱动渲染</div></div>
+      <div class="f"><div class="path">src/modules/sidebar.ts<span class="badge touch" style="background:rgba(255,213,79,0.12);color:var(--yellow)">改</span></div><div class="why">挂 toggle 按钮、初始化 translate-mode 实例、mount/unmount 钩子</div></div>
+      <div class="f"><div class="path">src/sync/state.ts<span class="badge touch" style="background:rgba(255,213,79,0.12);color:var(--yellow)">改</span></div><div class="why">snapshot schema + merge 策略加 sentenceTranslations</div></div>
+      <div class="f"><div class="path">src/settings/types.ts + addon/prefs.js<span class="badge touch" style="background:rgba(255,213,79,0.12);color:var(--yellow)">改</span></div><div class="why">7 个 pref：<code>translatePresetId</code> · <code>translateModel</code> · <code>translateThinkingLevel</code> · <code>translateContextLevel</code> · <code>translateOverlayPosition</code> · <code>translatePrevSentenceShortcut</code> · <code>translateNextSentenceShortcut</code>。所有 7 项只在 ⚙ 弹窗里管，不进 preferences.xhtml。</div></div>
+      <div class="f"><div class="path">addon/content/sidebar.css<span class="badge touch" style="background:rgba(255,213,79,0.12);color:var(--yellow)">改</span></div><div class="why">浮层样式（挂在 iframe 用 inline style 也行；这里是 toggle 按钮样式）</div></div>
+      <div class="f"><div class="path">tests/translate/sentence-splitter.test.ts<span class="badge new" style="background:rgba(93,213,150,0.12);color:var(--green)">新</span></div><div class="why">abbr 表回归 + 中英文混排 + 跨页连字符</div></div>
+      <div class="f"><div class="path">tests/translate/cache.test.ts<span class="badge new" style="background:rgba(93,213,150,0.12);color:var(--green)">新</span></div><div class="why">命中/失效/LRU/merge 单测</div></div>
+    </div>
+  </section>
+
+  <!-- 10. Risks -->
+  <section>
+    <h2><span class="num">10</span>风险与缓解</h2>
+    <div class="risks">
+      <div class="risk"><div class="t">caretPositionFromPoint 在 PDF.js textLayer 上不一定可靠</div>
+        <div class="b">不同 PDF.js 版本对 textLayer 的渲染（绝对定位 div 还是 span）会变。验证矩阵：Zotero 7 / 8 / 9 默认 viewer。<b>缓解</b>：失败时回落到 <code>elementFromPoint</code> 找最近的 textLayer 节点，再用其 bounding rect 反查 anchor。</div></div>
+      <div class="risk"><div class="t">浮层在缩放/滚动时跟随困难</div>
+        <div class="b">PDF.js 缩放是改 transform，textLayer 跟着走。<b>缓解</b>：浮层挂到 PDF.js 当前 page 的 textLayer DOM 里（同一个 transform 容器），让它跟着自然缩放；超出 viewport 时 IntersectionObserver 自动淡出。</div></div>
+      <div class="risk"><div class="t">浮层挡住下一句</div>
+        <div class="b">线性阅读时用户的视线方向是向下，浮层若放在被点句下方会挡住即将要读的内容。<b>缓解</b>：默认锚点改在<b>句子上方</b>（覆盖已读内容），并删掉浮层里重复的英文原文（PDF 高亮已能定位）。仅当上方空间不足才翻到下方。结果：浮层高度从 ~180px 压到 ~95px，且默认覆盖的是已读区域。</div></div>
+      <div class="risk"><div class="t">PDF 多列布局 + 跨页句子</div>
+        <div class="b">第二列点击映射到错列、句子被分页打断。<b>缓解</b>：splitter 工作在 page-level 文本而非 column-level；如最后一句不闭合（无终结符），向下一页 prefetch ±500 字续切。</div></div>
+      <div class="risk"><div class="t">缓存膨胀 / sync 文件膨胀</div>
+        <div class="b">长论文翻完 1000+ 句 × 多 PDF 会推高 state.json 体积。<b>缓解</b>：每 attachment LRU 2000 上限；sync 时按 attachment 子表分块，pull 后惰性合并；提供"清空当前 PDF 缓存"按钮。</div></div>
+      <div class="risk"><div class="t">用户没有任何 OpenAI preset 时怎么办</div>
+        <div class="b">翻译复用 chat 的 preset 列表，但只接受 <code>provider==='openai'</code> 的 preset。如果用户从来没配过 OpenAI preset（一直用 Claude chat），首次开模式会找不到可用 preset。<b>缓解</b>：(1) 翻译模式开启时先校验 <code>presets.some(p =&gt; p.provider==='openai' &amp;&amp; p.apiKey)</code>，缺时浮层显示 inline 提示 "翻译需要 OpenAI preset · 去配置" 并附打开 prefs 的链接；(2) 设置弹窗"翻译 API"下拉里 Anthropic preset 用 <code>disabled</code> + 灰显，标注"暂不支持"；(3) 翻译失败显示具体错（401/429/网络/解析），不静默假装在转。</div></div>
+      <div class="risk"><div class="t">误把模式当作"chat 自动翻译"</div>
+        <div class="b">该特性是显式 UI 动作，不在 chat 走 intent 路由。<b>守则</b>：translator 模块 import 不进 chat tool registry；agent-tools.ts 不暴露 translate 工具；prompt 里也不提"用户可能想翻译"。</div></div>
+    </div>
+  </section>
+
+  <hr/>
+  <div class="footer-note">
+    数据流颜色约定：<span style="color:var(--accent)">蓝</span> = 主路径，<span style="color:var(--green)">绿</span> = cache 短路，<span style="color:var(--mute)">灰虚</span> = 显式用户操作支路。<br/>
+    所有 mockup 状态可在第 02 节顶部按钮切换；点 PDF 里别的句子浮层会跟着跳。<br/>
+    设计依赖：<a href="https://github.com/windingwind/zotero-pdf-translate/blob/main/src/modules/prompt.ts">zotero-pdf-translate · prompt.ts</a> · 复用 <code>pdf-locator.ts</code> · 复用 <code>renderTextSelectionPopup</code>（仅作为参考路径）。
+  </div>
+
+</main>
+
+<script>
+  // Scenario switcher
+  const buttons = document.querySelectorAll('.mockup .scen button');
+  const ov = document.getElementById('ov');
+  const status = document.getElementById('status');
+  const dst = document.getElementById('dst');
+  const target = document.getElementById('targetSent');
+  const modeBtn = document.getElementById('modeBtn');
+  const FULL = "我们提出一种新的简单网络架构——Transformer，仅基于注意力机制，完全摒弃了循环结构和卷积。";
+
+  // Sync ON/OFF segment in settings popover with the mode button state.
+  function syncModeSeg() {
+    const on = document.body.classList.contains('translate-on');
+    const seg = document.getElementById('modeSeg');
+    if (!seg) return;
+    const [offBtn, onBtn] = seg.querySelectorAll('button');
+    offBtn.classList.toggle('active', !on);
+    onBtn.classList.toggle('active', on);
+  }
+
+  function setScenario(name) {
+    ov.classList.remove('error');
+    document.body.classList.add('translate-on');
+    ov.style.display = '';
+    target.classList.add('active');
+    if (name === 'streaming') {
+      status.innerHTML = '● 翻译中…';
+      dst.innerHTML = '我们提出一种新的简单网络架构——Transformer，仅<span class="cur"></span>';
+    } else if (name === 'done') {
+      status.innerHTML = '● 已完成 · 312ms';
+      dst.textContent = FULL;
+    } else if (name === 'cached') {
+      status.innerHTML = '● 命中缓存 · 0ms <span class="cache-tag">cached</span>';
+      dst.textContent = FULL;
+    } else if (name === 'error') {
+      ov.classList.add('error');
+      status.innerHTML = '● 翻译失败';
+      dst.innerHTML = '⚠ provider 调用失败：429 Rate limited.';
+    } else if (name === 'off') {
+      document.body.classList.remove('translate-on');
+      ov.style.display = 'none';
+      target.classList.remove('active');
+      modeBtn.classList.remove('on');
+      syncModeSeg();
+      return;
+    }
+    modeBtn.classList.add('on');
+    syncModeSeg();
+  }
+
+  buttons.forEach(b => b.addEventListener('click', () => {
+    buttons.forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    setScenario(b.dataset.s);
+  }));
+
+  // User-controlled position preference: 'above' | 'below'. Persisted across
+  // sentences. If chosen side has no room, falls back to the other side.
+  let overlayPref = 'above';
+
+  function applyOverlayPosition(sentenceEl) {
+    const r = sentenceEl.getBoundingClientRect();
+    const pr = document.getElementById('page').getBoundingClientRect();
+    const ovH = ov.offsetHeight || 110;
+    const gap = 8;
+    const aboveTop = r.top - pr.top - ovH - gap;
+    const belowTop = r.bottom - pr.top + gap;
+    const aboveOK = aboveTop >= 12;
+    const belowOK = belowTop + ovH <= pr.height - 12;
+
+    let useAbove;
+    if (overlayPref === 'above') useAbove = aboveOK || !belowOK;
+    else                          useAbove = !belowOK && aboveOK;
+
+    if (useAbove) {
+      ov.classList.remove('flip-below');
+      ov.style.top = Math.max(8, aboveTop) + 'px';
+    } else {
+      ov.classList.add('flip-below');
+      ov.style.top = belowTop + 'px';
+    }
+    const desiredLeft = Math.max(20, Math.min(r.left - pr.left, pr.width - 340));
+    ov.style.left = desiredLeft + 'px';
+
+  }
+
+  document.querySelectorAll('.sentence').forEach(s => {
+    s.addEventListener('click', () => {
+      if (!document.body.classList.contains('translate-on')) return;
+      document.querySelectorAll('.sentence.active').forEach(a => a.classList.remove('active'));
+      s.classList.add('active');
+      applyOverlayPosition(s);
+      dst.innerHTML = '<i style="color:#888">demo: 这里会逐字流式出现该句的中文译文</i>';
+      status.innerHTML = '● 翻译中…';
+    });
+  });
+
+  // Overlay position now lives in the settings popover (data-key="ovpos").
+  // The seg-click handler below picks it up; we just react in segHandler.
+
+  // Toolbar 译 button toggles mode directly.
+  modeBtn.addEventListener('click', () => {
+    const isOn = document.body.classList.contains('translate-on');
+    const next = isOn ? 'off' : 'streaming';
+    setScenario(next);
+    document.querySelectorAll('.mockup .scen button').forEach(b => {
+      b.classList.toggle('active', b.dataset.s === next);
+    });
+  });
+
+  // Settings popover (model · thinking · context)
+  const settingsPop = document.getElementById('settingsPop');
+  document.getElementById('settingsBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    settingsPop.hidden = !settingsPop.hidden;
+  });
+  document.getElementById('settingsClose').addEventListener('click', () => {
+    settingsPop.hidden = true;
+  });
+  // Click outside to close
+  document.addEventListener('click', (e) => {
+    if (!settingsPop.hidden &&
+        !settingsPop.contains(e.target) &&
+        e.target.id !== 'settingsBtn') {
+      settingsPop.hidden = true;
+    }
+  });
+  // Key recorder: click to start, next keydown is captured as the new binding.
+  // Esc cancels. Plain letters without modifier are rejected to avoid trapping
+  // typing in the chat composer; ↵/Tab/方向键 are allowed naked.
+  const SHORTCUTS = { prev: 'Shift+↵', next: '↵' };
+  function formatShortcut(e) {
+    const parts = [];
+    if (e.metaKey) parts.push('Cmd');
+    if (e.ctrlKey) parts.push('Ctrl');
+    if (e.altKey) parts.push('Alt');
+    if (e.shiftKey) parts.push('Shift');
+    let key = e.key;
+    if (key === 'Enter') key = '↵';
+    else if (key === 'Tab') key = '⇥';
+    else if (key === 'ArrowUp') key = '↑';
+    else if (key === 'ArrowDown') key = '↓';
+    else if (key === 'ArrowLeft') key = '←';
+    else if (key === 'ArrowRight') key = '→';
+    else if (key === ' ') key = 'Space';
+    else key = key.length === 1 ? key.toUpperCase() : key;
+    if (['Control','Shift','Alt','Meta'].includes(e.key)) return null; // pure modifier
+    parts.push(key);
+    return parts.join('+');
+  }
+  function isAllowedBinding(e, formatted) {
+    if (!formatted) return false;
+    const naked = ['↵', '⇥', '↑', '↓', '←', '→'];
+    const hasMod = e.metaKey || e.ctrlKey || e.altKey || e.shiftKey;
+    return hasMod || naked.includes(formatted);
+  }
+  document.querySelectorAll('.key-recorder').forEach(rec => {
+    rec.addEventListener('click', () => {
+      document.querySelectorAll('.key-recorder.recording').forEach(r => {
+        r.classList.remove('recording');
+        const action = r.dataset.action;
+        r.textContent = SHORTCUTS[action];
+      });
+      rec.classList.add('recording');
+      rec.textContent = '按下组合键…';
+      rec.focus();
+    });
+    rec.addEventListener('keydown', (e) => {
+      if (!rec.classList.contains('recording')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === 'Escape') {
+        rec.classList.remove('recording');
+        rec.textContent = SHORTCUTS[rec.dataset.action];
+        rec.blur();
+        return;
+      }
+      const formatted = formatShortcut(e);
+      if (!isAllowedBinding(e, formatted)) return;  // ignore pure modifiers / bare letters
+      SHORTCUTS[rec.dataset.action] = formatted;
+      rec.classList.remove('recording');
+      rec.textContent = formatted;
+      rec.blur();
+      // Sync overlay hint and tooltips
+      document.getElementById('btnPrev').title = `上一句 (${SHORTCUTS.prev})`;
+      document.getElementById('btnNext').title = `下一句 (${SHORTCUTS.next})`;
+      const hint = document.querySelector('.ov .actions .hint');
+      if (hint) hint.textContent = `S 存 · ${SHORTCUTS.next}/${SHORTCUTS.prev} 下/上一句`;
+    });
+    rec.addEventListener('blur', () => {
+      if (rec.classList.contains('recording')) {
+        rec.classList.remove('recording');
+        rec.textContent = SHORTCUTS[rec.dataset.action];
+      }
+    });
+  });
+
+  // Cascading preset → model selector. Each preset has its own models[] array
+  // (mirrors src/settings/types.ts:ModelPreset.models). Switching preset
+  // re-populates the model dropdown with that preset's available models.
+  const PRESET_MODELS = {
+    p1: ['gpt-5.4', 'gpt-5.5', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2'],
+    p2: ['gpt-5.4-mini', 'gpt-5.4', 'gpt-5.2'],
+    p3: ['claude-sonnet-4.6'],
+  };
+  const presetSel = document.getElementById('presetSelect');
+  const modelSel = document.getElementById('modelSelect');
+  presetSel.addEventListener('change', () => {
+    const list = PRESET_MODELS[presetSel.value] || [];
+    modelSel.innerHTML = list.map(m => `<option>${m}</option>`).join('');
+  });
+
+  // Segmented controls behave like radio groups.
+  // The mode segment (ON/OFF) also drives translate-mode state.
+  document.querySelectorAll('.settings-pop .seg').forEach(seg => {
+    seg.addEventListener('click', (e) => {
+      const btn = e.target.closest('button');
+      if (!btn) return;
+      seg.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      if (seg.dataset.key === 'mode') {
+        const turnOn = btn.textContent.trim() === 'ON';
+        setScenario(turnOn ? 'streaming' : 'off');
+        const scenName = turnOn ? 'streaming' : 'off';
+        document.querySelectorAll('.mockup .scen button').forEach(b => {
+          b.classList.toggle('active', b.dataset.s === scenName);
+        });
+      } else if (seg.dataset.key === 'ovpos') {
+        overlayPref = btn.textContent.trim() === '句子上方' ? 'above' : 'below';
+        const active = document.querySelector('.sentence.active');
+        if (active) applyOverlayPosition(active);
+      }
+    });
+  });
+
+  // Action buttons (no-op visual feedback)
+  document.getElementById('btnSave').addEventListener('click', () => alert('demo: 已写入 Zotero highlight + comment'));
+  document.getElementById('btnExplain').addEventListener('click', () => alert('demo: sentence 作为 selection chip 推入右侧 chat composer'));
+  document.getElementById('btnNext').addEventListener('click', () => {
+    const list = Array.from(document.querySelectorAll('.sentence'));
+    const i = list.indexOf(document.querySelector('.sentence.active'));
+    (list[i + 1] || list[0]).click();
+  });
+  document.getElementById('btnPrev').addEventListener('click', () => {
+    const list = Array.from(document.querySelectorAll('.sentence'));
+    const i = list.indexOf(document.querySelector('.sentence.active'));
+    (list[i - 1] || list[list.length - 1]).click();
+  });
+  document.getElementById('btnClose').addEventListener('click', () => {
+    ov.style.display = 'none';
+    target.classList.remove('active');
+  });
+</script>
+</body>
+</html>

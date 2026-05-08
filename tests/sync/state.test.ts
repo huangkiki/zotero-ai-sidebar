@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { PrefsStore } from '../../src/settings/storage';
-import { saveTranslateSettings } from '../../src/translate/settings';
+import { loadTranslateSettings, saveTranslateSettings } from '../../src/translate/settings';
 import { saveCache as saveTranslateCacheState } from '../../src/translate/cache';
 import { DEFAULT_TRANSLATE_SETTINGS } from '../../src/settings/types';
 import { savePresets } from '../../src/settings/storage';
@@ -232,7 +232,19 @@ describe('sync snapshot round trip', () => {
 
   it('round-trips translateSettings and translateCache', async () => {
     const prefs = memPrefs();
-    saveTranslateSettings(prefs, { ...DEFAULT_TRANSLATE_SETTINGS, enabled: true, model: 'gpt-5.4' });
+    saveTranslateSettings(prefs, {
+      ...DEFAULT_TRANSLATE_SETTINGS,
+      enabled: true,
+      presetId: 'gpt-preset',
+      model: 'gpt-5.4',
+      thinking: 'medium',
+      ctxLevel: 'none',
+      overlayPosition: 'below',
+      overlaySize: 'adaptive',
+      triggerMode: 'double',
+      nextSentenceKey: 'Alt+N',
+      prevSentenceKey: 'Alt+P',
+    });
     saveTranslateCacheState(prefs, {
       entries: { k1: { text: '你好', model: 'gpt-5.4', createdAt: 1 } },
     });
@@ -241,7 +253,27 @@ describe('sync snapshot round trip', () => {
     const reparsed = parseSyncSnapshot(json);
     expect(reparsed.translateSettings?.enabled).toBe(true);
     expect(reparsed.translateSettings?.model).toBe('gpt-5.4');
+    expect(reparsed.translateSettings?.thinking).toBe('medium');
+    expect(reparsed.translateSettings?.ctxLevel).toBe('none');
+    expect(reparsed.translateSettings?.overlayPosition).toBe('below');
+    expect(reparsed.translateSettings?.overlaySize).toBe('adaptive');
+    expect(reparsed.translateSettings?.triggerMode).toBe('double');
+    expect(reparsed.translateSettings?.nextSentenceKey).toBe('Alt+N');
+    expect(reparsed.translateSettings?.prevSentenceKey).toBe('Alt+P');
     expect(reparsed.translateCache?.entries.k1?.text).toBe('你好');
+
+    const targetPrefs = memPrefs();
+    await applySyncSnapshot(targetPrefs, reparsed);
+    const pulled = loadTranslateSettings(targetPrefs);
+    expect(pulled.presetId).toBe('gpt-preset');
+    expect(pulled.model).toBe('gpt-5.4');
+    expect(pulled.thinking).toBe('medium');
+    expect(pulled.ctxLevel).toBe('none');
+    expect(pulled.overlayPosition).toBe('below');
+    expect(pulled.overlaySize).toBe('adaptive');
+    expect(pulled.triggerMode).toBe('double');
+    expect(pulled.nextSentenceKey).toBe('Alt+N');
+    expect(pulled.prevSentenceKey).toBe('Alt+P');
   });
 
   it('accepts snapshots missing translate fields (back-compat)', () => {

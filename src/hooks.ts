@@ -47,6 +47,12 @@ import {
   type ProviderKind,
   type ReasoningEffort,
   type ReasoningSummary,
+  type TranslateContextLevel,
+  type TranslateOverlayPosition,
+  type TranslateOverlaySize,
+  type TranslateSettings,
+  type TranslateThinking,
+  type TranslateTriggerMode,
 } from './settings/types';
 import {
   loadUiSettings,
@@ -60,6 +66,11 @@ import {
   saveSyncAccount,
   type SyncAccount,
 } from './sync/account';
+import {
+  loadTranslateSettings,
+  normalizeTranslateSettings,
+  saveTranslateSettings,
+} from './translate/settings';
 
 // Plugin lifecycle hooks invoked by `addon/bootstrap.js`.
 //
@@ -137,6 +148,7 @@ function setupPreferencesPane(win: Window): void {
   if (!root) return;
 
   renderPresetSettings(doc);
+  renderTranslateSettings(doc);
   renderUiSettings(doc);
   renderPromptSettings(doc);
   renderToolSettings(doc);
@@ -177,6 +189,16 @@ function setupPreferencesPane(win: Window): void {
     setStatus(doc, 'zai-ui-status', '显示设置已保存，侧边栏已刷新。');
     flashButton(byID<HTMLButtonElement>(doc, 'zai-ui-save'), '已保存');
   });
+  byID<HTMLSelectElement>(doc, 'zai-translate-preset')?.addEventListener(
+    'change',
+    () => refreshTranslateModelSelect(doc, ''),
+  );
+  byID<HTMLButtonElement>(doc, 'zai-translate-save')?.addEventListener(
+    'click',
+    () => {
+      saveTranslateSettingsControls(doc);
+    },
+  );
 
   byID<HTMLButtonElement>(doc, 'zai-custom-prompt-add')?.addEventListener(
     'click',
@@ -306,7 +328,7 @@ async function runSyncPull(doc: Document): Promise<void> {
   const account = readSyncAccountControls(doc);
   saveSyncAccount(zoteroPrefs(), account);
   const ok = doc.defaultView?.confirm(
-    '从云端下载会按时间戳合并对话历史，并直接覆盖本地账号、显示、提示词、联网/MCP 配置。继续？',
+    '从云端下载会按时间戳合并对话历史，并直接覆盖本地账号、显示、提示词、联网/MCP 和翻译配置。继续？',
   ) ?? true;
   if (!ok) {
     setStatus(doc, 'zai-sync-status', '已取消下载。');
@@ -317,6 +339,7 @@ async function runSyncPull(doc: Document): Promise<void> {
   setStatus(doc, 'zai-sync-status', result.message, !result.ok);
   if (result.ok) {
     renderPresetSettings(doc);
+    renderTranslateSettings(doc);
     renderUiSettings(doc);
     renderPromptSettings(doc);
     renderToolSettings(doc);
@@ -335,6 +358,7 @@ interface ConfigBackup {
   uiSettings: UiSettings;
   quickPrompts: QuickPromptSettings;
   toolSettings: ToolSettings;
+  translateSettings: TranslateSettings;
 }
 
 interface ParsedConfigBackup {
@@ -342,6 +366,7 @@ interface ParsedConfigBackup {
   uiSettings?: UiSettings;
   quickPrompts?: QuickPromptSettings;
   toolSettings?: ToolSettings;
+  translateSettings?: TranslateSettings;
   sections: string[];
 }
 
@@ -353,6 +378,7 @@ function buildConfigBackup(): ConfigBackup {
     uiSettings: loadUiSettings(zoteroPrefs()),
     quickPrompts: loadQuickPromptSettings(zoteroPrefs()),
     toolSettings: loadToolSettings(zoteroPrefs()),
+    translateSettings: loadTranslateSettings(zoteroPrefs()),
   };
 }
 
@@ -405,7 +431,7 @@ function generateConfigBackupJson(doc: Document): void {
   setStatus(
     doc,
     'zai-config-status',
-    `已生成配置 JSON：账号 ${backup.presets.length} 个，自定义按钮 ${backup.quickPrompts.customButtons.length} 个。内容可能包含 API Key。`,
+    `已生成配置 JSON：账号 ${backup.presets.length} 个，自定义按钮 ${backup.quickPrompts.customButtons.length} 个，含翻译设置。内容可能包含 API Key。`,
   );
   flashButton(byID<HTMLButtonElement>(doc, 'zai-config-generate'), '已生成');
 }
@@ -451,8 +477,12 @@ function importConfigBackupRaw(
     saveQuickPromptSettings(zoteroPrefs(), parsed.quickPrompts);
   }
   if (parsed.toolSettings) saveToolSettings(zoteroPrefs(), parsed.toolSettings);
+  if (parsed.translateSettings) {
+    saveTranslateSettings(zoteroPrefs(), parsed.translateSettings);
+  }
 
   renderPresetSettings(doc);
+  renderTranslateSettings(doc);
   renderUiSettings(doc);
   renderPromptSettings(doc);
   renderToolSettings(doc);
@@ -559,8 +589,15 @@ function parseConfigBackup(raw: string): ParsedConfigBackup | string {
     result.toolSettings = normalizeToolSettings(parsed.toolSettings);
     sections.push('联网/MCP');
   }
+  if (hasOwn(parsed, 'translateSettings')) {
+    if (!isRecord(parsed.translateSettings)) {
+      return '配置里的 translateSettings 必须是对象。';
+    }
+    result.translateSettings = normalizeTranslateSettings(parsed.translateSettings);
+    sections.push('翻译');
+  }
   if (sections.length === 0) {
-    return '没有找到可导入的配置段：presets / quickPrompts / toolSettings。';
+    return '没有找到可导入的配置段：presets / uiSettings / quickPrompts / toolSettings / translateSettings。';
   }
   return result;
 }
@@ -569,6 +606,221 @@ function renderPresetSettings(doc: Document): void {
   renderPresetRows(doc, loadPresets(zoteroPrefs()));
   updatePresetSaveButton(doc);
   setStatus(doc, 'zai-preset-status', '已加载账号配置。');
+}
+
+const TRANSLATE_THINKING_OPTIONS: Array<[TranslateThinking, string]> = [
+  ['low', 'Low - 省 token，推荐翻译使用'],
+  ['medium', 'Medium - 平衡'],
+  ['high', 'High - 更强推理'],
+  ['xhigh', 'Extra high - 最强推理'],
+];
+
+const TRANSLATE_CONTEXT_OPTIONS: Array<[TranslateContextLevel, string]> = [
+  ['none', '仅本句'],
+  ['paragraph', '本段'],
+  ['page', '整页'],
+];
+
+const TRANSLATE_POSITION_OPTIONS: Array<[TranslateOverlayPosition, string]> = [
+  ['above', '句上方'],
+  ['below', '句下方'],
+];
+
+const TRANSLATE_SIZE_OPTIONS: Array<[TranslateOverlaySize, string]> = [
+  ['compact', '紧凑（固定小框）'],
+  ['adaptive', '自适应（尽量展开）'],
+];
+
+const TRANSLATE_TRIGGER_OPTIONS: Array<[TranslateTriggerMode, string]> = [
+  ['single', '单击翻译'],
+  ['double', '双击翻译'],
+];
+
+function renderTranslateSettings(doc: Document): void {
+  const settings = loadTranslateSettings(zoteroPrefs());
+  const presets = translateOpenAiPresets();
+  const preset = translatePresetForSettings(presets, settings.presetId);
+  const presetSelect = byID<HTMLSelectElement>(doc, 'zai-translate-preset');
+  if (presetSelect) {
+    presetSelect.replaceChildren();
+    if (presets.length === 0) {
+      presetSelect.append(option(doc, '', '请先保存 GPT 配置'));
+      presetSelect.disabled = true;
+    } else {
+      presetSelect.disabled = false;
+      for (const item of presets) {
+        presetSelect.append(option(doc, item.id, item.label || item.model || 'GPT'));
+      }
+      presetSelect.value = preset?.id ?? presets[0]?.id ?? '';
+    }
+  }
+  refreshTranslateModelSelect(doc, settings.model);
+  populateSelectOptions(
+    doc,
+    'zai-translate-thinking',
+    TRANSLATE_THINKING_OPTIONS,
+    settings.thinking,
+  );
+  populateSelectOptions(
+    doc,
+    'zai-translate-context',
+    TRANSLATE_CONTEXT_OPTIONS,
+    settings.ctxLevel,
+  );
+  populateSelectOptions(
+    doc,
+    'zai-translate-position',
+    TRANSLATE_POSITION_OPTIONS,
+    settings.overlayPosition,
+  );
+  populateSelectOptions(
+    doc,
+    'zai-translate-size',
+    TRANSLATE_SIZE_OPTIONS,
+    settings.overlaySize,
+  );
+  populateSelectOptions(
+    doc,
+    'zai-translate-trigger',
+    TRANSLATE_TRIGGER_OPTIONS,
+    settings.triggerMode,
+  );
+  setInputValue(doc, 'zai-translate-next-key', settings.nextSentenceKey);
+  setInputValue(doc, 'zai-translate-prev-key', settings.prevSentenceKey);
+  setStatus(
+    doc,
+    'zai-translate-status',
+    presets.length
+      ? '已加载逐句翻译设置。'
+      : '请先在“账号与模型”里保存一个 OpenAI/GPT 配置。',
+    presets.length === 0,
+  );
+}
+
+function refreshTranslateModelSelect(doc: Document, desiredModel?: string): string {
+  const modelSelect = byID<HTMLSelectElement>(doc, 'zai-translate-model');
+  if (!modelSelect) return '';
+  const presets = translateOpenAiPresets();
+  const presetId = byID<HTMLSelectElement>(doc, 'zai-translate-preset')?.value ?? '';
+  const preset = translatePresetForSettings(presets, presetId);
+  const models = translateModelsForPreset(preset);
+  const active = validTranslateModel(
+    preset,
+    desiredModel ?? modelSelect.value,
+  );
+  modelSelect.replaceChildren();
+  if (models.length === 0) {
+    modelSelect.append(option(doc, '', '无可用模型'));
+    modelSelect.value = '';
+    modelSelect.disabled = true;
+    return '';
+  }
+  modelSelect.disabled = false;
+  for (const model of models) modelSelect.append(option(doc, model, model));
+  modelSelect.value = active;
+  return active;
+}
+
+function saveTranslateSettingsControls(doc: Document): void {
+  const settings = readTranslateSettingsControls(doc);
+  saveTranslateSettings(zoteroPrefs(), settings);
+  renderTranslateSettings(doc);
+  refreshSidebarPreferences();
+  setStatus(doc, 'zai-translate-status', '逐句翻译设置已保存；下一次翻译立即使用。');
+  flashButton(byID<HTMLButtonElement>(doc, 'zai-translate-save'), '已保存');
+}
+
+function readTranslateSettingsControls(doc: Document): TranslateSettings {
+  const existing = loadTranslateSettings(zoteroPrefs());
+  const presets = translateOpenAiPresets();
+  const presetId = byID<HTMLSelectElement>(doc, 'zai-translate-preset')?.value ?? '';
+  const preset = translatePresetForSettings(presets, presetId);
+  return normalizeTranslateSettings({
+    ...existing,
+    enabled: false,
+    presetId: preset?.id ?? '',
+    model: validTranslateModel(
+      preset,
+      byID<HTMLSelectElement>(doc, 'zai-translate-model')?.value ?? '',
+    ),
+    thinking: translateThinkingValue(
+      byID<HTMLSelectElement>(doc, 'zai-translate-thinking')?.value,
+    ),
+    ctxLevel: translateContextValue(
+      byID<HTMLSelectElement>(doc, 'zai-translate-context')?.value,
+    ),
+    overlayPosition: translatePositionValue(
+      byID<HTMLSelectElement>(doc, 'zai-translate-position')?.value,
+    ),
+    overlaySize: translateSizeValue(
+      byID<HTMLSelectElement>(doc, 'zai-translate-size')?.value ??
+        existing.overlaySize,
+    ),
+    triggerMode: translateTriggerValue(
+      byID<HTMLSelectElement>(doc, 'zai-translate-trigger')?.value ??
+        existing.triggerMode,
+    ),
+    nextSentenceKey:
+      byID<HTMLInputElement>(doc, 'zai-translate-next-key')?.value.trim() ||
+      existing.nextSentenceKey,
+    prevSentenceKey:
+      byID<HTMLInputElement>(doc, 'zai-translate-prev-key')?.value.trim() ||
+      existing.prevSentenceKey,
+  });
+}
+
+function translateOpenAiPresets(): ModelPreset[] {
+  return loadPresets(zoteroPrefs()).filter((preset) => preset.provider === 'openai');
+}
+
+function translatePresetForSettings(
+  presets: ModelPreset[],
+  presetId: string,
+): ModelPreset | null {
+  return presets.find((preset) => preset.id === presetId) ?? presets[0] ?? null;
+}
+
+function translateModelsForPreset(preset: ModelPreset | null): string[] {
+  if (!preset) return [];
+  const seen = new Set<string>();
+  const models: string[] = [];
+  for (const raw of [preset.model, ...(preset.models ?? [])]) {
+    const model = raw.trim();
+    if (!model || seen.has(model)) continue;
+    seen.add(model);
+    models.push(model);
+  }
+  return models;
+}
+
+function validTranslateModel(
+  preset: ModelPreset | null,
+  desired: string,
+): string {
+  const models = translateModelsForPreset(preset);
+  return desired && models.includes(desired) ? desired : (models[0] ?? '');
+}
+
+function translateThinkingValue(value: unknown): TranslateThinking {
+  return value === 'medium' || value === 'high' || value === 'xhigh'
+    ? value
+    : 'low';
+}
+
+function translateContextValue(value: unknown): TranslateContextLevel {
+  return value === 'paragraph' || value === 'page' ? value : 'none';
+}
+
+function translatePositionValue(value: unknown): TranslateOverlayPosition {
+  return value === 'below' ? 'below' : 'above';
+}
+
+function translateSizeValue(value: unknown): TranslateOverlaySize {
+  return value === 'adaptive' ? 'adaptive' : 'compact';
+}
+
+function translateTriggerValue(value: unknown): TranslateTriggerMode {
+  return value === 'double' ? 'double' : 'single';
 }
 
 function renderUiSettings(doc: Document): void {
@@ -610,6 +862,21 @@ function readUiSettingsControls(doc: Document): UiSettings {
 function setInputValue(doc: Document, id: string, value: string): void {
   const inputNode = byID<HTMLInputElement>(doc, id);
   if (inputNode) inputNode.value = value;
+}
+
+function populateSelectOptions<T extends string>(
+  doc: Document,
+  id: string,
+  options: Array<[T, string]>,
+  value: string,
+): void {
+  const selectNode = byID<HTMLSelectElement>(doc, id);
+  if (!selectNode) return;
+  selectNode.replaceChildren();
+  for (const [optionValue, label] of options) {
+    selectNode.append(option(doc, optionValue, label));
+  }
+  selectNode.value = value;
 }
 
 function renderSyncSettings(doc: Document): void {
@@ -931,6 +1198,7 @@ async function savePresetControlsWithConnectivity(doc: Document): Promise<void> 
     }
     savePresets(zoteroPrefs(), saved);
     renderPresetRows(doc, loadPresets(zoteroPrefs()));
+    renderTranslateSettings(doc);
     updatePresetSaveButton(doc);
     refreshSidebarPreferences();
     setStatus(doc, 'zai-preset-status', '连接测试通过，账号配置已保存，侧边栏已刷新。');
@@ -1552,6 +1820,13 @@ function select<T extends string>(
     node.append(option);
   }
   node.value = value;
+  return node;
+}
+
+function option(doc: Document, value: string, label: string): HTMLOptionElement {
+  const node = doc.createElement('option');
+  node.value = value;
+  node.textContent = label;
   return node;
 }
 
