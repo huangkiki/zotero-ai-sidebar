@@ -3313,7 +3313,27 @@ async function translateParagraphWithCache(
     ctxLevel: "full-text",
   });
   const cached = getCachedTranslation(input.prefs, key);
-  if (cached) return { text: cleanTranslationOutput(cached.text), cached: true };
+  if (cached) {
+    if (
+      cached.sourceText !== input.paragraph ||
+      cached.target !== "zh" ||
+      cached.endpoint !== input.preset.baseUrl ||
+      cached.thinking !== input.thinking ||
+      cached.ctxLevel !== "full-text"
+    ) {
+      setCachedTranslation(input.prefs, key, {
+        ...cached,
+        text: cleanTranslationOutput(cached.text),
+        model: cached.model || input.model,
+        sourceText: input.paragraph,
+        target: "zh",
+        endpoint: input.preset.baseUrl,
+        thinking: input.thinking,
+        ctxLevel: "full-text",
+      });
+    }
+    return { text: cleanTranslationOutput(cached.text), cached: true };
+  }
 
   let out = "";
   for await (const chunk of translateSentence({
