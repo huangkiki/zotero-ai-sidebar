@@ -600,8 +600,10 @@ export class TranslateModeController {
       latestTranslation = cleanTranslationOutput(cached.text);
       translationDone = true;
       overlay.setText(latestTranslation);
+      overlay.setStatusLabel("● 已完成 · 本地缓存");
       return;
     }
+    overlay.setStatus("本地缓存未命中，正在翻译…");
 
     let buffer = "";
     let usageLabel = "";
@@ -865,7 +867,7 @@ function formatUsageLabel(
   const inputTokens = input ?? 0;
   const outputTokens = output ?? 0;
   const cacheTokens = cacheRead ?? 0;
-  const cache = cacheTokens > 0 ? `，缓存 ${cacheTokens}` : "";
+  const cache = cacheTokens > 0 ? `，API缓存 ${cacheTokens}` : "";
   return `token ${inputTokens}/${outputTokens}${cache}`;
 }
 
