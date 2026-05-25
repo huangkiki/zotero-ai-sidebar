@@ -71,6 +71,16 @@ import {
 } from "../ui/math";
 import { serializeSelectionAsMarkdown } from "../ui/selection-serialize";
 import { TranslateModeController } from "../translate/translate-mode";
+import {
+  cacheKey,
+  getCachedTranslation,
+  setCachedTranslation,
+} from "../translate/cache";
+import { loadTranslateSettings } from "../translate/settings";
+import {
+  cleanTranslationOutput,
+  translateSentence,
+} from "../translate/translator";
 
 const translateControllers = new WeakMap<Window, TranslateModeController>();
 
@@ -89,6 +99,9 @@ const contextPolicy = DEFAULT_CONTEXT_POLICY;
 const IMAGE_PROMPT_MAX_DIMENSION = 2048;
 const SELECTION_CONTEXT_RADIUS_CHARS = 2500;
 const SELECTION_CONTEXT_QUERY_CHARS = 500;
+const FULL_TRANSLATE_MAX_PARAGRAPH_CHARS = 900;
+const FULL_TRANSLATE_RENDER_EVERY = 1;
+const FULL_TRANSLATE_SAVE_EVERY = 5;
 const OPENAI_QUICK_MODELS = [
   "gpt-5.5",
   "gpt-5.4",
@@ -548,14 +561,20 @@ function renderToolbar(doc: Document, mount: HTMLElement, state: PanelState) {
   bottomRow.append(openNote);
   bottomRow.append(settings);
   const win = mount.ownerDocument!.defaultView!;
-  const translateBtn = buttonEl(doc, "译");
-  translateBtn.className = "zai-sidebar-translate-button";
-  translateBtn.title = "逐句翻译模式（点击切换开关）";
-  syncTranslateBtnState(win, translateBtn);
-  translateBtn.addEventListener("click", () => {
-    void toggleTranslateMode(win, translateBtn);
+  const selectedPaperCount = safeSelectedItemIDs(win).length;
+  const fullTranslate = buttonEl(
+    doc,
+    selectedPaperCount > 1 ? `批量译(${selectedPaperCount})` : "全文译",
+  );
+  fullTranslate.title =
+    selectedPaperCount > 1
+      ? "逐篇读取当前选中的论文全文，并按段落批量翻译到聊天区"
+      : "一键读取当前 PDF 全文，并按段落翻译到聊天区";
+  fullTranslate.disabled = state.sending || selectedPaperCount === 0;
+  fullTranslate.addEventListener("click", () => {
+    void translateSelectedPapersFullText(mount, state, fullTranslate);
   });
-  bottomRow.append(translateBtn);
+  bottomRow.append(fullTranslate);
   const hide = buttonEl(doc, "隐藏");
   hide.title = "隐藏 AI 对话列";
   hide.addEventListener("click", () => hideCurrentSidebar(mount));
@@ -609,7 +628,8 @@ export function refreshSidebarPreferences(): void {
     const presets = loadPresets(zoteroPrefs());
     state.presets = presets;
     if (!state.selectedId || !presets.some((p) => p.id === state.selectedId)) {
-      state.selectedId = configuredPresets(state)[0]?.id ?? presets[0]?.id ?? null;
+      state.selectedId =
+        configuredPresets(state)[0]?.id ?? presets[0]?.id ?? null;
     }
     state.agentPermissionMode = agentPermissionMode(
       selectedChatPreset(state) ?? selectedPreset(state),
@@ -833,7 +853,8 @@ function renderPresetEditor(
       id: current.id,
       provider: providerKind,
       label:
-        label.value.trim() || (providerKind === "anthropic" ? "Claude" : "GPT"),
+        label.value.trim() ||
+        (providerKind === "anthropic" ? "Claude" : "GPT"),
       apiKey: apiKey.value.trim(),
       baseUrl: baseUrl.value.trim() || DEFAULT_BASE_URLS[providerKind],
       model: activeModel,
@@ -1015,7 +1036,9 @@ function renderContextCard(doc: Document, itemID: number | null) {
   return card;
 }
 
-function safeGetItem(itemID: number | null): { getField?: (field: string) => string } | null {
+function safeGetItem(
+  itemID: number | null,
+): { getField?: (field: string) => string } | null {
   if (itemID == null) return null;
   try {
     const item = Zotero.Items.get(itemID) as
@@ -1157,12 +1180,15 @@ function renderTaskQueueTrigger(
   ]
     .filter(Boolean)
     .join(" ");
-  button.title = tasks.length
-    ? "查看任务队列和未读回答"
-    : "暂无任务结果";
+  button.title = tasks.length ? "查看任务队列和未读回答" : "暂无任务结果";
   button.append(
     doc.createTextNode(unread ? "未读 " : queued ? "排队 " : "队列 "),
-    el(doc, "span", "task-queue-count", String(unread || queued || tasks.length)),
+    el(
+      doc,
+      "span",
+      "task-queue-count",
+      String(unread || queued || tasks.length),
+    ),
   );
   button.addEventListener("click", () => {
     state.queueOpen = !state.queueOpen;
@@ -1197,12 +1223,19 @@ function renderTaskQueue(
     );
     if (latestUnread.task.pdfSelection) {
       strip.append(
-        el(doc, "span", "task-locator-chip", taskLocatorLabel(latestUnread.task)),
+        el(
+          doc,
+          "span",
+          "task-locator-chip",
+          taskLocatorLabel(latestUnread.task),
+        ),
       );
     }
     const view = buttonEl(doc, "查看");
     view.className = "task-link-button";
-    view.addEventListener("click", () => viewChatTask(mount, state, latestUnread));
+    view.addEventListener("click", () =>
+      viewChatTask(mount, state, latestUnread),
+    );
     strip.append(view);
     wrap.append(strip);
   }
@@ -1246,7 +1279,8 @@ function renderTaskQueue(
   });
   const clear = buttonEl(doc, "清空队列");
   clear.className = "clear-task-queue";
-  clear.disabled = unread > 0 || running > 0 || queued > 0 || tasks.length === 0;
+  clear.disabled =
+    unread > 0 || running > 0 || queued > 0 || tasks.length === 0;
   clear.title = clear.disabled
     ? "全部已读且没有回答中/排队中任务时才可清空"
     : "直接清空队列记录，不删除聊天内容";
@@ -1296,7 +1330,9 @@ function renderTaskRow(
   );
   main.append(top, el(doc, "div", "task-preview", view.task.promptPreview));
   if (view.task.pdfSelection) {
-    main.append(el(doc, "div", "task-locator-chip", taskLocatorLabel(view.task)));
+    main.append(
+      el(doc, "div", "task-locator-chip", taskLocatorLabel(view.task)),
+    );
   }
   row.append(main);
 
@@ -1340,10 +1376,7 @@ function visibleChatTasks(state: PanelState): ChatTaskView[] {
   return tasks.sort((a, b) => b.task.createdAt - a.task.createdAt);
 }
 
-function chatTaskStatus(
-  state: PanelState,
-  task: ChatTaskMeta,
-): ChatTaskStatus {
+function chatTaskStatus(state: PanelState, task: ChatTaskMeta): ChatTaskStatus {
   if (task.cancelledAt) return "cancelled";
   if (task.error) return "failed";
   if (state.sending && state.activeTaskID === task.id) return "running";
@@ -1352,7 +1385,10 @@ function chatTaskStatus(
   return "read";
 }
 
-function findNextAssistantIndex(messages: Message[], userIndex: number): number {
+function findNextAssistantIndex(
+  messages: Message[],
+  userIndex: number,
+): number {
   for (let index = userIndex + 1; index < messages.length; index++) {
     if (messages[index].role === "assistant") return index;
   }
@@ -1656,9 +1692,14 @@ function renderInput(doc: Document, mount: HTMLElement, state: PanelState) {
       (!event.shiftKey || event.ctrlKey || event.metaKey);
     if (shouldSend) {
       event.preventDefault();
-      void sendMessage(mount, state, composerMessageContent(input.value, state), {
-        fromComposer: true,
-      });
+      void sendMessage(
+        mount,
+        state,
+        composerMessageContent(input.value, state),
+        {
+          fromComposer: true,
+        },
+      );
     }
   });
 
@@ -1693,7 +1734,11 @@ function renderInput(doc: Document, mount: HTMLElement, state: PanelState) {
   afterRender(mount, () => updateStatus(false));
 
   const inputStack = el(doc, "div", "input-stack");
-  inputStack.append(renderDraftImages(doc, mount, state, input), slashMenu, input);
+  inputStack.append(
+    renderDraftImages(doc, mount, state, input),
+    slashMenu,
+    input,
+  );
   row.append(inputStack, renderWebSearchSwitcher(doc, mount, state));
   const imageAttach = renderImageAttachButton(
     doc,
@@ -3038,6 +3083,315 @@ async function sendMessage(
   void processNextQueuedChatTask(mount, state);
 }
 
+async function translateSelectedPapersFullText(
+  mount: HTMLElement,
+  state: PanelState,
+  trigger: HTMLButtonElement,
+): Promise<void> {
+  if (state.sending) return;
+  const win = mount.ownerDocument!.defaultView!;
+  const itemIDs = safeSelectedItemIDs(win);
+  if (!itemIDs.length) {
+    flashButton(trigger, "无论文");
+    return;
+  }
+
+  const prefs = zoteroPrefs();
+  const settings = loadTranslateSettings(prefs);
+  const presets = loadPresets(prefs);
+  const preset = pickTranslatePreset(presets, settings.presetId);
+  const model = settings.model || preset?.model || "";
+  if (!preset || !model || !preset.apiKey) {
+    flashButton(trigger, "先配置");
+    openAddonPreferences(mount.ownerDocument!);
+    return;
+  }
+
+  await ensureHistoryLoaded(mount, state);
+  if (states.get(mount) !== state || state.sending) return;
+
+  const userMessage: Message = {
+    role: "user",
+    content:
+      itemIDs.length > 1
+        ? `批量全文逐段翻译 ${itemIDs.length} 篇论文`
+        : "全文逐段翻译当前论文",
+    task: {
+      id: makeTaskID(),
+      kind: "full_text",
+      title: itemIDs.length > 1 ? "批量全文翻译" : "全文翻译",
+      promptPreview:
+        itemIDs.length > 1
+          ? `批量全文逐段翻译 ${itemIDs.length} 篇论文`
+          : "全文逐段翻译当前 PDF",
+      createdAt: Date.now(),
+    },
+  };
+  const assistant: Message = {
+    role: "assistant",
+    content: "准备读取 PDF 全文…",
+  };
+
+  state.messages.push(userMessage, assistant);
+  state.sending = true;
+  state.autoFollowMessages = true;
+  state.scrollToBottom = true;
+  state.focusInput = true;
+  state.activeAssistantIndex = state.messages.indexOf(assistant);
+  state.activeAssistantStage = "building_context";
+  state.activeTaskID = userMessage.task?.id;
+  const controller = new win.AbortController();
+  state.abort = controller;
+  void saveChatMessages(state.itemID, state.messages);
+  renderPanel(mount, state);
+
+  try {
+    await runFullTextTranslationBatch({
+      win,
+      mount,
+      state,
+      assistant,
+      assistantIndex: state.messages.indexOf(assistant),
+      itemIDs,
+      preset,
+      model,
+      thinking: settings.thinking,
+      signal: controller.signal,
+      prefs,
+    });
+    markMessageTaskCompleted(userMessage);
+  } catch (err) {
+    if (isAbortError(err) || controller.signal.aborted) {
+      assistant.content += "\n\n已取消全文翻译。";
+      markMessageTaskCancelled(userMessage);
+    } else {
+      const message = errorMessage(err);
+      assistant.content += `\n\n[Error] ${message}`;
+      markMessageTaskError(userMessage, message);
+    }
+  } finally {
+    state.sending = false;
+    state.abort = undefined;
+    state.activeAssistantIndex = undefined;
+    state.activeAssistantStage = undefined;
+    state.activeAssistantDetail = undefined;
+    state.activeTaskID = undefined;
+    state.cancellingTaskID = undefined;
+    void saveChatMessages(state.itemID, state.messages);
+    state.scrollToBottom = state.autoFollowMessages;
+    state.focusInput = true;
+    renderPanel(mount, state);
+  }
+}
+
+interface FullTextTranslationBatchInput {
+  win: Window;
+  mount: HTMLElement;
+  state: PanelState;
+  assistant: Message;
+  assistantIndex: number;
+  itemIDs: number[];
+  preset: ModelPreset;
+  model: string;
+  thinking: ReturnType<typeof loadTranslateSettings>["thinking"];
+  signal: AbortSignal;
+  prefs: ReturnType<typeof zoteroPrefs>;
+}
+
+async function runFullTextTranslationBatch(
+  input: FullTextTranslationBatchInput,
+): Promise<void> {
+  const {
+    win,
+    mount,
+    state,
+    assistant,
+    assistantIndex,
+    itemIDs,
+    preset,
+    model,
+    thinking,
+    signal,
+    prefs,
+  } = input;
+  assistant.content = "";
+  let translatedCount = 0;
+
+  for (let paperIndex = 0; paperIndex < itemIDs.length; paperIndex++) {
+    throwIfAborted(signal);
+    const itemID = itemIDs[paperIndex]!;
+    const title = paperTitle(itemID) || `论文 ${paperIndex + 1}`;
+    state.activeAssistantStage = "building_context";
+    state.activeAssistantDetail = `读取全文：${title}`;
+    appendAssistantSection(
+      assistant,
+      itemIDs.length > 1 ? `# ${paperIndex + 1}. ${title}` : `# ${title}`,
+    );
+    updateMessageBubble(mount, assistantIndex, assistant);
+
+    const fullText = await fullTextForTranslation(win, itemID);
+    const paragraphs = splitFullTextParagraphs(fullText);
+    if (!paragraphs.length) {
+      assistant.content += "\n\n未读取到可翻译的 PDF 全文。";
+      updateMessageBubble(mount, assistantIndex, assistant);
+      continue;
+    }
+
+    assistant.content += `\n\n共 ${paragraphs.length} 段，开始翻译。`;
+    updateMessageBubble(mount, assistantIndex, assistant);
+
+    for (let index = 0; index < paragraphs.length; index++) {
+      throwIfAborted(signal);
+      const paragraph = paragraphs[index]!;
+      state.activeAssistantStage = "writing";
+      state.activeAssistantDetail = `翻译 ${paperIndex + 1}/${itemIDs.length} · ${index + 1}/${paragraphs.length}`;
+      const translated = await translateParagraphWithCache({
+        paragraph,
+        preset,
+        model,
+        thinking,
+        signal,
+        prefs,
+      });
+      assistant.content += `\n\n## 第 ${index + 1} 段\n\n${translated}`;
+      translatedCount++;
+      if (translatedCount % FULL_TRANSLATE_RENDER_EVERY === 0) {
+        updateMessageBubble(mount, assistantIndex, assistant);
+      }
+      if (translatedCount % FULL_TRANSLATE_SAVE_EVERY === 0) {
+        void saveChatMessages(state.itemID, state.messages);
+      }
+    }
+  }
+}
+
+interface TranslateParagraphInput {
+  paragraph: string;
+  preset: ModelPreset;
+  model: string;
+  thinking: ReturnType<typeof loadTranslateSettings>["thinking"];
+  signal: AbortSignal;
+  prefs: ReturnType<typeof zoteroPrefs>;
+}
+
+async function translateParagraphWithCache(
+  input: TranslateParagraphInput,
+): Promise<string> {
+  const key = cacheKey({
+    sentence: input.paragraph,
+    target: "zh",
+    endpoint: input.preset.baseUrl,
+    model: input.model,
+    thinking: input.thinking,
+    ctxLevel: "full-text",
+  });
+  const cached = getCachedTranslation(input.prefs, key);
+  if (cached) return cleanTranslationOutput(cached.text);
+
+  let out = "";
+  for await (const chunk of translateSentence({
+    sentence: input.paragraph,
+    preset: input.preset,
+    model: input.model,
+    thinking: input.thinking,
+    signal: input.signal,
+  })) {
+    throwIfAborted(input.signal);
+    if (chunk.type === "text" && chunk.text) out += chunk.text;
+    if (chunk.type === "error" && chunk.message) throw new Error(chunk.message);
+  }
+  const cleaned = cleanTranslationOutput(out);
+  if (cleaned) {
+    setCachedTranslation(input.prefs, key, {
+      text: cleaned,
+      model: input.model,
+      createdAt: Date.now(),
+    });
+  }
+  return cleaned || "（空译文）";
+}
+
+async function fullTextForTranslation(
+  win: Window,
+  itemID: number,
+): Promise<string> {
+  const reader = getActiveReader(win);
+  if (reader && activeReaderConversationItemID(win) === itemID) {
+    let locator: Awaited<ReturnType<typeof createPdfLocator>> | null = null;
+    try {
+      locator = await createPdfLocator(reader);
+      const text = await locator.getFullText();
+      if (text.trim()) return text;
+    } catch (err) {
+      debugZai("full-translate.reader-text.failed", {
+        itemID,
+        error: errorMessage(err),
+      });
+    } finally {
+      locator?.dispose();
+    }
+  }
+  return zoteroContextSource.getFullText(itemID);
+}
+
+function splitFullTextParagraphs(text: string): string[] {
+  const normalized = text.replace(/\r\n?/g, "\n");
+  const raw = normalized
+    .split(/\n\s*\n+/)
+    .map((part) => part.replace(/[ \t\f\v]+/g, " ").trim())
+    .filter((part) => part.length >= 20 && /[A-Za-z\u4e00-\u9fff]/.test(part));
+  const out: string[] = [];
+  for (const paragraph of raw) {
+    out.push(...splitLongParagraph(paragraph));
+  }
+  return out;
+}
+
+function splitLongParagraph(paragraph: string): string[] {
+  if (paragraph.length <= FULL_TRANSLATE_MAX_PARAGRAPH_CHARS) {
+    return [paragraph];
+  }
+  const sentences = paragraph.match(/[^.!?。！？]+[.!?。！？]*/g) ?? [paragraph];
+  const chunks: string[] = [];
+  let current = "";
+  for (const sentence of sentences) {
+    const next = current ? `${current} ${sentence.trim()}` : sentence.trim();
+    if (next.length <= FULL_TRANSLATE_MAX_PARAGRAPH_CHARS) {
+      current = next;
+      continue;
+    }
+    if (current) chunks.push(current);
+    current = sentence.trim();
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+function appendAssistantSection(assistant: Message, heading: string): void {
+  assistant.content += `${assistant.content ? "\n\n" : ""}${heading}`;
+}
+
+function pickTranslatePreset(
+  presets: ModelPreset[],
+  desiredId: string,
+): ModelPreset | null {
+  const openai = presets.filter((preset) => preset.provider === "openai");
+  if (!openai.length) return null;
+  return openai.find((preset) => preset.id === desiredId) ?? openai[0]!;
+}
+
+function paperTitle(itemID: number): string {
+  try {
+    return Zotero.Items.get(itemID)?.getField?.("title") || "";
+  } catch {
+    return "";
+  }
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+}
+
 async function processNextQueuedChatTask(
   mount: HTMLElement,
   state: PanelState,
@@ -3219,7 +3573,8 @@ function pdfSelectionLocatorFromDraft(
   const position = clonePlainRecord(draft.annotation.position);
   if (!position) return null;
   const pageIndex =
-    typeof position.pageIndex === "number" && Number.isFinite(position.pageIndex)
+    typeof position.pageIndex === "number" &&
+    Number.isFinite(position.pageIndex)
       ? Math.floor(position.pageIndex)
       : undefined;
   return {
@@ -3296,8 +3651,7 @@ async function streamAssistant(
   state.focusInput = true;
   renderPanel(mount, state);
   const userIndex = state.messages.indexOf(userMessage);
-  const assistantIndex =
-    userIndex >= 0 ? userIndex + 1 : state.messages.length;
+  const assistantIndex = userIndex >= 0 ? userIndex + 1 : state.messages.length;
   const assistant: Message = { role: "assistant", content: "" };
   state.messages.splice(assistantIndex, 0, assistant);
   state.activeAssistantIndex = assistantIndex;
@@ -3355,7 +3709,10 @@ async function streamAssistant(
       selectionAnnotation: () => getStoredSelectionAnnotation(state.itemID),
       fullTextHighlight: options.fullTextHighlight,
       getActiveReader: () =>
-        getReaderForCurrentSelection(mount.ownerDocument!.defaultView, state.itemID),
+        getReaderForCurrentSelection(
+          mount.ownerDocument!.defaultView,
+          state.itemID,
+        ),
       // Curry the live document and itemID so the model writes to whatever
       // is selected at call time (not at session-creation time). Refresh
       // the visible note panel after the write so the user sees the
@@ -3522,9 +3879,7 @@ function allowedAnnotationColor(color: string | null): string | null {
 function configuredAnnotationColors(): Set<string> {
   const guide = loadToolSettings(zoteroPrefs()).annotationColorGuide;
   return new Set(
-    (guide.match(/#[0-9a-fA-F]{6}\b/g) ?? []).map((hex) =>
-      hex.toLowerCase(),
-    ),
+    (guide.match(/#[0-9a-fA-F]{6}\b/g) ?? []).map((hex) => hex.toLowerCase()),
   );
 }
 
@@ -3782,19 +4137,24 @@ async function getSelectedTextForPrompt(
   }
   const storedText = firstUsableStoredSelectedText(ids);
   const selectedText =
-    rangeText || rectText || visualText || liveText || draft?.text || storedText;
+    rangeText ||
+    rectText ||
+    visualText ||
+    liveText ||
+    draft?.text ||
+    storedText;
   debugZai("selection.official-text", {
     chosen: rangeText
       ? "reader-selection-ranges"
       : rectText
-      ? "position-rects"
-      : visualText
-        ? visualSelection.source
-        : liveText
-        ? "live"
-        : draft?.text
-          ? "reader-event"
-          : "stored",
+        ? "position-rects"
+        : visualText
+          ? visualSelection.source
+          : liveText
+            ? "live"
+            : draft?.text
+              ? "reader-event"
+              : "stored",
     range: textDebugInfo(rangeText, 120),
     visual: textDebugInfo(visualSelection.text, 120),
     visualSource: visualSelection.source,
@@ -3902,7 +4262,12 @@ function textFromSelectionRange(view: any, range: any): string {
   const chars = charsForReaderPage(view, pageIndex);
   const start = selectionRangeStartOffset(range);
   const end = selectionRangeEndOffset(range);
-  if (chars.length && Number.isFinite(start) && Number.isFinite(end) && end > start) {
+  if (
+    chars.length &&
+    Number.isFinite(start) &&
+    Number.isFinite(end) &&
+    end > start
+  ) {
     return textFromReaderChars(chars.slice(start, end));
   }
   return typeof range?.text === "string" ? range.text : "";
@@ -3917,11 +4282,17 @@ function selectionRangePageIndex(range: any): number {
 }
 
 function selectionRangeStartOffset(range: any): number {
-  return Math.min(selectionRangeOffset(range?.anchorOffset), selectionRangeOffset(range?.headOffset));
+  return Math.min(
+    selectionRangeOffset(range?.anchorOffset),
+    selectionRangeOffset(range?.headOffset),
+  );
 }
 
 function selectionRangeEndOffset(range: any): number {
-  return Math.max(selectionRangeOffset(range?.anchorOffset), selectionRangeOffset(range?.headOffset));
+  return Math.max(
+    selectionRangeOffset(range?.anchorOffset),
+    selectionRangeOffset(range?.headOffset),
+  );
 }
 
 function selectionRangeOffset(value: unknown): number {
@@ -3930,7 +4301,9 @@ function selectionRangeOffset(value: unknown): number {
 
 function charsForReaderPage(view: any, pageIndex: number): any[] {
   const pages = view?._pdfPages;
-  const page = Array.isArray(pages) ? pages[pageIndex] : pages?.[String(pageIndex)];
+  const page = Array.isArray(pages)
+    ? pages[pageIndex]
+    : pages?.[String(pageIndex)];
   return Array.isArray(page?.chars) ? page.chars : [];
 }
 
@@ -3962,7 +4335,9 @@ interface VisualCharFragment {
   key: string;
 }
 
-function getActiveReaderVisualSelection(reader: unknown): VisualSelectionSnapshot {
+function getActiveReaderVisualSelection(
+  reader: unknown,
+): VisualSelectionSnapshot {
   for (const win of activeReaderWindows(reader as any)) {
     const snapshot = visualSelectionFromWindow(win);
     if (snapshot.text) return snapshot;
@@ -4010,7 +4385,10 @@ function selectionClientRects(selection: Selection): DOMRect[] {
   return rects;
 }
 
-function isUsableVisualSelectionText(visualText: string, rawText: string): boolean {
+function isUsableVisualSelectionText(
+  visualText: string,
+  rawText: string,
+): boolean {
   if (!visualText) return false;
   if (!rawText) return visualText.length >= 2;
   if (visualText === rawText) return true;
@@ -4063,13 +4441,10 @@ function visualCharFragments(
 }
 
 function collectSelectionTextNodes(doc: Document, bounds: DOMRect): Text[] {
-  const roots = (Array.from(doc.querySelectorAll(".textLayer")) as Element[])
-    .filter((root) => clientRectListOverlaps(root.getClientRects(), bounds));
-  const searchRoots: Node[] = roots.length
-    ? roots
-    : doc.body
-      ? [doc.body]
-      : [];
+  const roots = (
+    Array.from(doc.querySelectorAll(".textLayer")) as Element[]
+  ).filter((root) => clientRectListOverlaps(root.getClientRects(), bounds));
+  const searchRoots: Node[] = roots.length ? roots : doc.body ? [doc.body] : [];
   const nodes: Text[] = [];
   const showText = doc.defaultView?.NodeFilter?.SHOW_TEXT ?? 4;
   for (const root of searchRoots) {
@@ -4094,7 +4469,11 @@ function collectSelectionTextNodes(doc: Document, bounds: DOMRect): Text[] {
 
 function textFromVisualFragments(fragments: VisualCharFragment[]): string {
   if (!fragments.length) return "";
-  const rows: Array<{ y: number; height: number; chars: VisualCharFragment[] }> = [];
+  const rows: Array<{
+    y: number;
+    height: number;
+    chars: VisualCharFragment[];
+  }> = [];
   const sorted = fragments
     .slice()
     .sort(
@@ -4152,8 +4531,10 @@ function shouldInsertVisualSpace(left: string, right: string): boolean {
   if (!left || !right) return false;
   if (/[,.;:!?，。；：！？)]/.test(right)) return false;
   if (/[(（]$/.test(left)) return false;
-  return /[A-Za-z0-9\u4e00-\u9fff)\]]/.test(left) &&
-    /[A-Za-z0-9\u4e00-\u9fff([（]/.test(right);
+  return (
+    /[A-Za-z0-9\u4e00-\u9fff)\]]/.test(left) &&
+    /[A-Za-z0-9\u4e00-\u9fff([（]/.test(right)
+  );
 }
 
 function textCodeUnitSegments(
@@ -4628,13 +5009,14 @@ function formatSelectedTextSemantically(text: string): string {
 }
 
 function normalizeSelectedTextLine(line: string): string {
-  return line.replace(/\u00a0/g, " ").replace(/[ \t\f\v]+/g, " ").trim();
+  return line
+    .replace(/\u00a0/g, " ")
+    .replace(/[ \t\f\v]+/g, " ")
+    .trim();
 }
 
 function selectedTextBlockKind(line: string): SelectedTextBlockKind {
-  if (
-    /^(?:\d{1,3}[\).]|\([a-zA-Z0-9]\)|[a-zA-Z]\))\s+/.test(line)
-  ) {
+  if (/^(?:\d{1,3}[\).]|\([a-zA-Z0-9]\)|[a-zA-Z]\))\s+/.test(line)) {
     return "list";
   }
   if (/^(?:[A-Z]\.|[IVXLC]+\.|Fig(?:ure)?\.?\s*\d+[:.])\s+/.test(line)) {
@@ -4676,11 +5058,14 @@ async function extractSelectionTextFromAnnotationPosition(
     const extracted = normalizeSelectedText(
       await locator.extractTextFromPosition(draft.annotation.position),
     );
-    debugZai(extracted ? "selection.position-text" : "selection.position-empty", {
-      rects: annotationRectCount(draft.annotation),
-      official: textDebugInfo(draft.text, 120),
-      extracted: textDebugInfo(extracted, 120),
-    });
+    debugZai(
+      extracted ? "selection.position-text" : "selection.position-empty",
+      {
+        rects: annotationRectCount(draft.annotation),
+        official: textDebugInfo(draft.text, 120),
+        extracted: textDebugInfo(extracted, 120),
+      },
+    );
     return extracted;
   } catch (err) {
     debugZai("selection.position-text.failed", {
@@ -5200,7 +5585,8 @@ function renderNoteWindow(sidebar: WindowSidebarState, note: Zotero.Item) {
   const resizeHint = doc.createElementNS(XHTML_NS, "span") as HTMLElement;
   resizeHint.className = "zai-note-resize-hint";
   resizeHint.textContent = "↔ 拖左侧边缘";
-  resizeHint.title = "请拖动笔记栏左侧橙色分隔线调整宽度，避免拖出 Zotero PDF 信息栏";
+  resizeHint.title =
+    "请拖动笔记栏左侧橙色分隔线调整宽度，避免拖出 Zotero PDF 信息栏";
 
   const status = doc.createElementNS(XHTML_NS, "span") as HTMLElement;
   status.className = "zai-note-window-status";
@@ -5291,9 +5677,7 @@ function createZoteroNoteEditorElement(
   if (!doc.defaultView?.customElements?.get("note-editor")) return null;
   const createXULElement = doc.createXULElement?.bind(doc);
   if (!createXULElement) return null;
-  const editor = createXULElement(
-    "note-editor",
-  ) as ZoteroNoteEditorElement;
+  const editor = createXULElement("note-editor") as ZoteroNoteEditorElement;
   editor.setAttribute("class", "zai-zotero-note-editor");
   editor.setAttribute("flex", "1");
   editor.setAttribute("notitle", "1");
@@ -5376,9 +5760,11 @@ function initializeZoteroNoteEditor(
 }
 
 function hideZoteroNoteEditorLinks(editor: ZoteroNoteEditorElement) {
-  const links = editor._id?.("links-container") as (HTMLElement & {
-    hidden?: boolean;
-  }) | null;
+  const links = editor._id?.("links-container") as
+    | (HTMLElement & {
+        hidden?: boolean;
+      })
+    | null;
   if (links) links.hidden = true;
 }
 
@@ -5605,7 +5991,9 @@ interface EditableSelectionSnapshot {
   focusOffset: number;
 }
 
-function saveEditableSelection(root: HTMLElement): EditableSelectionSnapshot | null {
+function saveEditableSelection(
+  root: HTMLElement,
+): EditableSelectionSnapshot | null {
   const selection = root.ownerDocument?.getSelection?.();
   if (
     !selection ||
@@ -5828,7 +6216,9 @@ function findSidebarStateByDocument(doc: Document): WindowSidebarState | null {
   return null;
 }
 
-function findSidebarStateByMount(mount: HTMLElement): WindowSidebarState | null {
+function findSidebarStateByMount(
+  mount: HTMLElement,
+): WindowSidebarState | null {
   for (const win of mountedWindows) {
     const state = windowSidebars.get(win);
     if (state?.mount === mount) return state;
@@ -5875,8 +6265,9 @@ function setNoteColumnVisible(state: WindowSidebarState, visible: boolean) {
 }
 
 function noteTitle(note: Zotero.Item): string {
-  const title = (note as Zotero.Item & { getNoteTitle?: () => string })
-    .getNoteTitle?.();
+  const title = (
+    note as Zotero.Item & { getNoteTitle?: () => string }
+  ).getNoteTitle?.();
   return title || `Zotero 笔记 #${note.id}`;
 }
 
@@ -5969,10 +6360,7 @@ function copySafeNoteAttributes(source: Element, target: HTMLElement) {
       target.setAttribute(name, value);
       continue;
     }
-    if (
-      name === "style" &&
-      !/url\s*\(|expression\s*\(/i.test(value)
-    ) {
+    if (name === "style" && !/url\s*\(|expression\s*\(/i.test(value)) {
       target.setAttribute(name, value);
       continue;
     }
@@ -6086,14 +6474,18 @@ function childNotesForItem(item: Zotero.Item): Zotero.Item[] {
   return items.filter(isZoteroNote);
 }
 
-function isZoteroNote(item: Zotero.Item | null | undefined): item is Zotero.Item {
-  return !!item && (item as Zotero.Item & { isNote?: () => boolean }).isNote?.();
+function isZoteroNote(
+  item: Zotero.Item | null | undefined,
+): item is Zotero.Item {
+  return (
+    !!item && (item as Zotero.Item & { isNote?: () => boolean }).isNote?.()
+  );
 }
 
 async function createChildNote(parent: Zotero.Item): Promise<Zotero.Item> {
-  const note = new (Zotero as unknown as { Item: new (type: string) => any }).Item(
-    "note",
-  ) as Zotero.Item;
+  const note = new (
+    Zotero as unknown as { Item: new (type: string) => any }
+  ).Item("note") as Zotero.Item;
   note.libraryID = parent.libraryID;
   (note as Zotero.Item & { parentID?: number }).parentID = parent.id;
   note.setNote("<p>AI 笔记</p>");
@@ -6170,20 +6562,22 @@ function betterNotesNoteInsert():
       forceMetadata?: boolean,
     ) => Promise<void> | void)
   | null {
-  const noteApi = (Zotero as unknown as {
-    BetterNotes?: {
-      api?: {
-        note?: {
-          insert?: (
-            note: Zotero.Item,
-            html: string,
-            lineIndex?: number,
-            forceMetadata?: boolean,
-          ) => Promise<void> | void;
+  const noteApi = (
+    Zotero as unknown as {
+      BetterNotes?: {
+        api?: {
+          note?: {
+            insert?: (
+              note: Zotero.Item,
+              html: string,
+              lineIndex?: number,
+              forceMetadata?: boolean,
+            ) => Promise<void> | void;
+          };
         };
       };
-    };
-  }).BetterNotes?.api?.note;
+    }
+  ).BetterNotes?.api?.note;
   return typeof noteApi?.insert === "function"
     ? noteApi.insert.bind(noteApi)
     : null;
@@ -6272,7 +6666,11 @@ function renderAnnotationSuggestionActions(
 
   const textButton = buttonEl(doc, "");
   textButton.classList.add("annotation-save", "annotation-save-text");
-  applyAnnotationButtonState(textButton, draft.textState ?? { kind: "idle" }, "text");
+  applyAnnotationButtonState(
+    textButton,
+    draft.textState ?? { kind: "idle" },
+    "text",
+  );
   textButton.addEventListener("click", () => {
     textButton.blur();
     void saveTextAnnotationDraftFromBubble(mount, state, index);
@@ -6327,8 +6725,7 @@ function applyAnnotationButtonState(
   // to mention "T 工具".
   switch (state.kind) {
     case "idle":
-      button.textContent =
-        mode === "text" ? "🅣 新增文字" : "💾 高亮+评论";
+      button.textContent = mode === "text" ? "🅣 新增文字" : "💾 高亮+评论";
       button.disabled = false;
       button.title =
         mode === "text"
@@ -6349,7 +6746,8 @@ function applyAnnotationButtonState(
           : "已写入 Zotero（条目 ID 暂未回填）";
       return;
     case "failed":
-      button.textContent = mode === "text" ? "↻ 重试新增文字" : "↻ 重试高亮+评论";
+      button.textContent =
+        mode === "text" ? "↻ 重试新增文字" : "↻ 重试高亮+评论";
       button.disabled = false;
       button.title = state.error;
       return;
@@ -7148,7 +7546,10 @@ function flashButton(button: HTMLButtonElement, text: string) {
   }, 900);
 }
 
-function messageToClipboard(message: Message, includeDebugContext: boolean): string {
+function messageToClipboard(
+  message: Message,
+  includeDebugContext: boolean,
+): string {
   if (!includeDebugContext) return message.content;
 
   const lines = [`## ${message.role === "user" ? "You" : "AI"}`, ""];
@@ -7208,7 +7609,10 @@ function formatItemIntroductionMarkdown(
     ["标题", item.getField("title")],
     ["作者", authors.join(", ")],
     ["年份", parseYearString(item.getField("date"))],
-    ["期刊/会议", item.getField("publicationTitle") || item.getField("conferenceName")],
+    [
+      "期刊/会议",
+      item.getField("publicationTitle") || item.getField("conferenceName"),
+    ],
     ["DOI", item.getField("DOI")],
     ["URL", item.getField("url")],
   ].filter(([, value]) => String(value ?? "").trim().length > 0);
@@ -7697,7 +8101,10 @@ export function registerSidebarForWindow(win: Window) {
   noteLink.rel = "stylesheet";
   noteLink.href = `chrome://${addon.data.config.addonRef}/content/sidebar.css`;
 
-  const noteKatexLink = doc.createElementNS(XHTML_NS, "link") as HTMLLinkElement;
+  const noteKatexLink = doc.createElementNS(
+    XHTML_NS,
+    "link",
+  ) as HTMLLinkElement;
   noteKatexLink.rel = "stylesheet";
   noteKatexLink.href = `chrome://${addon.data.config.addonRef}/content/katex/katex.min.css`;
 
@@ -7772,19 +8179,27 @@ function installReaderTranslateToolbar(
 
       const translateBtn = doc.createElement("button");
       translateBtn.type = "button";
-      translateBtn.className = "zai-reader-translate-button";
-      translateBtn.textContent = "译";
-      translateBtn.title = "逐句翻译模式 (Alt+T)，翻译参数在插件设置中配置";
+      translateBtn.className = "zai-reader-full-translate-button";
+      translateBtn.textContent = "全文译";
+      translateBtn.title = "一键全文逐段翻译，翻译参数在插件设置中配置";
       translateBtn.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        void toggleTranslateMode(win, translateBtn);
+        const panelState = states.get(state.mount);
+        if (!panelState) {
+          flashButton(translateBtn, "无面板");
+          return;
+        }
+        void translateSelectedPapersFullText(
+          state.mount,
+          panelState,
+          translateBtn,
+        );
       });
 
       group.append(translateBtn);
       insertReaderTranslateGroup(toolbar, group);
       mountedGroups.push(group);
-      syncReaderTranslateButtons(win, doc);
     }
   };
 
@@ -7797,7 +8212,11 @@ function installReaderTranslateToolbar(
 }
 
 function findReaderToolbar(doc: Document): HTMLElement | null {
-  if (!doc.querySelector(".textLayer,.pdfViewer,.page[data-page-number],#viewerContainer")) {
+  if (
+    !doc.querySelector(
+      ".textLayer,.pdfViewer,.page[data-page-number],#viewerContainer",
+    )
+  ) {
     return null;
   }
   const selectors = [
@@ -7812,7 +8231,10 @@ function findReaderToolbar(doc: Document): HTMLElement | null {
   for (const selector of selectors) {
     for (const candidate of Array.from(doc.querySelectorAll(selector))) {
       const toolbar = candidate as HTMLElement;
-      if (typeof toolbar.querySelector === "function" && toolbar.querySelector("button,toolbarbutton")) {
+      if (
+        typeof toolbar.querySelector === "function" &&
+        toolbar.querySelector("button,toolbarbutton")
+      ) {
         return toolbar;
       }
     }
@@ -7820,7 +8242,10 @@ function findReaderToolbar(doc: Document): HTMLElement | null {
   return null;
 }
 
-function insertReaderTranslateGroup(toolbar: HTMLElement, group: HTMLElement): void {
+function insertReaderTranslateGroup(
+  toolbar: HTMLElement,
+  group: HTMLElement,
+): void {
   const before =
     toolbar.querySelector("spacer[flex='1'], .spacer, .toolbar-spacer") ??
     toolbar.querySelector("#scaleSelectContainer, #numPages") ??
@@ -7856,9 +8281,11 @@ const READER_TRANSLATE_STYLE_TEXT = `
   margin-inline: 6px;
   vertical-align: middle;
 }
-.zai-reader-translate-button {
-  width: 28px;
+.zai-reader-translate-button,
+.zai-reader-full-translate-button {
+  min-width: 28px;
   height: 28px;
+  padding: 0 8px;
   border-radius: 6px;
   border: 1px solid transparent;
   background: transparent;
@@ -7869,7 +8296,8 @@ const READER_TRANSLATE_STYLE_TEXT = `
   cursor: pointer;
   font: 600 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
-.zai-reader-translate-button:hover {
+.zai-reader-translate-button:hover,
+.zai-reader-full-translate-button:hover {
   background: rgba(128, 128, 128, 0.14);
 }
 .zai-reader-translate-button--active {
@@ -7916,8 +8344,12 @@ function installReaderPromptShortcutHandler(
   };
 }
 
-function handleTranslateModeShortcut(win: Window, event: KeyboardEvent): boolean {
-  if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false;
+function handleTranslateModeShortcut(
+  win: Window,
+  event: KeyboardEvent,
+): boolean {
+  if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey)
+    return false;
   if (event.key.toLowerCase() !== "t") return false;
   if (isEditableEventTarget(event.target)) return false;
   event.preventDefault();
@@ -8011,7 +8443,9 @@ function isReaderShortcutContext(
   if (readerWindows.some((readerWin) => readerWin === sourceWin)) return true;
 
   const active = win.document.activeElement;
-  return readerWindows.some((readerWin) => active === safeFrameElement(readerWin));
+  return readerWindows.some(
+    (readerWin) => active === safeFrameElement(readerWin),
+  );
 }
 
 function activeReaderWindows(reader: any): Window[] {
@@ -8120,7 +8554,10 @@ function installSidebarCopyHandler(
       addTarget(targetWin.document, targetWin);
       addTarget(targetWin.document.getElementById("cmd_copy"), targetWin);
       addTarget(targetWin.document.getElementById("key_copy"), targetWin);
-      addTarget(targetWin.document.getElementById("editMenuCommands"), targetWin);
+      addTarget(
+        targetWin.document.getElementById("editMenuCommands"),
+        targetWin,
+      );
       addTarget(targetWin.document.getElementById("editMenuKeys"), targetWin);
     } catch {
       // Cross-origin / destroyed frame; ignore.
@@ -8177,15 +8614,12 @@ function handleSidebarCopyEvent(
     if (pendingSidebarCopy.html) {
       event.clipboardData.setData("text/html", pendingSidebarCopy.html);
     }
-    debugZai(
-      `${pendingSidebarCopy.label}: clipboardData-set`,
-      {
-        text: textDebugInfo(pendingSidebarCopy.text),
-        html: pendingSidebarCopy.html
-          ? htmlStringDebugInfo(pendingSidebarCopy.html)
-          : null,
-      },
-    );
+    debugZai(`${pendingSidebarCopy.label}: clipboardData-set`, {
+      text: textDebugInfo(pendingSidebarCopy.text),
+      html: pendingSidebarCopy.html
+        ? htmlStringDebugInfo(pendingSidebarCopy.html)
+        : null,
+    });
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
@@ -8284,7 +8718,10 @@ function sidebarClipboardText(
 ): { text: string; fromCache: boolean } | null {
   const topSelection = topWin.getSelection();
   if (selectionBelongsToSidebar(topSelection, sidebar)) {
-    const text = serializeSidebarSelection(topSelection, "copy-active-selection");
+    const text = serializeSidebarSelection(
+      topSelection,
+      "copy-active-selection",
+    );
     return text ? { text, fromCache: false } : null;
   }
 
@@ -8314,7 +8751,11 @@ function cacheSidebarSelection(
 ): void {
   const previous = sidebar.lastCopySelection;
   sidebar.lastCopySelection = { text, updatedAt: Date.now() };
-  if (!previous || previous.text !== text || Date.now() - previous.updatedAt > 1000) {
+  if (
+    !previous ||
+    previous.text !== text ||
+    Date.now() - previous.updatedAt > 1000
+  ) {
     debugZai(`${label}: cached`, textDebugInfo(text, 120));
   }
 }
@@ -8337,15 +8778,16 @@ function isCopyCommandEvent(event: Event): boolean {
 
 function eventTargetId(target: EventTarget | null): string {
   const id = (target as unknown as { id?: unknown } | null)?.id;
-  return typeof id === "string"
-    ? id
-    : "";
+  return typeof id === "string" ? id : "";
 }
 
 function eventTargetCommand(target: EventTarget | null): string {
-  const getter = (target as { getAttribute?: (name: string) => string | null } | null)
-    ?.getAttribute;
-  return typeof getter === "function" ? getter.call(target, "command") || "" : "";
+  const getter = (
+    target as { getAttribute?: (name: string) => string | null } | null
+  )?.getAttribute;
+  return typeof getter === "function"
+    ? getter.call(target, "command") || ""
+    : "";
 }
 
 function eventTargetDebugInfo(target: EventTarget | null): unknown {
@@ -8367,9 +8809,10 @@ function selectionBelongsToSidebar(
   const focus = selection.focusNode;
   return Boolean(
     (anchor &&
-      (sidebar.column.contains(anchor) || sidebar.noteColumn.contains(anchor))) ||
-      (focus &&
-        (sidebar.column.contains(focus) || sidebar.noteColumn.contains(focus))),
+      (sidebar.column.contains(anchor) ||
+        sidebar.noteColumn.contains(anchor))) ||
+    (focus &&
+      (sidebar.column.contains(focus) || sidebar.noteColumn.contains(focus))),
   );
 }
 
@@ -8382,20 +8825,20 @@ function editableCopyRoot(target: EventTarget | null): Element | null {
   if (!el || (el as unknown as { nodeType?: number }).nodeType !== 1) {
     return null;
   }
-  const closest = (el as unknown as {
-    closest?: (selector: string) => Element | null;
-  }).closest;
+  const closest = (
+    el as unknown as {
+      closest?: (selector: string) => Element | null;
+    }
+  ).closest;
   const root =
     typeof closest === "function"
       ? closest.call(el, "textarea,input,[contenteditable='true']")
       : null;
   if (root) return root;
   const tag = el.tagName;
-  return (
-    tag === "TEXTAREA" ||
+  return tag === "TEXTAREA" ||
     tag === "INPUT" ||
     el.getAttribute("contenteditable") === "true"
-  )
     ? el
     : null;
 }
@@ -8489,9 +8932,7 @@ function closestLatexElement(node: Node | null): HTMLElement | null {
 function nodeDebugInfo(node: Node | null): unknown {
   if (!node) return null;
   const parent =
-    node.nodeType === 1
-      ? (node as Element)
-      : node.parentElement ?? undefined;
+    node.nodeType === 1 ? (node as Element) : (node.parentElement ?? undefined);
   return {
     type: node.nodeType,
     name: node.nodeName,
@@ -8621,7 +9062,10 @@ function installSidebarSelectionMenu(
     menu.style.left = `${event.clientX}px`;
     menu.style.top = `${event.clientY}px`;
 
-    const copyBtn = doc.createElementNS(XHTML_NS, "button") as HTMLButtonElement;
+    const copyBtn = doc.createElementNS(
+      XHTML_NS,
+      "button",
+    ) as HTMLButtonElement;
     copyBtn.type = "button";
     copyBtn.className = "zai-selection-menu-item";
     copyBtn.textContent = "复制";
@@ -8636,7 +9080,10 @@ function installSidebarSelectionMenu(
       dismiss();
     });
 
-    const importBtn = doc.createElementNS(XHTML_NS, "button") as HTMLButtonElement;
+    const importBtn = doc.createElementNS(
+      XHTML_NS,
+      "button",
+    ) as HTMLButtonElement;
     importBtn.type = "button";
     importBtn.className = "zai-selection-menu-item";
     importBtn.textContent = "导入笔记";
@@ -8838,6 +9285,29 @@ function safeSelectedItemID(win: Window): number | null {
     debugZai("sidebar.selected-item.failed", { error: errorMessage(err) });
     return null;
   }
+}
+
+function safeSelectedItemIDs(win: Window): number[] {
+  try {
+    return getSelectedItemIDs(win);
+  } catch (err) {
+    debugZai("sidebar.selected-items.failed", { error: errorMessage(err) });
+    return [];
+  }
+}
+
+function getSelectedItemIDs(win: Window): number[] {
+  const pane = (win as any).ZoteroPane;
+  const selected = pane?.getSelectedItems?.();
+  const ids = Array.isArray(selected)
+    ? selected
+        .map((item) => conversationItemID(item))
+        .filter((id): id is number => typeof id === "number")
+    : [];
+  const unique = Array.from(new Set(ids));
+  if (unique.length) return unique;
+  const readerID = activeReaderConversationItemID(win);
+  return readerID == null ? [] : [readerID];
 }
 
 function scheduleInitialSidebarRefresh(win: Window, state: WindowSidebarState) {
@@ -9076,7 +9546,10 @@ function itemIDToParentID(itemID: unknown): number | null {
   }
 }
 
-async function toggleTranslateMode(win: Window, btn: HTMLElement): Promise<void> {
+async function toggleTranslateMode(
+  win: Window,
+  btn: HTMLElement,
+): Promise<void> {
   const ctrl = await getOrCreateTranslateController(win);
   if (!ctrl) {
     syncTranslateBtnState(win, btn);
@@ -9099,7 +9572,9 @@ async function toggleTranslateMode(win: Window, btn: HTMLElement): Promise<void>
   }
 }
 
-async function getOrCreateTranslateController(win: Window): Promise<TranslateModeController | null> {
+async function getOrCreateTranslateController(
+  win: Window,
+): Promise<TranslateModeController | null> {
   const reader = getActiveReader(win);
   if (!reader) return null;
   const existing = translateControllers.get(win);
@@ -9120,11 +9595,7 @@ async function getOrCreateTranslateController(win: Window): Promise<TranslateMod
 }
 
 function syncTranslateBtnState(win: Window, btn: HTMLElement): void {
-  const enabled = translateControllers.get(win)?.isEnabled() ?? false;
-  btn.classList.toggle("zai-toolbar-icon--active", enabled);
-  btn.classList.toggle("zai-reader-translate-button--active", enabled);
-  setTranslateButtonLabel(btn, enabled);
-  syncReaderTranslateButtons(win, btn.ownerDocument ?? undefined);
+  syncTranslateButtons(win);
 }
 
 function disableTranslateMode(win: Window): void {
@@ -9136,11 +9607,14 @@ function disableTranslateMode(win: Window): void {
 function syncTranslateButtons(win: Window): void {
   const docs = [win.document];
   const reader = getActiveReader(win) as any;
-  for (const readerWin of activeReaderWindows(reader)) docs.push(readerWin.document);
+  for (const readerWin of activeReaderWindows(reader))
+    docs.push(readerWin.document);
   const enabled = translateControllers.get(win)?.isEnabled() ?? false;
   for (const doc of docs) {
     const buttons = Array.from(
-      doc.querySelectorAll(".zai-sidebar-translate-button,.zai-reader-translate-button"),
+      doc.querySelectorAll(
+        ".zai-sidebar-translate-button,.zai-reader-translate-button",
+      ),
     ) as HTMLElement[];
     for (const button of buttons) {
       button.classList.toggle("zai-toolbar-icon--active", enabled);

@@ -14,7 +14,6 @@ import { cleanTranslationOutput, translateSentence } from "./translator";
 import { cacheKey, getCachedTranslation, setCachedTranslation } from "./cache";
 import { loadTranslateSettings } from "./settings";
 import { matchesKeybinding, parseKeybinding } from "./keybinding";
-import { splitSentences } from "./sentence-splitter";
 import {
   saveSelectionAnnotation,
   type SelectionAnnotationDraft,
@@ -53,9 +52,11 @@ export class TranslateModeController {
   private abortCtrl: AbortController | null = null;
   private boundWindow: Window | null = null;
   private pointerStart: { x: number; y: number } | null = null;
-  private pendingDoubleClick: { at: number; x: number; y: number } | null = null;
+  private pendingDoubleClick: { at: number; x: number; y: number } | null =
+    null;
   private lastActivation: { at: number; x: number; y: number } | null = null;
-  private lastDoubleActivation: { at: number; x: number; y: number } | null = null;
+  private lastDoubleActivation: { at: number; x: number; y: number } | null =
+    null;
   private active = false;
 
   constructor(private ctx: TranslateModeContext) {}
@@ -158,22 +159,42 @@ export class TranslateModeController {
   disable(): void {
     this.active = false;
     if (this.boundWindow && this.pointerDownHandler) {
-      this.boundWindow.removeEventListener("pointerdown", this.pointerDownHandler, true);
+      this.boundWindow.removeEventListener(
+        "pointerdown",
+        this.pointerDownHandler,
+        true,
+      );
     }
     if (this.boundWindow && this.mouseDownHandler) {
-      this.boundWindow.removeEventListener("mousedown", this.mouseDownHandler, true);
+      this.boundWindow.removeEventListener(
+        "mousedown",
+        this.mouseDownHandler,
+        true,
+      );
     }
     if (this.boundWindow && this.pointerUpHandler) {
-      this.boundWindow.removeEventListener("pointerup", this.pointerUpHandler, true);
+      this.boundWindow.removeEventListener(
+        "pointerup",
+        this.pointerUpHandler,
+        true,
+      );
     }
     if (this.boundWindow && this.mouseUpHandler) {
-      this.boundWindow.removeEventListener("mouseup", this.mouseUpHandler, true);
+      this.boundWindow.removeEventListener(
+        "mouseup",
+        this.mouseUpHandler,
+        true,
+      );
     }
     if (this.boundWindow && this.clickHandler) {
       this.boundWindow.removeEventListener("click", this.clickHandler, true);
     }
     if (this.boundWindow && this.dblClickHandler) {
-      this.boundWindow.removeEventListener("dblclick", this.dblClickHandler, true);
+      this.boundWindow.removeEventListener(
+        "dblclick",
+        this.dblClickHandler,
+        true,
+      );
     }
     if (this.keyHandler) {
       for (const keyWin of this.keyWindows) {
@@ -287,6 +308,7 @@ export class TranslateModeController {
     if (ev.button !== 0) return;
     const target = ev.target as Node | null;
     if (closestElement(target, ".zai-translate-overlay")) return;
+    if (closestElement(target, TRANSLATE_CONTROL_SELECTOR)) return;
     const win = this.boundWindow;
     if (!this.isEnabled() || !win || !this.locator) return;
     if (!win.document.body?.classList.contains("zai-translate-mode-on")) {
@@ -308,10 +330,13 @@ export class TranslateModeController {
       void this.handleActivation(clientX, clientY, false);
       return;
     }
-    win.setTimeout(() => {
-      if (!this.isEnabled() || this.boundWindow !== win) return;
-      void this.handleActivation(clientX, clientY, preferSelection);
-    }, delayMs > 0 ? delayMs : SELECTION_STABILIZE_DELAY_MS);
+    win.setTimeout(
+      () => {
+        if (!this.isEnabled() || this.boundWindow !== win) return;
+        void this.handleActivation(clientX, clientY, preferSelection);
+      },
+      delayMs > 0 ? delayMs : SELECTION_STABILIZE_DELAY_MS,
+    );
   }
 
   private isDuplicateActivation(ev: MouseEvent): boolean {
@@ -417,8 +442,8 @@ export class TranslateModeController {
     const targetIndex = current.pageSentenceIndex + delta;
     if (targetIndex < 0 || targetIndex >= current.pageSentenceCount) return;
 
-    if (this.locator.sentenceAtIndex) {
-      const located = await this.locator.sentenceAtIndex(
+    if (this.locator.paragraphAtIndex) {
+      const located = await this.locator.paragraphAtIndex(
         current.bundle.pageIndex,
         targetIndex,
       );
@@ -433,14 +458,10 @@ export class TranslateModeController {
       return;
     }
 
-    const all = splitSentences(current.bundle.normalizedText);
+    const all = splitParagraphs(current.bundle.pageText);
     const span = all[targetIndex];
     if (!span) return;
-    const origStart = current.bundle.normalizedToOriginal[span.start] ?? -1;
-    const origEnd =
-      current.bundle.normalizedToOriginal[Math.max(0, span.end - 1)] ?? -1;
-    if (origStart < 0 || origEnd < 0) return;
-    const text = current.bundle.pageText.slice(origStart, origEnd + 1).trim();
+    const text = span.text;
     if (!text) return;
     const located = await this.locator.locate(text, {
       minConfidence: 0.6,
@@ -455,6 +476,8 @@ export class TranslateModeController {
       rects: located.rects,
       sortIndex: located.sortIndex,
       pageSentenceIndex: targetIndex,
+      pageSentenceCount: all.length,
+      paragraphContext: text,
     };
     await this.renderForCurrent();
   }
@@ -477,7 +500,9 @@ export class TranslateModeController {
       `.page[data-page-number="${current.pageIndex + 1}"]`,
     ) as HTMLElement | null;
     if (!pageEl) {
-      debugLog("renderForCurrent missing pageEl", { pageIndex: current.pageIndex });
+      debugLog("renderForCurrent missing pageEl", {
+        pageIndex: current.pageIndex,
+      });
       return;
     }
 
@@ -485,7 +510,7 @@ export class TranslateModeController {
     this.abortCtrl = new AbortController();
 
     const model = settings.model || preset?.model || "";
-    const hint = `${displayKey(settings.nextSentenceKey)} 下一句 · ${displayKey(settings.prevSentenceKey)} 上一句`;
+    const hint = `${displayKey(settings.nextSentenceKey)} 下一段 · ${displayKey(settings.prevSentenceKey)} 上一段`;
     let latestTranslation = "";
     let translationDone = false;
     let overlay: OverlayHandle | null = null;
@@ -540,7 +565,9 @@ export class TranslateModeController {
       thinking: settings.thinking,
       ctxLevel: settings.ctxLevel,
     });
-    const cached = forceRefresh ? undefined : getCachedTranslation(this.ctx.prefs, key);
+    const cached = forceRefresh
+      ? undefined
+      : getCachedTranslation(this.ctx.prefs, key);
     if (cached) {
       debugLog("translation cache hit", {
         createdAt: cached.createdAt,
@@ -586,7 +613,11 @@ export class TranslateModeController {
           debugLog("translation chunk error", { message: chunk.message });
           overlay.setError(chunk.message);
         } else if (chunk.type === "usage") {
-          usageLabel = formatUsageLabel(chunk.input, chunk.output, chunk.cacheRead);
+          usageLabel = formatUsageLabel(
+            chunk.input,
+            chunk.output,
+            chunk.cacheRead,
+          );
           debugLog("translation usage", {
             input: chunk.input,
             output: chunk.output,
@@ -673,7 +704,6 @@ export class TranslateModeController {
     this.current = null;
   }
 }
-
 
 function keyEventWindows(win: Window): Window[] {
   const out: Window[] = [];
@@ -772,6 +802,33 @@ function contextText(
   return undefined;
 }
 
+function splitParagraphs(
+  text: string,
+): Array<{ text: string; start: number; end: number }> {
+  const out: Array<{ text: string; start: number; end: number }> = [];
+  const re = /\n\s*\n/g;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text))) {
+    pushParagraph(out, text, cursor, match.index);
+    cursor = match.index + match[0].length;
+  }
+  pushParagraph(out, text, cursor, text.length);
+  return out;
+}
+
+function pushParagraph(
+  out: Array<{ text: string; start: number; end: number }>,
+  source: string,
+  start: number,
+  end: number,
+): void {
+  while (start < end && /\s/.test(source[start]!)) start++;
+  while (end > start && /\s/.test(source[end - 1]!)) end--;
+  const text = source.slice(start, end).trim();
+  if (text) out.push({ text, start, end });
+}
+
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -813,6 +870,8 @@ const SELECTION_STABILIZE_DELAY_MS = 80;
 // Linux/Zotero PDF sometimes delivers pointerup without a reliable click event.
 const CLICK_FALLBACK_DELAY_MS = 120;
 const MODE_STYLE_ID = "zai-translate-mode-style";
+const TRANSLATE_CONTROL_SELECTOR =
+  ".zai-reader-translate-button,.zai-reader-full-translate-button,.zai-sidebar-translate-button";
 
 function ensureModeStyle(doc: Document): void {
   if (doc.getElementById(MODE_STYLE_ID)) return;

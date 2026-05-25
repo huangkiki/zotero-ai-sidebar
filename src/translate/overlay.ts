@@ -80,10 +80,15 @@ export function mountOverlay(input: MountOverlayInput): OverlayHandle {
     makeBtn(iframeDoc, "💾", "保存为 Zotero 注释", actions.onSave, true),
   );
   actionsRow.appendChild(
-    makeBtn(iframeDoc, "↻", "重新翻译（忽略缓存并覆盖旧结果）", actions.onRetry),
+    makeBtn(
+      iframeDoc,
+      "↻",
+      "重新翻译（忽略缓存并覆盖旧结果）",
+      actions.onRetry,
+    ),
   );
-  actionsRow.appendChild(makeBtn(iframeDoc, "▲", "上一句", actions.onPrev));
-  actionsRow.appendChild(makeBtn(iframeDoc, "▼", "下一句", actions.onNext));
+  actionsRow.appendChild(makeBtn(iframeDoc, "▲", "上一段", actions.onPrev));
+  actionsRow.appendChild(makeBtn(iframeDoc, "▼", "下一段", actions.onNext));
   const hintEl = iframeDoc.createElement("span");
   hintEl.className = "zai-translate-overlay__hint";
   hintEl.textContent = actions.hint;
@@ -231,15 +236,19 @@ export function mountSelectionPopupGuard(doc: Document): { destroy(): void } {
     if (!nodes) return;
     nodes.forEach((el: Element) => {
       hidePopup(el);
-      guardLog("hid existing .selection-popup", { tag: (el as HTMLElement).tagName });
+      guardLog("hid existing .selection-popup", {
+        tag: (el as HTMLElement).tagName,
+      });
     });
   };
   for (const targetDoc of docs) {
     try {
       scanAndHide(targetDoc);
-      const view = targetDoc.defaultView as Window & {
-        MutationObserver?: typeof MutationObserver;
-      } | null;
+      const view = targetDoc.defaultView as
+        | (Window & {
+            MutationObserver?: typeof MutationObserver;
+          })
+        | null;
       const Observer = view?.MutationObserver ?? MutationObserver;
       if (!targetDoc.body) continue;
       const observer = new Observer((mutations: MutationRecord[]) => {
@@ -293,8 +302,11 @@ function buildObserverOptions(view: Window | null): MutationObserverInit {
     const Cu =
       (view as unknown as { Components?: { utils?: { cloneInto?: Function } } })
         .Components?.utils ??
-      (globalThis as unknown as { Components?: { utils?: { cloneInto?: Function } } })
-        .Components?.utils;
+      (
+        globalThis as unknown as {
+          Components?: { utils?: { cloneInto?: Function } };
+        }
+      ).Components?.utils;
     if (typeof Cu?.cloneInto === "function") {
       return Cu.cloneInto(fallback, view) as MutationObserverInit;
     }
@@ -304,9 +316,11 @@ function buildObserverOptions(view: Window | null): MutationObserverInit {
   // Fallback: construct via the target realm's Object so properties
   // are owned by that compartment.
   try {
-    const ViewObject = (view as unknown as { Object?: ObjectConstructor }).Object;
+    const ViewObject = (view as unknown as { Object?: ObjectConstructor })
+      .Object;
     if (ViewObject) {
-      const obj = new ViewObject() as MutationObserverInit & Record<string, unknown>;
+      const obj = new ViewObject() as MutationObserverInit &
+        Record<string, unknown>;
       obj.childList = true;
       obj.subtree = true;
       return obj;
@@ -466,8 +480,8 @@ function positionOverlay(
     margin,
   });
   const boundsWidth = Math.max(1, bounds.right - bounds.left);
-  const targetWidth = size === "adaptive" ? 480 : 320;
-  const minWidth = size === "adaptive" ? 280 : 220;
+  const targetWidth = size === "adaptive" ? 1200 : 960;
+  const minWidth = size === "adaptive" ? 720 : 640;
   const overlayWidth = Math.min(
     targetWidth,
     Math.max(minWidth, Math.min(pageRect.width, boundsWidth) - margin * 2),
@@ -490,7 +504,7 @@ function positionOverlay(
   overlay.style.maxHeight = `${visibleHeight}px`;
   overlay.style.setProperty(
     "--zai-overlay-body-max-height",
-    size === "adaptive" ? `${Math.max(110, visibleHeight - 64)}px` : "110px",
+    size === "adaptive" ? `${Math.max(420, visibleHeight - 120)}px` : "360px",
   );
 
   const naturalHeight = measureOverlayHeight(overlay);
@@ -634,8 +648,12 @@ function measureOverlayHeight(overlay: HTMLElement): number {
 }
 
 function fitOverlayBody(overlay: HTMLElement, maxHeight: number): void {
-  const body = overlay.querySelector<HTMLElement>(".zai-translate-overlay__body");
-  const meta = overlay.querySelector<HTMLElement>(".zai-translate-overlay__meta");
+  const body = overlay.querySelector<HTMLElement>(
+    ".zai-translate-overlay__body",
+  );
+  const meta = overlay.querySelector<HTMLElement>(
+    ".zai-translate-overlay__meta",
+  );
   const actions = overlay.querySelector<HTMLElement>(
     ".zai-translate-overlay__actions",
   );
@@ -645,8 +663,7 @@ function fitOverlayBody(overlay: HTMLElement, maxHeight: number): void {
   const bodyStyle = win?.getComputedStyle(body);
   const paddingY =
     px(overlayStyle?.paddingTop) + px(overlayStyle?.paddingBottom);
-  const bodyMargins =
-    px(bodyStyle?.marginTop) + px(bodyStyle?.marginBottom);
+  const bodyMargins = px(bodyStyle?.marginTop) + px(bodyStyle?.marginBottom);
   const fixedHeight =
     measureOverlayHeight(meta) + measureOverlayHeight(actions) + paddingY;
   const bodyMax = Math.max(28, maxHeight - fixedHeight - bodyMargins - 4);
@@ -729,21 +746,26 @@ function fallbackViewportRectForPdfRect(
 function pdfPageViewport(
   doc: Document,
   pageIndex: number,
-): { convertToViewportPoint: (x: number, y: number) => [number, number] } | null {
+): {
+  convertToViewportPoint: (x: number, y: number) => [number, number];
+} | null {
   const win = doc.defaultView as
     | (Window & {
         PDFViewerApplication?: unknown;
         wrappedJSObject?: { PDFViewerApplication?: unknown };
       })
     | null;
-  const app = win?.PDFViewerApplication ?? win?.wrappedJSObject?.PDFViewerApplication;
+  const app =
+    win?.PDFViewerApplication ?? win?.wrappedJSObject?.PDFViewerApplication;
   const page = (app as { pdfViewer?: { _pages?: unknown[] } } | null)?.pdfViewer
     ?._pages?.[pageIndex] as { viewport?: unknown } | undefined;
   const viewport = page?.viewport as
     | { convertToViewportPoint?: (x: number, y: number) => [number, number] }
     | undefined;
   return typeof viewport?.convertToViewportPoint === "function"
-    ? (viewport as { convertToViewportPoint: (x: number, y: number) => [number, number] })
+    ? (viewport as {
+        convertToViewportPoint: (x: number, y: number) => [number, number];
+      })
     : null;
 }
 
@@ -777,9 +799,9 @@ const STYLE_TEXT = `
   background: #fff;
   border: 1px solid #d8d8da;
   border-radius: 8px;
-  padding: 8px 10px 6px;
+  padding: 16px 18px 14px;
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif;
-  font-size: 12.5px;
+  font-size: 18px;
   line-height: 1.5;
   color: #1d1d1f;
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22), 0 0 0 1px rgba(255, 213, 79, 0.55);
@@ -811,26 +833,26 @@ const STYLE_TEXT = `
   justify-content: space-between;
   align-items: center;
   gap: 8px;
-  font-size: 10px;
+  font-size: 15px;
   color: #888;
-  margin-bottom: 4px;
+  margin-bottom: 10px;
 }
 .zai-translate-overlay__lang {
   background: #f1f3f6;
   color: #555;
-  padding: 1px 6px;
+  padding: 3px 10px;
   border-radius: 999px;
-  font-size: 9.5px;
+  font-size: 14px;
 }
 .zai-translate-overlay__body {
   flex: 1 1 auto;
   min-height: 0;
   white-space: pre-wrap;
   color: #1d1d1f;
-  font-size: 13px;
-  line-height: 1.55;
-  margin-bottom: 7px;
-  max-height: var(--zai-overlay-body-max-height, 110px);
+  font-size: 22px;
+  line-height: 1.75;
+  margin-bottom: 16px;
+  max-height: var(--zai-overlay-body-max-height, 360px);
   overflow-y: auto;
 }
 .zai-translate-overlay__body--status { color: #666; font-style: italic; }
@@ -850,15 +872,15 @@ const STYLE_TEXT = `
   border: 1px solid #e0e0e3;
   color: #333;
   border-radius: 5px;
-  width: 26px;
-  height: 24px;
+  width: 38px;
+  height: 36px;
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 17px;
 }
 .zai-translate-overlay__btn:hover:not(:disabled) {
   background: #ebebef;
@@ -872,7 +894,7 @@ const STYLE_TEXT = `
 .zai-translate-overlay__hint {
   flex: 1;
   min-width: 0;
-  font-size: 11px;
+  font-size: 15px;
   color: #888;
   text-align: right;
   white-space: nowrap;

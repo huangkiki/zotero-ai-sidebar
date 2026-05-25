@@ -16,6 +16,7 @@ interface FakeProcessedChar {
   inlineRect: [number, number, number, number];
   spaceAfter?: boolean;
   lineBreakAfter?: boolean;
+  paragraphBreakAfter?: boolean;
 }
 
 describe("pdf locator", () => {
@@ -134,12 +135,10 @@ describe("pdf locator", () => {
             100,
             { hasEOL: true, width: 360 },
           ),
-          item(
-            "continues on the next selected line",
-            410,
-            80,
-            { hasEOL: true, width: 360 },
-          ),
+          item("continues on the next selected line", 410, 80, {
+            hasEOL: true,
+            width: 360,
+          }),
           item("and ends on the final selected line.", 410, 60, {
             width: 260,
           }),
@@ -430,6 +429,32 @@ describe("pdf locator", () => {
     expect(hit?.pageSentenceCount).toBe(2);
   });
 
+  it("returns the containing paragraph for translate mode", async () => {
+    const locator = await createPdfLocator(
+      readerWithProcessedPages([
+        processedPage([
+          ...processedWord("First sentence.", 0, 120, {
+            lineBreakAfter: true,
+          }),
+          ...processedWord("Second sentence.", 0, 100, {
+            lineBreakAfter: true,
+            paragraphBreakAfter: true,
+          }),
+          ...processedWord("Third paragraph.", 0, 80),
+        ]),
+      ]),
+    );
+
+    const hit = await locator.paragraphAtPoint?.(0, {
+      x: "Second".length * 5,
+      y: 105,
+    });
+
+    expect(hit?.text).toBe("First sentence. Second sentence.");
+    expect(hit?.pageSentenceIndex).toBe(0);
+    expect(hit?.pageSentenceCount).toBe(2);
+  });
+
   it("keeps a sentence together across a column continuation", async () => {
     const locator = await createPdfLocator(
       readerWithProcessedPages([
@@ -455,7 +480,6 @@ describe("pdf locator", () => {
     expect(hit?.text).toBe("Our experiments show long- horizon skills.");
     expect(hit?.pageSentenceIndex).toBe(1);
   });
-
 });
 
 function item(
@@ -478,7 +502,11 @@ function processedWord(
   text: string,
   x: number,
   y: number,
-  opts: { spaceAfter?: boolean; lineBreakAfter?: boolean } = {},
+  opts: {
+    spaceAfter?: boolean;
+    lineBreakAfter?: boolean;
+    paragraphBreakAfter?: boolean;
+  } = {},
 ): FakeProcessedChar[] {
   return Array.from(text).map((char, index, chars) => {
     const charX = x + index * 10;
@@ -488,6 +516,8 @@ function processedWord(
       inlineRect: [charX, y, charX + 10, y + 10],
       spaceAfter: opts.spaceAfter && index === chars.length - 1,
       lineBreakAfter: opts.lineBreakAfter && index === chars.length - 1,
+      paragraphBreakAfter:
+        opts.paragraphBreakAfter && index === chars.length - 1,
     };
   });
 }
@@ -589,11 +619,11 @@ function readerWithProcessedPages(
   const app = options.noDocument
     ? { pdfViewer }
     : options.viewerDocumentOnly
-    ? { pdfViewer }
-    : {
-        pdfDocument,
-        pdfViewer,
-      };
+      ? { pdfViewer }
+      : {
+          pdfDocument,
+          pdfViewer,
+        };
   return {
     itemID: 2,
     _item: { id: 2, parentID: 1 },
