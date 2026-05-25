@@ -81,6 +81,7 @@ import {
   cleanTranslationOutput,
   translateSentence,
 } from "../translate/translator";
+import { splitFullTextParagraphs } from "../translate/full-text";
 
 const translateControllers = new WeakMap<Window, TranslateModeController>();
 
@@ -99,7 +100,6 @@ const contextPolicy = DEFAULT_CONTEXT_POLICY;
 const IMAGE_PROMPT_MAX_DIMENSION = 2048;
 const SELECTION_CONTEXT_RADIUS_CHARS = 2500;
 const SELECTION_CONTEXT_QUERY_CHARS = 500;
-const FULL_TRANSLATE_MAX_PARAGRAPH_CHARS = 900;
 const FULL_TRANSLATE_MAX_OUTPUT_TOKENS = 768;
 const FULL_TRANSLATE_RENDER_EVERY = 1;
 const FULL_TRANSLATE_SAVE_EVERY = 5;
@@ -3365,39 +3365,6 @@ async function fullTextForTranslation(
     }
   }
   return zoteroContextSource.getFullText(itemID);
-}
-
-function splitFullTextParagraphs(text: string): string[] {
-  const normalized = text.replace(/\r\n?/g, "\n");
-  const raw = normalized
-    .split(/\n\s*\n+/)
-    .map((part) => part.replace(/[ \t\f\v]+/g, " ").trim())
-    .filter((part) => part.length >= 20 && /[A-Za-z\u4e00-\u9fff]/.test(part));
-  const out: string[] = [];
-  for (const paragraph of raw) {
-    out.push(...splitLongParagraph(paragraph));
-  }
-  return out;
-}
-
-function splitLongParagraph(paragraph: string): string[] {
-  if (paragraph.length <= FULL_TRANSLATE_MAX_PARAGRAPH_CHARS) {
-    return [paragraph];
-  }
-  const sentences = paragraph.match(/[^.!?。！？]+[.!?。！？]*/g) ?? [paragraph];
-  const chunks: string[] = [];
-  let current = "";
-  for (const sentence of sentences) {
-    const next = current ? `${current} ${sentence.trim()}` : sentence.trim();
-    if (next.length <= FULL_TRANSLATE_MAX_PARAGRAPH_CHARS) {
-      current = next;
-      continue;
-    }
-    if (current) chunks.push(current);
-    current = sentence.trim();
-  }
-  if (current) chunks.push(current);
-  return chunks;
 }
 
 function appendAssistantSection(assistant: Message, heading: string): void {
