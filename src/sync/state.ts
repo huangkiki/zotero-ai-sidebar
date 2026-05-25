@@ -254,9 +254,27 @@ function normalizeTranslateCache(value: unknown): TranslateCacheState | undefine
   const out: TranslateCacheState['entries'] = {};
   for (const [k, v] of Object.entries(entries)) {
     if (!v || typeof v !== 'object') continue;
-    const e = v as Partial<{ text: string; model: string; createdAt: number }>;
+    const e = v as Partial<{
+      text: string;
+      model: string;
+      createdAt: number;
+      sourceText: string;
+      target: string;
+      endpoint: string;
+      thinking: string;
+      ctxLevel: string;
+    }>;
     if (typeof e.text === 'string' && typeof e.model === 'string' && typeof e.createdAt === 'number') {
-      out[k] = { text: e.text, model: e.model, createdAt: e.createdAt };
+      out[k] = {
+        text: e.text,
+        model: e.model,
+        createdAt: e.createdAt,
+        ...(typeof e.sourceText === 'string' ? { sourceText: e.sourceText } : {}),
+        ...(typeof e.target === 'string' ? { target: e.target } : {}),
+        ...(typeof e.endpoint === 'string' ? { endpoint: e.endpoint } : {}),
+        ...(typeof e.thinking === 'string' ? { thinking: e.thinking } : {}),
+        ...(typeof e.ctxLevel === 'string' ? { ctxLevel: e.ctxLevel } : {}),
+      };
     }
   }
   return { entries: out };

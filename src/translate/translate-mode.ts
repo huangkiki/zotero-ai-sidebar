@@ -11,7 +11,12 @@ import {
 } from "./overlay";
 import { logTranslateDebug } from "./debug-log";
 import { cleanTranslationOutput, translateSentence } from "./translator";
-import { cacheKey, getCachedTranslation, setCachedTranslation } from "./cache";
+import {
+  cacheKey,
+  getCachedTranslation,
+  getFullTextCachedTranslation,
+  setCachedTranslation,
+} from "./cache";
 import { loadTranslateSettings } from "./settings";
 import { matchesKeybinding, parseKeybinding } from "./keybinding";
 import {
@@ -570,7 +575,11 @@ export class TranslateModeController {
     const cached = forceRefresh
       ? undefined
       : (getCachedTranslation(this.ctx.prefs, key) ??
-        getCachedTranslation(this.ctx.prefs, fullTextKey));
+        getCachedTranslation(this.ctx.prefs, fullTextKey) ??
+        getFullTextCachedTranslation(this.ctx.prefs, {
+          ...keyInput,
+          paragraphContext: current.paragraphContext,
+        }));
     if (cached) {
       debugLog("translation cache hit", {
         createdAt: cached.createdAt,

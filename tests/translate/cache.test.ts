@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   cacheKey,
+  getFullTextCachedTranslation,
   loadCache,
   saveCache,
   setCachedTranslation,
@@ -36,6 +37,61 @@ describe('translate cache', () => {
     setCachedTranslation(prefs, 'k1', { text: '你好。', model: 'gpt-5.4', createdAt: 1000 });
     const got = getCachedTranslation(prefs, 'k1');
     expect(got?.text).toBe('你好。');
+  });
+
+  it('finds old full-text cache entries using paragraph context', () => {
+    const prefs = makePrefs();
+    const paragraph = 'The model translates paragraphs in a full text batch.';
+    const key = cacheKey({
+      sentence: paragraph,
+      target: 'zh',
+      endpoint: 'https://api.example.com',
+      model: 'gpt-5.4',
+      thinking: 'low',
+      ctxLevel: 'full-text',
+    });
+    setCachedTranslation(prefs, key, {
+      text: '模型会在全文批处理中翻译段落。',
+      model: 'gpt-5.4',
+      createdAt: 1000,
+    });
+
+    const got = getFullTextCachedTranslation(prefs, {
+      sentence: 'translates paragraphs',
+      paragraphContext: paragraph,
+      target: 'zh',
+      endpoint: 'https://api.example.com',
+      model: 'gpt-5.4',
+      thinking: 'low',
+      ctxLevel: 'none',
+    });
+
+    expect(got?.text).toBe('模型会在全文批处理中翻译段落。');
+  });
+
+  it('finds new full-text cache entries whose source contains the point text', () => {
+    const prefs = makePrefs();
+    setCachedTranslation(prefs, 'k1', {
+      text: '模型会在全文批处理中翻译段落。',
+      model: 'gpt-5.4',
+      createdAt: 1000,
+      sourceText: 'The model translates paragraphs in a full text batch.',
+      target: 'zh',
+      endpoint: 'https://api.example.com',
+      thinking: 'low',
+      ctxLevel: 'full-text',
+    });
+
+    const got = getFullTextCachedTranslation(prefs, {
+      sentence: 'model translates paragraphs in a full text',
+      target: 'zh',
+      endpoint: 'https://api.example.com',
+      model: 'gpt-5.4',
+      thinking: 'low',
+      ctxLevel: 'paragraph',
+    });
+
+    expect(got?.text).toBe('模型会在全文批处理中翻译段落。');
   });
 
   it('caps cache to MAX entries (oldest evicted)', () => {

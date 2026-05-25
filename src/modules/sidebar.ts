@@ -3334,6 +3334,11 @@ async function translateParagraphWithCache(
       text: cleaned,
       model: input.model,
       createdAt: Date.now(),
+      sourceText: input.paragraph,
+      target: "zh",
+      endpoint: input.preset.baseUrl,
+      thinking: input.thinking,
+      ctxLevel: "full-text",
     });
   }
   return { text: cleaned || "（空译文）", cached: false };

@@ -5,6 +5,11 @@ export interface CacheEntry {
   text: string;
   model: string;
   createdAt: number;
+  sourceText?: string;
+  target?: string;
+  endpoint?: string;
+  thinking?: string;
+  ctxLevel?: string;
 }
 
 export interface TranslateCacheState {
@@ -68,7 +73,16 @@ export function loadCache(prefs: PrefsStore): TranslateCacheState {
       if (!v || typeof v !== 'object') continue;
       const e = v as Partial<CacheEntry>;
       if (typeof e.text === 'string' && typeof e.model === 'string' && typeof e.createdAt === 'number') {
-        out[k] = { text: e.text, model: e.model, createdAt: e.createdAt };
+        out[k] = {
+          text: e.text,
+          model: e.model,
+          createdAt: e.createdAt,
+          ...(typeof e.sourceText === 'string' ? { sourceText: e.sourceText } : {}),
+          ...(typeof e.target === 'string' ? { target: e.target } : {}),
+          ...(typeof e.endpoint === 'string' ? { endpoint: e.endpoint } : {}),
+          ...(typeof e.thinking === 'string' ? { thinking: e.thinking } : {}),
+          ...(typeof e.ctxLevel === 'string' ? { ctxLevel: e.ctxLevel } : {}),
+        };
       }
     }
     return { entries: out };
@@ -94,6 +108,41 @@ function trimCache(state: TranslateCacheState): TranslateCacheState {
 
 export function getCachedTranslation(prefs: PrefsStore, key: string): CacheEntry | undefined {
   return loadCache(prefs).entries[key];
+}
+
+export function getFullTextCachedTranslation(
+  prefs: PrefsStore,
+  input: CacheKeyInput & { paragraphContext?: string },
+): CacheEntry | undefined {
+  const state = loadCache(prefs);
+  const candidates = uniqueNonEmpty([input.sentence, input.paragraphContext]);
+  for (const sentence of candidates) {
+    const exact = state.entries[cacheKey({ ...input, sentence, ctxLevel: 'full-text' })];
+    if (exact) return exact;
+  }
+
+  const needle = normalizeSentence(input.sentence);
+  if (needle.length < 20) return undefined;
+  let best: CacheEntry | undefined;
+  for (const entry of Object.values(state.entries)) {
+    if (entry.ctxLevel !== 'full-text') continue;
+    if (entry.target !== input.target) continue;
+    if ((entry.endpoint ?? '') !== (input.endpoint ?? '')) continue;
+    if (entry.model !== input.model) continue;
+    if (entry.thinking !== input.thinking) continue;
+    const source = normalizeSentence(entry.sourceText ?? '');
+    if (!source.includes(needle)) continue;
+    if (!best || (entry.sourceText?.length ?? Infinity) < (best.sourceText?.length ?? Infinity)) {
+      best = entry;
+    }
+  }
+  return best;
+}
+
+function uniqueNonEmpty(values: Array<string | undefined>): string[] {
+  return Array.from(
+    new Set(values.map((value) => value?.trim()).filter((value): value is string => !!value)),
+  );
 }
 
 // Non-atomic load-modify-save. Safe here because writes are user-driven
