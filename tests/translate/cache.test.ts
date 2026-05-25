@@ -156,7 +156,7 @@ describe('translate cache', () => {
     }
 
     const got = getFullTextCachedTranslation(prefs, {
-      sentence: 'short miss',
+      sentence: 'B'.repeat(80),
       paragraphContext: longParagraph,
       target: 'zh',
       endpoint: 'https://api.example.com',
@@ -166,6 +166,40 @@ describe('translate cache', () => {
     });
 
     expect(got?.text).toBe('旧缓存译文 1\n\n旧缓存译文 2');
+  });
+
+  it('reconstructs legacy chunk keys from full text when page context differs', () => {
+    const prefs = makePrefs();
+    const first = `${'A'.repeat(800)}.`;
+    const second = `${'B'.repeat(800)}.`;
+    const third = `${'C'.repeat(800)}.`;
+    const fullText = `${first} ${second} ${third}`;
+    const key = cacheKey({
+      sentence: second,
+      target: 'zh',
+      endpoint: 'https://api.example.com',
+      model: 'gpt-5.4',
+      thinking: 'low',
+      ctxLevel: 'full-text',
+    });
+    setCachedTranslation(prefs, key, {
+      text: '旧缓存第二块译文',
+      model: 'gpt-5.4',
+      createdAt: 1000,
+    });
+
+    const got = getFullTextCachedTranslation(prefs, {
+      sentence: 'B'.repeat(80),
+      paragraphContext: 'page context that does not match full text chunking',
+      fullTextContext: fullText,
+      target: 'zh',
+      endpoint: 'https://api.example.com',
+      model: 'gpt-5.4',
+      thinking: 'low',
+      ctxLevel: 'none',
+    });
+
+    expect(got?.text).toBe('旧缓存第二块译文');
   });
 
   it('matches PDF text despite ligatures, hyphenation, and punctuation differences', () => {

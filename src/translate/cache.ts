@@ -113,7 +113,7 @@ export function getCachedTranslation(prefs: PrefsStore, key: string): CacheEntry
 
 export function getFullTextCachedTranslation(
   prefs: PrefsStore,
-  input: CacheKeyInput & { paragraphContext?: string },
+  input: CacheKeyInput & { paragraphContext?: string; fullTextContext?: string },
 ): CacheEntry | undefined {
   const state = loadCache(prefs);
   const candidates = uniqueNonEmpty([input.sentence, input.paragraphContext]);
@@ -121,7 +121,7 @@ export function getFullTextCachedTranslation(
     const exact = state.entries[cacheKey({ ...input, sentence, ctxLevel: 'full-text' })];
     if (exact) return exact;
   }
-  const legacyChunkMatches = findLegacyFullTextChunkMatches(state, input, candidates);
+  const legacyChunkMatches = findLegacyFullTextChunkMatches(state, input, candidates, input.fullTextContext);
   if (legacyChunkMatches.length === 1) return legacyChunkMatches[0]!.entry;
   if (legacyChunkMatches.length > 1) return combineFullTextMatches(legacyChunkMatches);
 
@@ -177,19 +177,34 @@ function findLegacyFullTextChunkMatches(
   state: TranslateCacheState,
   input: CacheKeyInput,
   candidates: string[],
+  fullTextContext?: string,
 ): Array<{ entry: CacheEntry; sourceLoose: string; position: number }> {
-  for (const candidate of candidates) {
-    const chunks = splitFullTextCacheChunks(candidate);
+  const needles = candidates
+    .map((candidate) => ({
+      raw: candidate,
+      loose: normalizeForLooseMatch(candidate),
+    }))
+    .filter((candidate) => candidate.loose.length >= 20);
+  const contexts = [
+    ...candidates.map((candidate) => ({ text: candidate, requireOverlap: false })),
+    ...(fullTextContext ? [{ text: fullTextContext, requireOverlap: true }] : []),
+  ];
+  for (const context of contexts) {
+    const chunks = splitFullTextCacheChunks(context.text);
     if (chunks.length <= 1) continue;
     const matches: Array<{ entry: CacheEntry; sourceLoose: string; position: number }> = [];
     for (let index = 0; index < chunks.length; index++) {
       const chunk = chunks[index]!;
+      const sourceLoose = normalizeForLooseMatch(chunk);
+      if (context.requireOverlap && bestLooseMatchPosition(sourceLoose, needles) < 0) {
+        continue;
+      }
       const key = cacheKey({ ...input, sentence: chunk, ctxLevel: 'full-text' });
       const entry = state.entries[key];
       if (!entry) continue;
       matches.push({
         entry,
-        sourceLoose: normalizeForLooseMatch(chunk),
+        sourceLoose,
         position: index,
       });
     }

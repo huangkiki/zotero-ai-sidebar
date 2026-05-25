@@ -572,7 +572,7 @@ export class TranslateModeController {
     };
     const key = cacheKey(keyInput);
     const fullTextKey = cacheKey({ ...keyInput, ctxLevel: "full-text" });
-    const cached = forceRefresh
+    let cached = forceRefresh
       ? undefined
       : (getCachedTranslation(this.ctx.prefs, key) ??
         getCachedTranslation(this.ctx.prefs, fullTextKey) ??
@@ -580,6 +580,18 @@ export class TranslateModeController {
           ...keyInput,
           paragraphContext: current.paragraphContext,
         }));
+    if (!cached && !forceRefresh && this.locator) {
+      try {
+        const fullTextContext = await this.locator.getFullText();
+        cached = getFullTextCachedTranslation(this.ctx.prefs, {
+          ...keyInput,
+          paragraphContext: current.paragraphContext,
+          fullTextContext,
+        });
+      } catch (err) {
+        debugLog("full text cache lookup failed", { error: errorMessage(err) });
+      }
+    }
     if (cached) {
       debugLog("translation cache hit", {
         createdAt: cached.createdAt,
