@@ -94,6 +94,69 @@ describe('translate cache', () => {
     expect(got?.text).toBe('模型会在全文批处理中翻译段落。');
   });
 
+  it('finds full-text chunks contained inside a larger point paragraph', () => {
+    const prefs = makePrefs();
+    setCachedTranslation(prefs, 'k1', {
+      text: '第一块译文。',
+      model: 'gpt-5.4',
+      createdAt: 1000,
+      sourceText: 'The first chunk is translated during full text mode.',
+      target: 'zh',
+      endpoint: 'https://api.example.com',
+      thinking: 'low',
+      ctxLevel: 'full-text',
+    });
+    setCachedTranslation(prefs, 'k2', {
+      text: '第二块译文。',
+      model: 'gpt-5.4',
+      createdAt: 2000,
+      sourceText: 'The second chunk is translated during full text mode.',
+      target: 'zh',
+      endpoint: 'https://api.example.com',
+      thinking: 'low',
+      ctxLevel: 'full-text',
+    });
+
+    const got = getFullTextCachedTranslation(prefs, {
+      sentence: [
+        'The first chunk is translated during full text mode.',
+        'The second chunk is translated during full text mode.',
+      ].join(' '),
+      target: 'zh',
+      endpoint: 'https://api.example.com',
+      model: 'gpt-5.4',
+      thinking: 'low',
+      ctxLevel: 'paragraph',
+    });
+
+    expect(got?.text).toBe('第一块译文。\n\n第二块译文。');
+  });
+
+  it('matches PDF text despite ligatures, hyphenation, and punctuation differences', () => {
+    const prefs = makePrefs();
+    setCachedTranslation(prefs, 'k1', {
+      text: '高效翻译依赖稳定缓存。',
+      model: 'gpt-5.4',
+      createdAt: 1000,
+      sourceText: 'Efficient translation depends on stable caches.',
+      target: 'zh',
+      endpoint: 'https://api.example.com',
+      thinking: 'low',
+      ctxLevel: 'full-text',
+    });
+
+    const got = getFullTextCachedTranslation(prefs, {
+      sentence: 'Efﬁcient trans- lation depends on stable caches',
+      target: 'zh',
+      endpoint: 'https://api.example.com',
+      model: 'gpt-5.4',
+      thinking: 'low',
+      ctxLevel: 'none',
+    });
+
+    expect(got?.text).toBe('高效翻译依赖稳定缓存。');
+  });
+
   it('caps cache to MAX entries (oldest evicted)', () => {
     const state: TranslateCacheState = { entries: {} };
     for (let i = 0; i < 510; i++) {

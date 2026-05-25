@@ -121,28 +121,95 @@ export function getFullTextCachedTranslation(
     if (exact) return exact;
   }
 
-  const needle = normalizeSentence(input.sentence);
-  if (needle.length < 20) return undefined;
-  let best: CacheEntry | undefined;
+  const needles = candidates
+    .map((candidate) => ({
+      raw: candidate,
+      loose: normalizeForLooseMatch(candidate),
+    }))
+    .filter((candidate) => candidate.loose.length >= 20);
+  if (!needles.length) return undefined;
+
+  const matches: Array<{ entry: CacheEntry; sourceLoose: string; position: number }> = [];
   for (const entry of Object.values(state.entries)) {
     if (entry.ctxLevel !== 'full-text') continue;
     if (entry.target !== input.target) continue;
     if ((entry.endpoint ?? '') !== (input.endpoint ?? '')) continue;
     if (entry.model !== input.model) continue;
     if (entry.thinking !== input.thinking) continue;
-    const source = normalizeSentence(entry.sourceText ?? '');
-    if (!source.includes(needle)) continue;
-    if (!best || (entry.sourceText?.length ?? Infinity) < (best.sourceText?.length ?? Infinity)) {
-      best = entry;
-    }
+    const sourceLoose = normalizeForLooseMatch(entry.sourceText ?? '');
+    if (sourceLoose.length < 20) continue;
+    const position = bestLooseMatchPosition(sourceLoose, needles);
+    if (position < 0) continue;
+    matches.push({ entry, sourceLoose, position });
   }
-  return best;
+  if (!matches.length) return undefined;
+
+  matches.sort((a, b) => {
+    const byPosition = a.position - b.position;
+    if (byPosition !== 0) return byPosition;
+    return b.sourceLoose.length - a.sourceLoose.length;
+  });
+  const deduped = dedupeOverlappingMatches(matches);
+  if (deduped.length === 1) return deduped[0]!.entry;
+  return {
+    text: deduped.map((match) => match.entry.text).join('\n\n'),
+    model: deduped[0]!.entry.model,
+    createdAt: Math.max(...deduped.map((match) => match.entry.createdAt)),
+    sourceText: deduped.map((match) => match.entry.sourceText ?? '').filter(Boolean).join('\n\n'),
+    target: input.target,
+    endpoint: input.endpoint,
+    thinking: input.thinking,
+    ctxLevel: 'full-text',
+  };
 }
 
 function uniqueNonEmpty(values: Array<string | undefined>): string[] {
   return Array.from(
     new Set(values.map((value) => value?.trim()).filter((value): value is string => !!value)),
   );
+}
+
+function normalizeForLooseMatch(text: string): string {
+  return text
+    .normalize('NFKC')
+    .replace(/\u00ad/g, '')
+    .replace(/([A-Za-z])[-\u2010-\u2015]\s+([A-Za-z])/g, '$1$2')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function bestLooseMatchPosition(
+  sourceLoose: string,
+  needles: Array<{ raw: string; loose: string }>,
+): number {
+  let best = -1;
+  for (const needle of needles) {
+    const direct = sourceLoose.indexOf(needle.loose);
+    if (direct >= 0) {
+      best = best < 0 ? direct : Math.min(best, direct);
+      continue;
+    }
+    const reverse = needle.loose.indexOf(sourceLoose);
+    if (reverse >= 0) {
+      best = best < 0 ? reverse : Math.min(best, reverse);
+    }
+  }
+  return best;
+}
+
+function dedupeOverlappingMatches<T extends { sourceLoose: string; position: number }>(
+  matches: T[],
+): T[] {
+  const kept: T[] = [];
+  for (const match of matches) {
+    const matchEnd = match.position + match.sourceLoose.length;
+    const overlap = kept.some((existing) => {
+      const existingEnd = existing.position + existing.sourceLoose.length;
+      return match.position < existingEnd && matchEnd > existing.position;
+    });
+    if (!overlap) kept.push(match);
+  }
+  return kept;
 }
 
 // Non-atomic load-modify-save. Safe here because writes are user-driven
