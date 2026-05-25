@@ -18,6 +18,7 @@ export interface TranslateRequest {
   model: string;
   thinking: TranslateThinking;
   signal: AbortSignal;
+  maxOutputTokens?: number;
 }
 
 export interface TranslateChunk {
@@ -58,8 +59,8 @@ export async function* translateSentence(req: TranslateRequest): AsyncIterable<T
     ...req.preset,
     model: req.model || req.preset.model,
     maxTokens: Math.min(
-      req.preset.maxTokens || TRANSLATE_MAX_OUTPUT_TOKENS,
-      TRANSLATE_MAX_OUTPUT_TOKENS,
+      req.preset.maxTokens || req.maxOutputTokens || TRANSLATE_MAX_OUTPUT_TOKENS,
+      req.maxOutputTokens || TRANSLATE_MAX_OUTPUT_TOKENS,
     ),
     extras: {
       ...req.preset.extras,

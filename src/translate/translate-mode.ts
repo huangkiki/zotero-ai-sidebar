@@ -557,17 +557,20 @@ export class TranslateModeController {
       return;
     }
 
-    const key = cacheKey({
+    const keyInput = {
       sentence: current.text,
       target: "zh",
       endpoint: preset.baseUrl,
       model,
       thinking: settings.thinking,
       ctxLevel: settings.ctxLevel,
-    });
+    };
+    const key = cacheKey(keyInput);
+    const fullTextKey = cacheKey({ ...keyInput, ctxLevel: "full-text" });
     const cached = forceRefresh
       ? undefined
-      : getCachedTranslation(this.ctx.prefs, key);
+      : (getCachedTranslation(this.ctx.prefs, key) ??
+        getCachedTranslation(this.ctx.prefs, fullTextKey));
     if (cached) {
       debugLog("translation cache hit", {
         createdAt: cached.createdAt,

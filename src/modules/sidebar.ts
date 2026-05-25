@@ -100,6 +100,7 @@ const IMAGE_PROMPT_MAX_DIMENSION = 2048;
 const SELECTION_CONTEXT_RADIUS_CHARS = 2500;
 const SELECTION_CONTEXT_QUERY_CHARS = 500;
 const FULL_TRANSLATE_MAX_PARAGRAPH_CHARS = 900;
+const FULL_TRANSLATE_MAX_OUTPUT_TOKENS = 768;
 const FULL_TRANSLATE_RENDER_EVERY = 1;
 const FULL_TRANSLATE_SAVE_EVERY = 5;
 const OPENAI_QUICK_MODELS = [
@@ -575,6 +576,14 @@ function renderToolbar(doc: Document, mount: HTMLElement, state: PanelState) {
     void translateSelectedPapersFullText(mount, state, fullTranslate);
   });
   bottomRow.append(fullTranslate);
+  const pointTranslate = buttonEl(doc, "点译");
+  pointTranslate.className = "zai-sidebar-translate-button";
+  pointTranslate.title = "开启后点击 PDF 段落显示译文，不写入注释";
+  syncTranslateBtnState(win, pointTranslate);
+  pointTranslate.addEventListener("click", () => {
+    void toggleTranslateMode(win, pointTranslate);
+  });
+  bottomRow.append(pointTranslate);
   const hide = buttonEl(doc, "隐藏");
   hide.title = "隐藏 AI 对话列";
   hide.addEventListener("click", () => hideCurrentSidebar(mount));
@@ -3240,6 +3249,7 @@ async function runFullTextTranslationBatch(
     assistant.content += `\n\n共 ${paragraphs.length} 段，开始翻译。`;
     updateMessageBubble(mount, assistantIndex, assistant);
 
+    let skippedCached = 0;
     for (let index = 0; index < paragraphs.length; index++) {
       throwIfAborted(signal);
       const paragraph = paragraphs[index]!;
@@ -3253,7 +3263,15 @@ async function runFullTextTranslationBatch(
         signal,
         prefs,
       });
-      assistant.content += `\n\n## 第 ${index + 1} 段\n\n${translated}`;
+      if (translated.cached) {
+        skippedCached++;
+        if (skippedCached === 1) {
+          assistant.content += "\n\n已跳过前面已翻译缓存段落，继续翻译未完成部分。";
+          updateMessageBubble(mount, assistantIndex, assistant);
+        }
+        continue;
+      }
+      assistant.content += `\n\n## 第 ${index + 1} 段\n\n${translated.text}`;
       translatedCount++;
       if (translatedCount % FULL_TRANSLATE_RENDER_EVERY === 0) {
         updateMessageBubble(mount, assistantIndex, assistant);
@@ -3262,7 +3280,16 @@ async function runFullTextTranslationBatch(
         void saveChatMessages(state.itemID, state.messages);
       }
     }
+    if (skippedCached === paragraphs.length) {
+      assistant.content += "\n\n本篇所有段落都已有翻译缓存；可用「点译」点击 PDF 段落查看。";
+      updateMessageBubble(mount, assistantIndex, assistant);
+    }
   }
+}
+
+interface TranslateParagraphResult {
+  text: string;
+  cached: boolean;
 }
 
 interface TranslateParagraphInput {
@@ -3276,7 +3303,7 @@ interface TranslateParagraphInput {
 
 async function translateParagraphWithCache(
   input: TranslateParagraphInput,
-): Promise<string> {
+): Promise<TranslateParagraphResult> {
   const key = cacheKey({
     sentence: input.paragraph,
     target: "zh",
@@ -3286,7 +3313,7 @@ async function translateParagraphWithCache(
     ctxLevel: "full-text",
   });
   const cached = getCachedTranslation(input.prefs, key);
-  if (cached) return cleanTranslationOutput(cached.text);
+  if (cached) return { text: cleanTranslationOutput(cached.text), cached: true };
 
   let out = "";
   for await (const chunk of translateSentence({
@@ -3295,6 +3322,7 @@ async function translateParagraphWithCache(
     model: input.model,
     thinking: input.thinking,
     signal: input.signal,
+    maxOutputTokens: FULL_TRANSLATE_MAX_OUTPUT_TOKENS,
   })) {
     throwIfAborted(input.signal);
     if (chunk.type === "text" && chunk.text) out += chunk.text;
@@ -3308,7 +3336,7 @@ async function translateParagraphWithCache(
       createdAt: Date.now(),
     });
   }
-  return cleaned || "（空译文）";
+  return { text: cleaned || "（空译文）", cached: false };
 }
 
 async function fullTextForTranslation(
@@ -8197,9 +8225,21 @@ function installReaderTranslateToolbar(
         );
       });
 
-      group.append(translateBtn);
+      const pointTranslateBtn = doc.createElement("button");
+      pointTranslateBtn.type = "button";
+      pointTranslateBtn.className = "zai-reader-translate-button";
+      pointTranslateBtn.textContent = "点译";
+      pointTranslateBtn.title = "开启后点击 PDF 段落显示译文，不写入注释";
+      pointTranslateBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void toggleTranslateMode(win, pointTranslateBtn);
+      });
+
+      group.append(translateBtn, pointTranslateBtn);
       insertReaderTranslateGroup(toolbar, group);
       mountedGroups.push(group);
+      syncReaderTranslateButtons(win, doc);
     }
   };
 
