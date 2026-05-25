@@ -1,5 +1,6 @@
 export const CACHE_PREFS_KEY = 'extensions.zotero-ai-sidebar.translateCache';
 export const MAX_CACHE_ENTRIES = 500;
+const FULL_TEXT_CACHE_MAX_SOURCE_CHARS = 900;
 
 export interface CacheEntry {
   text: string;
@@ -120,6 +121,9 @@ export function getFullTextCachedTranslation(
     const exact = state.entries[cacheKey({ ...input, sentence, ctxLevel: 'full-text' })];
     if (exact) return exact;
   }
+  const legacyChunkMatches = findLegacyFullTextChunkMatches(state, input, candidates);
+  if (legacyChunkMatches.length === 1) return legacyChunkMatches[0]!.entry;
+  if (legacyChunkMatches.length > 1) return combineFullTextMatches(legacyChunkMatches);
 
   const needles = candidates
     .map((candidate) => ({
@@ -151,16 +155,7 @@ export function getFullTextCachedTranslation(
   });
   const deduped = dedupeOverlappingMatches(matches);
   if (deduped.length === 1) return deduped[0]!.entry;
-  return {
-    text: deduped.map((match) => match.entry.text).join('\n\n'),
-    model: deduped[0]!.entry.model,
-    createdAt: Math.max(...deduped.map((match) => match.entry.createdAt)),
-    sourceText: deduped.map((match) => match.entry.sourceText ?? '').filter(Boolean).join('\n\n'),
-    target: input.target,
-    endpoint: input.endpoint,
-    thinking: input.thinking,
-    ctxLevel: 'full-text',
-  };
+  return combineFullTextMatches(deduped, input);
 }
 
 function uniqueNonEmpty(values: Array<string | undefined>): string[] {
@@ -176,6 +171,84 @@ function normalizeForLooseMatch(text: string): string {
     .replace(/([A-Za-z])[-\u2010-\u2015]\s+([A-Za-z])/g, '$1$2')
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function findLegacyFullTextChunkMatches(
+  state: TranslateCacheState,
+  input: CacheKeyInput,
+  candidates: string[],
+): Array<{ entry: CacheEntry; sourceLoose: string; position: number }> {
+  for (const candidate of candidates) {
+    const chunks = splitFullTextCacheChunks(candidate);
+    if (chunks.length <= 1) continue;
+    const matches: Array<{ entry: CacheEntry; sourceLoose: string; position: number }> = [];
+    for (let index = 0; index < chunks.length; index++) {
+      const chunk = chunks[index]!;
+      const key = cacheKey({ ...input, sentence: chunk, ctxLevel: 'full-text' });
+      const entry = state.entries[key];
+      if (!entry) continue;
+      matches.push({
+        entry,
+        sourceLoose: normalizeForLooseMatch(chunk),
+        position: index,
+      });
+    }
+    if (matches.length) return matches;
+  }
+  return [];
+}
+
+function splitFullTextCacheChunks(text: string): string[] {
+  const normalized = text.replace(/\r\n?/g, '\n');
+  const raw = normalized
+    .split(/\n\s*\n+/)
+    .map((part) => part.replace(/[ \t\f\v]+/g, ' ').trim())
+    .filter((part) => part.length >= 20 && /[A-Za-z\u4e00-\u9fff]/.test(part));
+  const out: string[] = [];
+  for (const paragraph of raw.length ? raw : [text.replace(/[ \t\f\v]+/g, ' ').trim()]) {
+    out.push(...splitLongFullTextCacheChunk(paragraph));
+  }
+  return out;
+}
+
+function splitLongFullTextCacheChunk(paragraph: string): string[] {
+  if (paragraph.length <= FULL_TEXT_CACHE_MAX_SOURCE_CHARS) return [paragraph];
+  const sentences = paragraph.match(/[^.!?。！？]+[.!?。！？]*/g) ?? [paragraph];
+  const chunks: string[] = [];
+  let current = '';
+  for (const sentence of sentences) {
+    const trimmed = sentence.trim();
+    if (!trimmed) continue;
+    const next = current ? `${current} ${trimmed}` : trimmed;
+    if (next.length <= FULL_TEXT_CACHE_MAX_SOURCE_CHARS) {
+      current = next;
+      continue;
+    }
+    if (current) chunks.push(current);
+    current = trimmed;
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+function combineFullTextMatches(
+  matches: Array<{ entry: CacheEntry }>,
+  input?: CacheKeyInput,
+): CacheEntry {
+  return {
+    text: matches.map((match) => match.entry.text).join('\n\n'),
+    model: matches[0]!.entry.model,
+    createdAt: Math.max(...matches.map((match) => match.entry.createdAt)),
+    sourceText: matches.map((match) => match.entry.sourceText ?? '').filter(Boolean).join('\n\n'),
+    ...(input
+      ? {
+          target: input.target,
+          endpoint: input.endpoint,
+          thinking: input.thinking,
+          ctxLevel: 'full-text',
+        }
+      : {}),
+  };
 }
 
 function bestLooseMatchPosition(

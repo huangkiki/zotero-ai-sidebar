@@ -132,6 +132,42 @@ describe('translate cache', () => {
     expect(got?.text).toBe('第一块译文。\n\n第二块译文。');
   });
 
+  it('reconstructs legacy chunk keys from a long point paragraph', () => {
+    const prefs = makePrefs();
+    const first = `${'A'.repeat(800)}.`;
+    const second = `${'B'.repeat(800)}.`;
+    const longParagraph = `${first} ${second}`;
+    const chunks = [first, second];
+    for (let index = 0; index < chunks.length; index++) {
+      const chunk = chunks[index]!;
+      const key = cacheKey({
+        sentence: chunk,
+        target: 'zh',
+        endpoint: 'https://api.example.com',
+        model: 'gpt-5.4',
+        thinking: 'low',
+        ctxLevel: 'full-text',
+      });
+      setCachedTranslation(prefs, key, {
+        text: `旧缓存译文 ${index + 1}`,
+        model: 'gpt-5.4',
+        createdAt: 1000 + index,
+      });
+    }
+
+    const got = getFullTextCachedTranslation(prefs, {
+      sentence: 'short miss',
+      paragraphContext: longParagraph,
+      target: 'zh',
+      endpoint: 'https://api.example.com',
+      model: 'gpt-5.4',
+      thinking: 'low',
+      ctxLevel: 'none',
+    });
+
+    expect(got?.text).toBe('旧缓存译文 1\n\n旧缓存译文 2');
+  });
+
   it('matches PDF text despite ligatures, hyphenation, and punctuation differences', () => {
     const prefs = makePrefs();
     setCachedTranslation(prefs, 'k1', {
