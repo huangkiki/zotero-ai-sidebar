@@ -74,12 +74,14 @@ import { TranslateModeController } from "../translate/translate-mode";
 import {
   cacheKey,
   getCachedTranslation,
+  getLooseCachedTranslation,
   setCachedTranslation,
 } from "../translate/cache";
 import { loadTranslateSettings } from "../translate/settings";
 import {
   cleanTranslationOutput,
   translateSentence,
+  translationNeedsRetry,
 } from "../translate/translator";
 import { splitFullTextParagraphs } from "../translate/full-text";
 
@@ -150,6 +152,7 @@ interface WindowSidebarState {
   readerTranslateToolbarCleanup?: () => void;
   initialRefreshCleanup?: () => void;
   lastCopySelection?: { text: string; updatedAt: number };
+  activeConversationItemID?: number | null;
   toggleButton?: Element;
   floatingButton?: HTMLElement;
   selectionMonitorID?: number;
@@ -231,9 +234,14 @@ interface MessagesScrollLock {
 
 // Panel-state survival
 // =====================================================================
-// Each rendered sidebar mount carries a PanelState in this WeakMap. The
-// mount is the GC root: when the Zotero window closes, the mount drops
-// out, and the WeakMap entry goes with it (no manual cleanup needed).
+// Each rendered sidebar mount carries one active PanelState plus a small
+// per-item cache. The mount is the GC root: when the Zotero window closes,
+// the mount drops out, and these WeakMap entries go with it.
+//
+// WHY per-item cache: chat streams are async and can outlive the user's
+// current item selection. Keeping one PanelState per item lets a paper keep
+// answering in the background while the sidebar switches to another paper's
+// conversation.
 //
 // INVARIANT: rendering is FULL-REPLACE — `renderPanel` calls
 // `mount.replaceChildren()` and rebuilds. WHY full replace (not diff):
@@ -243,6 +251,7 @@ interface MessagesScrollLock {
 // `capturePanelState` (saves into `state` BEFORE replace) and then
 // `restoreMessagesScroll` + `restoreChatInput` (reapplied AFTER replace).
 const states = new WeakMap<Element, PanelState>();
+const stateCache = new WeakMap<Element, Map<string, PanelState>>();
 
 type AssistantProgressStage =
   | "starting"
@@ -254,42 +263,24 @@ type AssistantProgressStage =
 
 // Entry point per Zotero item selection.
 // Two paths:
-//   - itemID changed (or first render): allocate fresh PanelState and
-//     kick off async history load. Old state is DROPPED — switching items
-//     means switching threads.
+//   - itemID changed (or first render): switch to that item's cached
+//     PanelState, creating and loading persisted history on first use.
 //   - same itemID: reload presets only when NOT editing, then reuse existing
 //     messages/draft/scroll state. While editing, `state.presets` may contain
 //     unsaved form changes; reloading prefs would resurrect the last saved
 //     model list during background sidebar refreshes.
 function renderMount(mount: HTMLElement, itemID: number | null) {
-  let state = states.get(mount);
-  if (!state || state.itemID !== itemID) {
-    const presets = loadPresets(zoteroPrefs());
-    state = {
-      itemID,
-      presets,
-      selectedId: presets[0]?.id ?? null,
-      editing: presets.length === 0,
-      messages: [],
-      historyLoaded: false,
-      sending: false,
-      draftText: "",
-      draftSelectionStart: 0,
-      draftSelectionEnd: 0,
-      draftHadFocus: false,
-      messagesScrollTop: 0,
-      autoFollowMessages: true,
-      agentPermissionMode: agentPermissionMode(presets[0]),
-      copyDebugContext: false,
-      uiSettings: loadUiSettings(zoteroPrefs()),
-      pasteBlocks: [],
-      draftImages: [],
-      nextPasteID: 1,
-      localUiSettings: loadLocalUiSettings(zoteroPrefs()),
-    };
-    states.set(mount, state);
+  const cache = panelStateCache(mount);
+  const key = panelStateKey(itemID);
+  let state = cache.get(key);
+  if (!state) {
+    state = createPanelState(itemID);
+    cache.set(key, state);
     void loadPersistedMessages(mount, state);
-  } else {
+  }
+  states.set(mount, state);
+
+  if (state.itemID === itemID) {
     if (!state.editing) {
       state.presets = loadPresets(zoteroPrefs());
     }
@@ -308,6 +299,57 @@ function renderMount(mount: HTMLElement, itemID: number | null) {
   }
 
   renderPanel(mount, state);
+}
+
+function createPanelState(itemID: number | null): PanelState {
+  const presets = loadPresets(zoteroPrefs());
+  return {
+    itemID,
+    presets,
+    selectedId: presets[0]?.id ?? null,
+    editing: presets.length === 0,
+    messages: [],
+    historyLoaded: false,
+    sending: false,
+    draftText: "",
+    draftSelectionStart: 0,
+    draftSelectionEnd: 0,
+    draftHadFocus: false,
+    messagesScrollTop: 0,
+    autoFollowMessages: true,
+    agentPermissionMode: agentPermissionMode(presets[0]),
+    copyDebugContext: false,
+    uiSettings: loadUiSettings(zoteroPrefs()),
+    pasteBlocks: [],
+    draftImages: [],
+    nextPasteID: 1,
+    localUiSettings: loadLocalUiSettings(zoteroPrefs()),
+  };
+}
+
+function panelStateKey(itemID: number | null): string {
+  return itemID == null ? "global" : `item:${itemID}`;
+}
+
+function panelStateCache(mount: Element): Map<string, PanelState> {
+  let cache = stateCache.get(mount);
+  if (!cache) {
+    cache = new Map();
+    stateCache.set(mount, cache);
+  }
+  return cache;
+}
+
+function isActivePanelState(mount: Element, state: PanelState): boolean {
+  return states.get(mount) === state;
+}
+
+function isCachedPanelState(mount: Element, state: PanelState): boolean {
+  return panelStateCache(mount).get(panelStateKey(state.itemID)) === state;
+}
+
+function renderPanelIfActive(mount: HTMLElement, state: PanelState): void {
+  if (isActivePanelState(mount, state)) renderPanel(mount, state);
 }
 
 function renderPanel(mount: HTMLElement, state: PanelState) {
@@ -397,7 +439,7 @@ function schedulePanelRecovery(mount: HTMLElement, state: PanelState): void {
   if (attempts > 8) return;
   const delay = Math.min(1600, 150 * attempts);
   win.setTimeout(() => {
-    if (states.get(mount) === state) renderPanel(mount, state);
+    renderPanelIfActive(mount, state);
   }, delay);
 }
 
@@ -632,20 +674,24 @@ export function refreshSidebarPreferences(): void {
   for (const win of Zotero.getMainWindows()) {
     const sidebar = windowSidebars.get(win);
     if (!sidebar) continue;
-    const state = states.get(sidebar.mount);
-    if (!state) continue;
     const presets = loadPresets(zoteroPrefs());
-    state.presets = presets;
-    if (!state.selectedId || !presets.some((p) => p.id === state.selectedId)) {
-      state.selectedId =
-        configuredPresets(state)[0]?.id ?? presets[0]?.id ?? null;
+    for (const state of panelStateCache(sidebar.mount).values()) {
+      state.presets = presets;
+      if (
+        !state.selectedId ||
+        !presets.some((p) => p.id === state.selectedId)
+      ) {
+        state.selectedId =
+          configuredPresets(state)[0]?.id ?? presets[0]?.id ?? null;
+      }
+      state.agentPermissionMode = agentPermissionMode(
+        selectedChatPreset(state) ?? selectedPreset(state),
+      );
+      state.uiSettings = loadUiSettings(zoteroPrefs());
+      state.localUiSettings = loadLocalUiSettings(zoteroPrefs());
     }
-    state.agentPermissionMode = agentPermissionMode(
-      selectedChatPreset(state) ?? selectedPreset(state),
-    );
-    state.uiSettings = loadUiSettings(zoteroPrefs());
-    state.localUiSettings = loadLocalUiSettings(zoteroPrefs());
-    renderPanel(sidebar.mount, state);
+    const active = states.get(sidebar.mount);
+    if (active) renderPanel(sidebar.mount, active);
   }
 }
 
@@ -862,8 +908,7 @@ function renderPresetEditor(
       id: current.id,
       provider: providerKind,
       label:
-        label.value.trim() ||
-        (providerKind === "anthropic" ? "Claude" : "GPT"),
+        label.value.trim() || (providerKind === "anthropic" ? "Claude" : "GPT"),
       apiKey: apiKey.value.trim(),
       baseUrl: baseUrl.value.trim() || DEFAULT_BASE_URLS[providerKind],
       model: activeModel,
@@ -2992,7 +3037,7 @@ async function sendMessage(
     .map((image) => ({ ...image }));
   if ((!baseContent && images.length === 0) || !preset) return;
   await ensureHistoryLoaded(mount, state);
-  if (states.get(mount) !== state) return;
+  if (!isCachedPanelState(mount, state)) return;
   if (!preset.apiKey || !preset.model) {
     openAddonPreferences(mount.ownerDocument!);
     return;
@@ -3080,7 +3125,7 @@ async function sendMessage(
   void saveChatMessages(state.itemID, state.messages);
   if (shouldQueue) {
     state.queueOpen = true;
-    renderPanel(mount, state);
+    renderPanelIfActive(mount, state);
     return;
   }
   await streamAssistant(mount, state, history, userMessage, {
@@ -3117,7 +3162,7 @@ async function translateSelectedPapersFullText(
   }
 
   await ensureHistoryLoaded(mount, state);
-  if (states.get(mount) !== state || state.sending) return;
+  if (!isCachedPanelState(mount, state) || state.sending) return;
 
   const userMessage: Message = {
     role: "user",
@@ -3152,7 +3197,7 @@ async function translateSelectedPapersFullText(
   const controller = new win.AbortController();
   state.abort = controller;
   void saveChatMessages(state.itemID, state.messages);
-  renderPanel(mount, state);
+  renderPanelIfActive(mount, state);
 
   try {
     await runFullTextTranslationBatch({
@@ -3189,7 +3234,7 @@ async function translateSelectedPapersFullText(
     void saveChatMessages(state.itemID, state.messages);
     state.scrollToBottom = state.autoFollowMessages;
     state.focusInput = true;
-    renderPanel(mount, state);
+    renderPanelIfActive(mount, state);
   }
 }
 
@@ -3236,18 +3281,18 @@ async function runFullTextTranslationBatch(
       assistant,
       itemIDs.length > 1 ? `# ${paperIndex + 1}. ${title}` : `# ${title}`,
     );
-    updateMessageBubble(mount, assistantIndex, assistant);
+    updateMessageBubble(mount, state, assistantIndex, assistant);
 
     const fullText = await fullTextForTranslation(win, itemID);
     const paragraphs = splitFullTextParagraphs(fullText);
     if (!paragraphs.length) {
       assistant.content += "\n\n未读取到可翻译的 PDF 全文。";
-      updateMessageBubble(mount, assistantIndex, assistant);
+      updateMessageBubble(mount, state, assistantIndex, assistant);
       continue;
     }
 
     assistant.content += `\n\n共 ${paragraphs.length} 段，开始翻译。`;
-    updateMessageBubble(mount, assistantIndex, assistant);
+    updateMessageBubble(mount, state, assistantIndex, assistant);
 
     let skippedCached = 0;
     for (let index = 0; index < paragraphs.length; index++) {
@@ -3266,23 +3311,25 @@ async function runFullTextTranslationBatch(
       if (translated.cached) {
         skippedCached++;
         if (skippedCached === 1) {
-          assistant.content += "\n\n已跳过前面已翻译缓存段落，继续翻译未完成部分。";
-          updateMessageBubble(mount, assistantIndex, assistant);
+          assistant.content +=
+            "\n\n已跳过前面已翻译缓存段落，继续翻译未完成部分。";
+          updateMessageBubble(mount, state, assistantIndex, assistant);
         }
         continue;
       }
       assistant.content += `\n\n## 第 ${index + 1} 段\n\n${translated.text}`;
       translatedCount++;
       if (translatedCount % FULL_TRANSLATE_RENDER_EVERY === 0) {
-        updateMessageBubble(mount, assistantIndex, assistant);
+        updateMessageBubble(mount, state, assistantIndex, assistant);
       }
       if (translatedCount % FULL_TRANSLATE_SAVE_EVERY === 0) {
         void saveChatMessages(state.itemID, state.messages);
       }
     }
     if (skippedCached === paragraphs.length) {
-      assistant.content += "\n\n本篇所有段落都已有翻译缓存；可用「点译」点击 PDF 段落查看。";
-      updateMessageBubble(mount, assistantIndex, assistant);
+      assistant.content +=
+        "\n\n本篇所有段落都已有翻译缓存；可用「点译」点击 PDF 段落查看。";
+      updateMessageBubble(mount, state, assistantIndex, assistant);
     }
   }
 }
@@ -3304,16 +3351,19 @@ interface TranslateParagraphInput {
 async function translateParagraphWithCache(
   input: TranslateParagraphInput,
 ): Promise<TranslateParagraphResult> {
-  const key = cacheKey({
+  const cacheInput = {
     sentence: input.paragraph,
     target: "zh",
     endpoint: input.preset.baseUrl,
     model: input.model,
     thinking: input.thinking,
     ctxLevel: "full-text",
-  });
-  const cached = getCachedTranslation(input.prefs, key);
-  if (cached) {
+  };
+  const key = cacheKey(cacheInput);
+  const cached =
+    getCachedTranslation(input.prefs, key) ??
+    getLooseCachedTranslation(input.prefs, cacheInput);
+  if (cached && !translationNeedsRetry(input.paragraph, cached.text)) {
     if (
       cached.sourceText !== input.paragraph ||
       cached.target !== "zh" ||
@@ -3419,7 +3469,7 @@ async function processNextQueuedChatTask(
   if (state.processingQueuedTask) return;
   state.processingQueuedTask = true;
   try {
-    while (states.get(mount) === state && !state.sending) {
+    while (isCachedPanelState(mount, state) && !state.sending) {
       const next = firstQueuedChatTask(state);
       if (!next) break;
       const userMessage = state.messages[next.userIndex];
@@ -3669,7 +3719,7 @@ async function streamAssistant(
   state.autoFollowMessages = true;
   state.scrollToBottom = true;
   state.focusInput = true;
-  renderPanel(mount, state);
+  renderPanelIfActive(mount, state);
   const userIndex = state.messages.indexOf(userMessage);
   const assistantIndex = userIndex >= 0 ? userIndex + 1 : state.messages.length;
   const assistant: Message = { role: "assistant", content: "" };
@@ -3679,7 +3729,7 @@ async function streamAssistant(
   state.activeTaskID = options.taskID;
   state.scrollToBottom = true;
   state.focusInput = true;
-  renderPanel(mount, state);
+  renderPanelIfActive(mount, state);
 
   const controllerCtor = mount.ownerDocument!.defaultView!.AbortController;
   const controller = new controllerCtor();
@@ -3749,7 +3799,7 @@ async function streamAssistant(
     });
     state.scrollToBottom = state.autoFollowMessages;
     state.activeAssistantStage = "waiting_model";
-    renderPanel(mount, state);
+    renderPanelIfActive(mount, state);
 
     const messagesForApi: Message[] = toApiMessages(
       [...history, userMessage],
@@ -3775,12 +3825,12 @@ async function streamAssistant(
         state.activeAssistantStage = "writing";
         state.activeAssistantDetail = undefined;
         assistant.content += chunk.text;
-        updateMessageBubble(mount, assistantIndex, assistant);
+        updateMessageBubble(mount, state, assistantIndex, assistant);
       } else if (chunk.type === "thinking_delta") {
         state.activeAssistantStage = "thinking";
         state.activeAssistantDetail = undefined;
         assistant.thinking = `${assistant.thinking ?? ""}${chunk.text}`;
-        updateMessageBubble(mount, assistantIndex, assistant);
+        updateMessageBubble(mount, state, assistantIndex, assistant);
       } else if (chunk.type === "tool_call") {
         state.activeAssistantStage =
           chunk.status === "started" ? "using_tool" : "waiting_model";
@@ -3788,16 +3838,16 @@ async function streamAssistant(
         recordToolCall(userMessage, chunk);
         void saveChatMessages(state.itemID, state.messages);
         state.scrollToBottom = state.autoFollowMessages;
-        renderPanel(mount, state);
+        renderPanelIfActive(mount, state);
       } else if (chunk.type === "status") {
         state.activeAssistantStage = "waiting_model";
         state.activeAssistantDetail = chunk.message;
-        updateMessageBubble(mount, assistantIndex, assistant);
+        updateMessageBubble(mount, state, assistantIndex, assistant);
       } else if (chunk.type === "error") {
         state.activeAssistantDetail = undefined;
         markMessageTaskError(userMessage, chunk.message);
         assistant.content += `\n[Error] ${chunk.message}`;
-        updateMessageBubble(mount, assistantIndex, assistant);
+        updateMessageBubble(mount, state, assistantIndex, assistant);
         break;
       }
     }
@@ -3812,7 +3862,7 @@ async function streamAssistant(
       markMessageTaskError(userMessage, message);
       assistant.content += `\n[Error] ${message}`;
     }
-    updateMessageBubble(mount, assistantIndex, assistant);
+    updateMessageBubble(mount, state, assistantIndex, assistant);
   } finally {
     toolSession?.dispose();
     markMessageTaskCompleted(userMessage);
@@ -3833,7 +3883,7 @@ async function streamAssistant(
     void saveChatMessages(state.itemID, state.messages);
     state.scrollToBottom = state.autoFollowMessages;
     state.focusInput = true;
-    renderPanel(mount, state);
+    renderPanelIfActive(mount, state);
   }
 }
 
@@ -4033,7 +4083,7 @@ function mergeToolContext(
 async function regenerateLastResponse(mount: HTMLElement, state: PanelState) {
   if (state.sending) return;
   await ensureHistoryLoaded(mount, state);
-  if (states.get(mount) !== state) return;
+  if (!isCachedPanelState(mount, state)) return;
 
   const assistantIndex = findLastAssistantIndex(state.messages);
   if (assistantIndex < 0) return;
@@ -4072,7 +4122,7 @@ function resetChatTaskForRetry(message: Message) {
 async function loadPersistedMessages(mount: HTMLElement, state: PanelState) {
   if (state.historyLoaded) return;
   const messages = await loadChatMessages(state.itemID);
-  if (states.get(mount) !== state || state.sending) return;
+  if (!isCachedPanelState(mount, state) || state.sending) return;
   // Tombstone any task that was running/queued when Zotero last closed.
   // Without this, a `task` lacking both `completedAt` and `cancelledAt`
   // looks "queued" forever and `processNextQueuedChatTask` never picks it
@@ -4088,7 +4138,7 @@ async function loadPersistedMessages(mount: HTMLElement, state: PanelState) {
   if (cancelledStale > 0) {
     void saveChatMessages(state.itemID, state.messages);
   }
-  renderPanel(mount, state);
+  renderPanelIfActive(mount, state);
 }
 
 function cancelStaleQueuedTasks(messages: Message[]): number {
@@ -4688,6 +4738,10 @@ function startSelectionMonitor(win: Window, sidebar: WindowSidebarState) {
   if (sidebar.selectionMonitorID != null) return;
   sidebar.selectionMonitorID = win.setInterval(() => {
     const itemID = safeSelectedItemID(win);
+    if (sidebar.activeConversationItemID !== itemID) {
+      renderWindowSidebar(win);
+      return;
+    }
     const before = getStoredSelectedText(itemID);
     const focusInSidebar =
       isFocusInside(sidebar.mount) || isFocusInside(sidebar.noteMount);
@@ -5111,15 +5165,17 @@ function annotationRectCount(annotation: Record<string, unknown>): number {
 
 function updateMessageBubble(
   mount: HTMLElement,
+  expectedState: PanelState,
   index: number,
   message: Message,
 ) {
+  if (!isActivePanelState(mount, expectedState)) return;
   const root = mount.querySelector(
     `[data-message-index="${index}"]`,
   ) as HTMLElement | null;
   const body = root?.querySelector(".bubble-body") as HTMLElement | null;
   if (!root || !body) return;
-  const state = states.get(mount);
+  const state = expectedState;
   const shouldStickToBottom =
     state?.autoFollowMessages ?? isMessagesNearBottom(mount);
   if (state) {
@@ -9300,13 +9356,14 @@ function renderWindowSidebar(win: Window) {
 
   const itemID = safeSelectedItemID(win);
   const panelState = states.get(state.mount);
-  if (panelState?.sending) {
+  if (panelState?.sending && panelState.itemID === itemID) {
     updateSelectionIndicators(state.mount, panelState.itemID);
     updateToggleButton(state);
     return;
   }
 
   renderMount(state.mount, itemID);
+  state.activeConversationItemID = itemID;
   updateToggleButton(state);
 }
 

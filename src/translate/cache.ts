@@ -1,4 +1,4 @@
-export const CACHE_PREFS_KEY = 'extensions.zotero-ai-sidebar.translateCache';
+export const CACHE_PREFS_KEY = "extensions.zotero-ai-sidebar.translateCache";
 export const MAX_CACHE_ENTRIES = 500;
 const FULL_TEXT_CACHE_MAX_SOURCE_CHARS = 900;
 
@@ -42,11 +42,11 @@ function fnv1aHex64(input: string): string {
     h1 = Math.imul(h1 ^ c, 0x01000193) >>> 0;
     h2 = Math.imul(h2 ^ (c + 0x9e37), 0x01000193) >>> 0;
   }
-  return h1.toString(16).padStart(8, '0') + h2.toString(16).padStart(8, '0');
+  return h1.toString(16).padStart(8, "0") + h2.toString(16).padStart(8, "0");
 }
 
 function normalizeSentence(s: string): string {
-  return s.replace(/\s+/g, ' ').trim().toLowerCase();
+  return s.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 export function cacheKey(input: CacheKeyInput): string {
@@ -57,7 +57,7 @@ export function cacheKey(input: CacheKeyInput): string {
     input.model,
     input.thinking,
     input.ctxLevel,
-  ].join('|');
+  ].join("|");
   return fnv1aHex64(payload).slice(0, 16);
 }
 
@@ -66,23 +66,29 @@ export function loadCache(prefs: PrefsStore): TranslateCacheState {
   if (!raw) return { entries: {} };
   try {
     const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== 'object') return { entries: {} };
+    if (!parsed || typeof parsed !== "object") return { entries: {} };
     const entries = (parsed as { entries?: Record<string, unknown> }).entries;
-    if (!entries || typeof entries !== 'object') return { entries: {} };
+    if (!entries || typeof entries !== "object") return { entries: {} };
     const out: Record<string, CacheEntry> = {};
     for (const [k, v] of Object.entries(entries)) {
-      if (!v || typeof v !== 'object') continue;
+      if (!v || typeof v !== "object") continue;
       const e = v as Partial<CacheEntry>;
-      if (typeof e.text === 'string' && typeof e.model === 'string' && typeof e.createdAt === 'number') {
+      if (
+        typeof e.text === "string" &&
+        typeof e.model === "string" &&
+        typeof e.createdAt === "number"
+      ) {
         out[k] = {
           text: e.text,
           model: e.model,
           createdAt: e.createdAt,
-          ...(typeof e.sourceText === 'string' ? { sourceText: e.sourceText } : {}),
-          ...(typeof e.target === 'string' ? { target: e.target } : {}),
-          ...(typeof e.endpoint === 'string' ? { endpoint: e.endpoint } : {}),
-          ...(typeof e.thinking === 'string' ? { thinking: e.thinking } : {}),
-          ...(typeof e.ctxLevel === 'string' ? { ctxLevel: e.ctxLevel } : {}),
+          ...(typeof e.sourceText === "string"
+            ? { sourceText: e.sourceText }
+            : {}),
+          ...(typeof e.target === "string" ? { target: e.target } : {}),
+          ...(typeof e.endpoint === "string" ? { endpoint: e.endpoint } : {}),
+          ...(typeof e.thinking === "string" ? { thinking: e.thinking } : {}),
+          ...(typeof e.ctxLevel === "string" ? { ctxLevel: e.ctxLevel } : {}),
         };
       }
     }
@@ -107,23 +113,74 @@ function trimCache(state: TranslateCacheState): TranslateCacheState {
   return { entries: out };
 }
 
-export function getCachedTranslation(prefs: PrefsStore, key: string): CacheEntry | undefined {
+export function getCachedTranslation(
+  prefs: PrefsStore,
+  key: string,
+): CacheEntry | undefined {
   return loadCache(prefs).entries[key];
+}
+
+export function getLooseCachedTranslation(
+  prefs: PrefsStore,
+  input: CacheKeyInput,
+): CacheEntry | undefined {
+  const state = loadCache(prefs);
+  const exact = state.entries[cacheKey(input)];
+  if (exact) return exact;
+
+  const sourceLoose = normalizeForLooseMatch(input.sentence);
+  if (sourceLoose.length < 20) return undefined;
+
+  const matches: CacheEntry[] = [];
+  for (const entry of Object.values(state.entries)) {
+    if (entry.target !== input.target) continue;
+    if ((entry.endpoint ?? "") !== (input.endpoint ?? "")) continue;
+    if (entry.model !== input.model) continue;
+    if (entry.thinking !== input.thinking) continue;
+    const entrySource = entry.sourceText ?? "";
+    const entryLoose = normalizeForLooseMatch(entrySource);
+    if (entryLoose.length < 20) continue;
+    if (
+      entryLoose === sourceLoose ||
+      entryLoose.includes(sourceLoose) ||
+      sourceLoose.includes(entryLoose)
+    ) {
+      matches.push(entry);
+    }
+  }
+  if (!matches.length) return undefined;
+  matches.sort((a, b) => {
+    const aSameCtx = a.ctxLevel === input.ctxLevel ? 1 : 0;
+    const bSameCtx = b.ctxLevel === input.ctxLevel ? 1 : 0;
+    if (aSameCtx !== bSameCtx) return bSameCtx - aSameCtx;
+    return b.createdAt - a.createdAt;
+  });
+  return matches[0];
 }
 
 export function getFullTextCachedTranslation(
   prefs: PrefsStore,
-  input: CacheKeyInput & { paragraphContext?: string; fullTextContext?: string },
+  input: CacheKeyInput & {
+    paragraphContext?: string;
+    fullTextContext?: string;
+  },
 ): CacheEntry | undefined {
   const state = loadCache(prefs);
   const candidates = uniqueNonEmpty([input.sentence, input.paragraphContext]);
   for (const sentence of candidates) {
-    const exact = state.entries[cacheKey({ ...input, sentence, ctxLevel: 'full-text' })];
+    const exact =
+      state.entries[cacheKey({ ...input, sentence, ctxLevel: "full-text" })];
     if (exact) return exact;
   }
-  const legacyChunkMatches = findLegacyFullTextChunkMatches(state, input, candidates, input.fullTextContext);
+  const legacyChunkMatches = findLegacyFullTextChunkMatches(
+    state,
+    input,
+    candidates,
+    input.fullTextContext,
+  );
   if (legacyChunkMatches.length === 1) return legacyChunkMatches[0]!.entry;
-  if (legacyChunkMatches.length > 1) return combineFullTextMatches(legacyChunkMatches);
+  if (legacyChunkMatches.length > 1)
+    return combineFullTextMatches(legacyChunkMatches);
 
   const needles = candidates
     .map((candidate) => ({
@@ -133,14 +190,18 @@ export function getFullTextCachedTranslation(
     .filter((candidate) => candidate.loose.length >= 20);
   if (!needles.length) return undefined;
 
-  const matches: Array<{ entry: CacheEntry; sourceLoose: string; position: number }> = [];
+  const matches: Array<{
+    entry: CacheEntry;
+    sourceLoose: string;
+    position: number;
+  }> = [];
   for (const entry of Object.values(state.entries)) {
-    if (entry.ctxLevel !== 'full-text') continue;
+    if (entry.ctxLevel !== "full-text") continue;
     if (entry.target !== input.target) continue;
-    if ((entry.endpoint ?? '') !== (input.endpoint ?? '')) continue;
+    if ((entry.endpoint ?? "") !== (input.endpoint ?? "")) continue;
     if (entry.model !== input.model) continue;
     if (entry.thinking !== input.thinking) continue;
-    const sourceLoose = normalizeForLooseMatch(entry.sourceText ?? '');
+    const sourceLoose = normalizeForLooseMatch(entry.sourceText ?? "");
     if (sourceLoose.length < 20) continue;
     const position = bestLooseMatchPosition(sourceLoose, needles);
     if (position < 0) continue;
@@ -160,17 +221,21 @@ export function getFullTextCachedTranslation(
 
 function uniqueNonEmpty(values: Array<string | undefined>): string[] {
   return Array.from(
-    new Set(values.map((value) => value?.trim()).filter((value): value is string => !!value)),
+    new Set(
+      values
+        .map((value) => value?.trim())
+        .filter((value): value is string => !!value),
+    ),
   );
 }
 
 function normalizeForLooseMatch(text: string): string {
   return text
-    .normalize('NFKC')
-    .replace(/\u00ad/g, '')
-    .replace(/([A-Za-z])[-\u2010-\u2015]\s+([A-Za-z])/g, '$1$2')
+    .normalize("NFKC")
+    .replace(/\u00ad/g, "")
+    .replace(/([A-Za-z])[-\u2010-\u2015]\s+([A-Za-z])/g, "$1$2")
     .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, '');
+    .replace(/[^\p{L}\p{N}]+/gu, "");
 }
 
 function findLegacyFullTextChunkMatches(
@@ -186,20 +251,36 @@ function findLegacyFullTextChunkMatches(
     }))
     .filter((candidate) => candidate.loose.length >= 20);
   const contexts = [
-    ...candidates.map((candidate) => ({ text: candidate, requireOverlap: false })),
-    ...(fullTextContext ? [{ text: fullTextContext, requireOverlap: true }] : []),
+    ...candidates.map((candidate) => ({
+      text: candidate,
+      requireOverlap: false,
+    })),
+    ...(fullTextContext
+      ? [{ text: fullTextContext, requireOverlap: true }]
+      : []),
   ];
   for (const context of contexts) {
     const chunks = splitFullTextCacheChunks(context.text);
     if (chunks.length <= 1) continue;
-    const matches: Array<{ entry: CacheEntry; sourceLoose: string; position: number }> = [];
+    const matches: Array<{
+      entry: CacheEntry;
+      sourceLoose: string;
+      position: number;
+    }> = [];
     for (let index = 0; index < chunks.length; index++) {
       const chunk = chunks[index]!;
       const sourceLoose = normalizeForLooseMatch(chunk);
-      if (context.requireOverlap && bestLooseMatchPosition(sourceLoose, needles) < 0) {
+      if (
+        context.requireOverlap &&
+        bestLooseMatchPosition(sourceLoose, needles) < 0
+      ) {
         continue;
       }
-      const key = cacheKey({ ...input, sentence: chunk, ctxLevel: 'full-text' });
+      const key = cacheKey({
+        ...input,
+        sentence: chunk,
+        ctxLevel: "full-text",
+      });
       const entry = state.entries[key];
       if (!entry) continue;
       matches.push({
@@ -214,13 +295,15 @@ function findLegacyFullTextChunkMatches(
 }
 
 function splitFullTextCacheChunks(text: string): string[] {
-  const normalized = text.replace(/\r\n?/g, '\n');
+  const normalized = text.replace(/\r\n?/g, "\n");
   const raw = normalized
     .split(/\n\s*\n+/)
-    .map((part) => part.replace(/[ \t\f\v]+/g, ' ').trim())
+    .map((part) => part.replace(/[ \t\f\v]+/g, " ").trim())
     .filter((part) => part.length >= 20 && /[A-Za-z\u4e00-\u9fff]/.test(part));
   const out: string[] = [];
-  for (const paragraph of raw.length ? raw : [text.replace(/[ \t\f\v]+/g, ' ').trim()]) {
+  for (const paragraph of raw.length
+    ? raw
+    : [text.replace(/[ \t\f\v]+/g, " ").trim()]) {
     out.push(...splitLongFullTextCacheChunk(paragraph));
   }
   return out;
@@ -228,9 +311,11 @@ function splitFullTextCacheChunks(text: string): string[] {
 
 function splitLongFullTextCacheChunk(paragraph: string): string[] {
   if (paragraph.length <= FULL_TEXT_CACHE_MAX_SOURCE_CHARS) return [paragraph];
-  const sentences = paragraph.match(/[^.!?。！？]+[.!?。！？]*/g) ?? [paragraph];
+  const sentences = paragraph.match(/[^.!?。！？]+[.!?。！？]*/g) ?? [
+    paragraph,
+  ];
   const chunks: string[] = [];
-  let current = '';
+  let current = "";
   for (const sentence of sentences) {
     const trimmed = sentence.trim();
     if (!trimmed) continue;
@@ -251,16 +336,19 @@ function combineFullTextMatches(
   input?: CacheKeyInput,
 ): CacheEntry {
   return {
-    text: matches.map((match) => match.entry.text).join('\n\n'),
+    text: matches.map((match) => match.entry.text).join("\n\n"),
     model: matches[0]!.entry.model,
     createdAt: Math.max(...matches.map((match) => match.entry.createdAt)),
-    sourceText: matches.map((match) => match.entry.sourceText ?? '').filter(Boolean).join('\n\n'),
+    sourceText: matches
+      .map((match) => match.entry.sourceText ?? "")
+      .filter(Boolean)
+      .join("\n\n"),
     ...(input
       ? {
           target: input.target,
           endpoint: input.endpoint,
           thinking: input.thinking,
-          ctxLevel: 'full-text',
+          ctxLevel: "full-text",
         }
       : {}),
   };
@@ -285,9 +373,9 @@ function bestLooseMatchPosition(
   return best;
 }
 
-function dedupeOverlappingMatches<T extends { sourceLoose: string; position: number }>(
-  matches: T[],
-): T[] {
+function dedupeOverlappingMatches<
+  T extends { sourceLoose: string; position: number },
+>(matches: T[]): T[] {
   const kept: T[] = [];
   for (const match of matches) {
     const matchEnd = match.position + match.sourceLoose.length;
@@ -303,7 +391,11 @@ function dedupeOverlappingMatches<T extends { sourceLoose: string; position: num
 // Non-atomic load-modify-save. Safe here because writes are user-driven
 // (one click → one translate → one cache write), so concurrent writers
 // don't exist in the runtime model. Do not call from background timers.
-export function setCachedTranslation(prefs: PrefsStore, key: string, entry: CacheEntry): void {
+export function setCachedTranslation(
+  prefs: PrefsStore,
+  key: string,
+  entry: CacheEntry,
+): void {
   const state = loadCache(prefs);
   state.entries[key] = entry;
   saveCache(prefs, state);

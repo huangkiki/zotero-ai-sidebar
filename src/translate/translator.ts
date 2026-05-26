@@ -1,12 +1,16 @@
-import { OpenAIProvider } from '../providers/openai';
-import type { Message, StreamChunk } from '../providers/types';
-import type { ModelPreset, ReasoningEffort, TranslateThinking } from '../settings/types';
+import { OpenAIProvider } from "../providers/openai";
+import type { Message, StreamChunk } from "../providers/types";
+import type {
+  ModelPreset,
+  ReasoningEffort,
+  TranslateThinking,
+} from "../settings/types";
 
 const SYSTEM_PROMPT =
-  '英译中。只输出简体中文译文；术语、缩写、公式、模型名可保留原文。';
+  "你是严格的英译中引擎。把用户给出的英文原文翻译成简体中文，只输出译文。不得润色成英文，不得改写成英文，不得解释。术语、缩写、公式、模型名可保留原文，但句子主体必须是中文。";
 
 const STRICT_SYSTEM_PROMPT =
-  '英译中，只输出含中文的译文；不要英文改写、解释或引号。';
+  "严格英译中。上一次输出可能是英文润色，这是错误的。现在必须输出简体中文译文；除术语、缩写、公式、模型名外，不要保留英文句子。只输出译文，不要解释或引号。";
 const TRANSLATE_CONTEXT_CHAR_LIMIT = 600;
 const TRANSLATE_MAX_OUTPUT_TOKENS = 384;
 
@@ -22,7 +26,7 @@ export interface TranslateRequest {
 }
 
 export interface TranslateChunk {
-  type: 'text' | 'usage' | 'error' | 'done';
+  type: "text" | "usage" | "error" | "done";
   text?: string;
   message?: string;
   input?: number;
@@ -31,8 +35,8 @@ export interface TranslateChunk {
 }
 
 type TranslationResult =
-  | { type: 'ok'; text: string; usage?: TranslationUsage }
-  | { type: 'error'; message?: string };
+  | { type: "ok"; text: string; usage?: TranslationUsage }
+  | { type: "error"; message?: string };
 
 interface TranslationUsage {
   input: number;
@@ -41,35 +45,42 @@ interface TranslationUsage {
 }
 
 const THINKING_TO_EFFORT: Record<TranslateThinking, ReasoningEffort> = {
-  low: 'low',
-  medium: 'medium',
-  high: 'high',
-  xhigh: 'xhigh',
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "xhigh",
 };
 
 function buildUserMessage(req: TranslateRequest): string {
   const sentence = req.sentence.trim();
-  if (!req.contextText) return `原文：${sentence}`;
-  const label = req.contextLabel || '参考';
-  return `${label}：${trimContext(req.contextText)}\n原文：${sentence}`;
+  if (!req.contextText)
+    return `请把下面原文翻译成简体中文，不要润色为英文。\n原文：${sentence}`;
+  const label = req.contextLabel || "参考";
+  return `${label}：${trimContext(req.contextText)}\n请把下面原文翻译成简体中文，不要润色为英文。\n原文：${sentence}`;
 }
 
-export async function* translateSentence(req: TranslateRequest): AsyncIterable<TranslateChunk> {
+export async function* translateSentence(
+  req: TranslateRequest,
+): AsyncIterable<TranslateChunk> {
   const overriddenPreset: ModelPreset = {
     ...req.preset,
     model: req.model || req.preset.model,
     maxTokens: Math.min(
-      req.preset.maxTokens || req.maxOutputTokens || TRANSLATE_MAX_OUTPUT_TOKENS,
+      req.preset.maxTokens ||
+        req.maxOutputTokens ||
+        TRANSLATE_MAX_OUTPUT_TOKENS,
       req.maxOutputTokens || TRANSLATE_MAX_OUTPUT_TOKENS,
     ),
     extras: {
       ...req.preset.extras,
       reasoningEffort: THINKING_TO_EFFORT[req.thinking],
-      reasoningSummary: 'none',
+      reasoningSummary: "none",
     },
   };
 
-  const messages: Message[] = [{ role: 'user', content: buildUserMessage(req) }];
+  const messages: Message[] = [
+    { role: "user", content: buildUserMessage(req) },
+  ];
 
   const first = await collectTranslation(
     messages,
@@ -77,7 +88,7 @@ export async function* translateSentence(req: TranslateRequest): AsyncIterable<T
     overriddenPreset,
     req.signal,
   );
-  if (first.type === 'error') {
+  if (first.type === "error") {
     yield first;
     return;
   }
@@ -85,16 +96,24 @@ export async function* translateSentence(req: TranslateRequest): AsyncIterable<T
   const retried = translationNeedsRetry(req.sentence, first.text);
   const result = retried
     ? await retryStrictTranslation(messages, overriddenPreset, req.signal)
-    : { type: 'ok' as const, text: first.text };
+    : { type: "ok" as const, text: first.text };
 
-  if (result.type === 'error') {
+  if (result.type === "error") {
     yield result;
     return;
   }
-  yield { type: 'text', text: cleanTranslationOutput(result.text) };
+  if (translationNeedsRetry(req.sentence, result.text)) {
+    yield {
+      type: "error",
+      message:
+        "模型返回了英文改写而不是中文翻译，本次结果已丢弃且不会写入缓存。请点重试，或换一个翻译模型。",
+    };
+    return;
+  }
+  yield { type: "text", text: cleanTranslationOutput(result.text) };
   const usage = retried ? addUsage(first.usage, result.usage) : first.usage;
-  if (usage) yield { type: 'usage', ...usage };
-  yield { type: 'done' };
+  if (usage) yield { type: "usage", ...usage };
+  yield { type: "done" };
 }
 
 async function retryStrictTranslation(
@@ -108,8 +127,8 @@ async function retryStrictTranslation(
     preset,
     signal,
   );
-  if (second.type === 'error') return second;
-  return { type: 'ok', text: second.text, usage: second.usage };
+  if (second.type === "error") return second;
+  return { type: "ok", text: second.text, usage: second.usage };
 }
 
 async function collectTranslation(
@@ -119,29 +138,34 @@ async function collectTranslation(
   signal: AbortSignal,
 ): Promise<TranslationResult> {
   const provider = new OpenAIProvider();
-  let text = '';
+  let text = "";
   let usage: TranslationUsage | undefined;
   try {
-    for await (const chunk of provider.stream(messages, systemPrompt, preset, signal)) {
+    for await (const chunk of provider.stream(
+      messages,
+      systemPrompt,
+      preset,
+      signal,
+    )) {
       const mapped = mapChunk(chunk);
       if (!mapped) continue;
-      if (mapped.type === 'error') {
-        return { type: 'error', message: mapped.message };
+      if (mapped.type === "error") {
+        return { type: "error", message: mapped.message };
       }
-      if (mapped.type === 'text' && mapped.text) text += mapped.text;
-      if (mapped.type === 'usage') usage = usageFromChunk(mapped);
+      if (mapped.type === "text" && mapped.text) text += mapped.text;
+      if (mapped.type === "usage") usage = usageFromChunk(mapped);
     }
-    return { type: 'ok', text, usage };
+    return { type: "ok", text, usage };
   } catch (err) {
     return {
-      type: 'error',
+      type: "error",
       message: err instanceof Error ? err.message : String(err),
     };
   }
 }
 
 function trimContext(text: string): string {
-  const normalized = text.replace(/\s+/g, ' ').trim();
+  const normalized = text.replace(/\s+/g, " ").trim();
   if (normalized.length <= TRANSLATE_CONTEXT_CHAR_LIMIT) return normalized;
   return `${normalized.slice(0, TRANSLATE_CONTEXT_CHAR_LIMIT)}…`;
 }
@@ -177,7 +201,7 @@ export function translationNeedsRetry(source: string, output: string): boolean {
 export function cleanTranslationOutput(output: string): string {
   return output
     .trim()
-    .replace(/^(?:译文|翻译|Translation|Translated text)\s*[:：]\s*/i, '')
+    .replace(/^(?:译文|翻译|Translation|Translated text)\s*[:：]\s*/i, "")
     .trim();
 }
 
@@ -191,13 +215,13 @@ function asciiWordCount(text: string): number {
 
 function mapChunk(chunk: StreamChunk): TranslateChunk | null {
   switch (chunk.type) {
-    case 'text_delta':
-      return { type: 'text', text: chunk.text };
-    case 'error':
-      return { type: 'error', message: chunk.message };
-    case 'usage':
+    case "text_delta":
+      return { type: "text", text: chunk.text };
+    case "error":
+      return { type: "error", message: chunk.message };
+    case "usage":
       return {
-        type: 'usage',
+        type: "usage",
         input: chunk.input,
         output: chunk.output,
         cacheRead: chunk.cacheRead,

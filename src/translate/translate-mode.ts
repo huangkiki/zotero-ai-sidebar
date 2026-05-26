@@ -10,10 +10,15 @@ import {
   type OverlayHandle,
 } from "./overlay";
 import { logTranslateDebug } from "./debug-log";
-import { cleanTranslationOutput, translateSentence } from "./translator";
+import {
+  cleanTranslationOutput,
+  translateSentence,
+  translationNeedsRetry,
+} from "./translator";
 import {
   cacheKey,
   getCachedTranslation,
+  getLooseCachedTranslation,
   getFullTextCachedTranslation,
   setCachedTranslation,
 } from "./cache";
@@ -576,6 +581,7 @@ export class TranslateModeController {
       ? undefined
       : (getCachedTranslation(this.ctx.prefs, key) ??
         getCachedTranslation(this.ctx.prefs, fullTextKey) ??
+        getLooseCachedTranslation(this.ctx.prefs, keyInput) ??
         getFullTextCachedTranslation(this.ctx.prefs, {
           ...keyInput,
           paragraphContext: current.paragraphContext,
@@ -590,6 +596,15 @@ export class TranslateModeController {
         });
       } catch (err) {
         debugLog("full text cache lookup failed", { error: errorMessage(err) });
+      }
+    }
+    if (cached) {
+      if (translationNeedsRetry(current.text, cached.text)) {
+        debugLog("translation cache ignored: non-Chinese output", {
+          createdAt: cached.createdAt,
+          model: cached.model,
+        });
+        cached = undefined;
       }
     }
     if (cached) {
@@ -654,6 +669,11 @@ export class TranslateModeController {
             text: buffer,
             model,
             createdAt: Date.now(),
+            sourceText: current.text,
+            target: "zh",
+            endpoint: preset.baseUrl,
+            thinking: settings.thinking,
+            ctxLevel: settings.ctxLevel,
           });
           latestTranslation = buffer;
           translationDone = true;
