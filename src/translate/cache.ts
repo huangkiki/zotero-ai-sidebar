@@ -1,6 +1,9 @@
 export const CACHE_PREFS_KEY = "extensions.zotero-ai-sidebar.translateCache";
 export const MAX_CACHE_ENTRIES = 500;
 const FULL_TEXT_CACHE_MAX_SOURCE_CHARS = 900;
+const FULL_TEXT_START_ANCHOR_CHARS = 12;
+const FULL_TEXT_DIRECT_MATCH_MAX_EXTRA_CHARS = 40;
+const FULL_TEXT_DIRECT_MATCH_MAX_EXTRA_RATIO = 0.15;
 
 export interface CacheEntry {
   text: string;
@@ -29,6 +32,15 @@ interface CacheKeyInput {
   model: string;
   thinking: string;
   ctxLevel: string;
+}
+
+interface DeleteCachedTranslationSourcesInput {
+  sources: string[];
+  target: string;
+  endpoint: string;
+  model: string;
+  thinking: string;
+  ctxLevels?: string[];
 }
 
 // Synchronous FNV-1a-style 64-bit hex digest. Cache keys need stability
@@ -103,6 +115,48 @@ export function saveCache(prefs: PrefsStore, state: TranslateCacheState): void {
   prefs.set(CACHE_PREFS_KEY, JSON.stringify(trimmed));
 }
 
+export function deleteCachedTranslationsForSources(
+  prefs: PrefsStore,
+  input: DeleteCachedTranslationSourcesInput,
+): number {
+  const sources = uniqueNonEmpty(input.sources);
+  if (!sources.length) return 0;
+
+  const ctxLevels = input.ctxLevels?.length
+    ? input.ctxLevels
+    : ["full-text", "none", "paragraph", "page"];
+  const sourceSet = new Set(sources.map(normalizeSentence));
+  const state = loadCache(prefs);
+  let deleted = 0;
+
+  for (const source of sources) {
+    for (const ctxLevel of ctxLevels) {
+      const key = cacheKey({
+        sentence: source,
+        target: input.target,
+        endpoint: input.endpoint,
+        model: input.model,
+        thinking: input.thinking,
+        ctxLevel,
+      });
+      if (state.entries[key]) {
+        delete state.entries[key];
+        deleted++;
+      }
+    }
+  }
+
+  for (const [key, entry] of Object.entries(state.entries)) {
+    const sourceText = entry.sourceText;
+    if (!sourceText || !sourceSet.has(normalizeSentence(sourceText))) continue;
+    delete state.entries[key];
+    deleted++;
+  }
+
+  if (deleted > 0) saveCache(prefs, state);
+  return deleted;
+}
+
 function trimCache(state: TranslateCacheState): TranslateCacheState {
   const entries = Object.entries(state.entries);
   if (entries.length <= MAX_CACHE_ENTRIES) return state;
@@ -140,11 +194,7 @@ export function getLooseCachedTranslation(
     const entrySource = entry.sourceText ?? "";
     const entryLoose = normalizeForLooseMatch(entrySource);
     if (entryLoose.length < 20) continue;
-    if (
-      entryLoose === sourceLoose ||
-      entryLoose.includes(sourceLoose) ||
-      sourceLoose.includes(entryLoose)
-    ) {
+    if (isSafeLooseCacheMatch(entryLoose, sourceLoose)) {
       matches.push(entry);
     }
   }
@@ -205,7 +255,11 @@ export function getFullTextCachedTranslation(
     if (sourceLoose.length < 20) continue;
     const position = bestLooseMatchPosition(sourceLoose, needles);
     if (position < 0) continue;
-    matches.push({ entry, sourceLoose, position });
+    matches.push({
+      entry,
+      sourceLoose,
+      position,
+    });
   }
   if (!matches.length) return undefined;
 
@@ -215,6 +269,7 @@ export function getFullTextCachedTranslation(
     return b.sourceLoose.length - a.sourceLoose.length;
   });
   const deduped = dedupeOverlappingMatches(matches);
+  if (!hasStartAnchoredMatch(deduped)) return undefined;
   if (deduped.length === 1) return deduped[0]!.entry;
   return combineFullTextMatches(deduped, input);
 }
@@ -236,6 +291,20 @@ function normalizeForLooseMatch(text: string): string {
     .replace(/([A-Za-z])[-\u2010-\u2015]\s+([A-Za-z])/g, "$1$2")
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+function isSafeLooseCacheMatch(
+  entryLoose: string,
+  sourceLoose: string,
+): boolean {
+  if (entryLoose === sourceLoose) return true;
+  if (entryLoose.includes(sourceLoose)) {
+    return isSafePrefixSuperset(entryLoose, sourceLoose);
+  }
+  if (sourceLoose.includes(entryLoose)) {
+    return isSafePrefixSuperset(sourceLoose, entryLoose);
+  }
+  return false;
 }
 
 function findLegacyFullTextChunkMatches(
@@ -266,14 +335,13 @@ function findLegacyFullTextChunkMatches(
       entry: CacheEntry;
       sourceLoose: string;
       position: number;
+      matchPosition: number;
     }> = [];
     for (let index = 0; index < chunks.length; index++) {
       const chunk = chunks[index]!;
       const sourceLoose = normalizeForLooseMatch(chunk);
-      if (
-        context.requireOverlap &&
-        bestLooseMatchPosition(sourceLoose, needles) < 0
-      ) {
+      const matchPosition = bestLooseMatchPosition(sourceLoose, needles);
+      if (context.requireOverlap && matchPosition < 0) {
         continue;
       }
       const key = cacheKey({
@@ -287,9 +355,18 @@ function findLegacyFullTextChunkMatches(
         entry,
         sourceLoose,
         position: index,
+        matchPosition,
       });
     }
-    if (matches.length) return matches;
+    if (matches.length) {
+      if (
+        context.requireOverlap &&
+        !matches.some((match) => match.matchPosition === 0)
+      ) {
+        continue;
+      }
+      return matches;
+    }
   }
   return [];
 }
@@ -360,17 +437,41 @@ function bestLooseMatchPosition(
 ): number {
   let best = -1;
   for (const needle of needles) {
-    const direct = sourceLoose.indexOf(needle.loose);
-    if (direct >= 0) {
-      best = best < 0 ? direct : Math.min(best, direct);
-      continue;
-    }
     const reverse = needle.loose.indexOf(sourceLoose);
     if (reverse >= 0) {
       best = best < 0 ? reverse : Math.min(best, reverse);
+      continue;
+    }
+    const direct = sourceLoose.indexOf(needle.loose);
+    if (direct === 0 && isSafePrefixSuperset(sourceLoose, needle.loose)) {
+      best = best < 0 ? direct : Math.min(best, direct);
     }
   }
   return best;
+}
+
+function isSafePrefixSuperset(sourceLoose: string, needleLoose: string): boolean {
+  if (!hasSameLooseStart(sourceLoose, needleLoose)) return false;
+  const extra = sourceLoose.length - needleLoose.length;
+  if (extra <= 0) return true;
+  return (
+    extra <=
+    Math.max(
+      FULL_TEXT_DIRECT_MATCH_MAX_EXTRA_CHARS,
+      Math.floor(needleLoose.length * FULL_TEXT_DIRECT_MATCH_MAX_EXTRA_RATIO),
+    )
+  );
+}
+
+function hasSameLooseStart(a: string, b: string): boolean {
+  const length = Math.min(FULL_TEXT_START_ANCHOR_CHARS, a.length, b.length);
+  return length > 0 && a.slice(0, length) === b.slice(0, length);
+}
+
+function hasStartAnchoredMatch(
+  matches: Array<{ position: number }>,
+): boolean {
+  return matches.some((match) => match.position === 0);
 }
 
 function dedupeOverlappingMatches<

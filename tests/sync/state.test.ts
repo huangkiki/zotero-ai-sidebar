@@ -141,6 +141,11 @@ describe('sync snapshot round trip', () => {
       },
       { role: 'assistant', content: 'hi there' },
     ]);
+    await saveChatMessages(42, [{ role: 'user', content: 'parallel' }], {
+      threadID: 'chat-parallel',
+      title: 'Parallel',
+      createdAt: '2026-05-01T00:00:00.000Z',
+    });
 
     const snapshot = await buildSyncSnapshot(prefs);
     expect(snapshot.schema).toBe(SYNC_SCHEMA);
@@ -155,13 +160,17 @@ describe('sync snapshot round trip', () => {
     expect(snapshot.toolSettings.webSearchMode).toBe('live');
     expect(snapshot.toolSettings.textAnnotationFontSize).toBe(22);
     expect(snapshot.uiSettings.composerQueueWhileSending).toBe(true);
-    expect(snapshot.threads).toHaveLength(1);
+    expect(snapshot.threads).toHaveLength(2);
     expect(snapshot.threads[0]).toMatchObject({
       libraryType: 'user',
       itemKey: 'AAAA1111',
     });
     expect(snapshot.threads[0].messages).toHaveLength(2);
     expect(snapshot.threads[0].messages[0]).not.toHaveProperty('task');
+    expect(snapshot.threads[1]).toMatchObject({
+      threadID: 'chat-parallel',
+      title: 'Parallel',
+    });
     expect(snapshot.annotations).toEqual([]);
   });
 

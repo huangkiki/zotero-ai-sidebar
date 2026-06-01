@@ -22,6 +22,9 @@ import type { AssistantAnnotationDraft, ChatTaskMeta, Message } from '../provide
 
 interface StoredThread {
   itemID: number | null;
+  threadID?: string;
+  title?: string;
+  createdAt?: string;
   updatedAt: string;
   messages: Message[];
 }
@@ -83,6 +86,9 @@ export interface PortableThread {
   libraryType: 'user' | 'group' | 'global';
   groupID?: number;
   itemKey?: string;
+  threadID?: string;
+  title?: string;
+  createdAt?: string;
   updatedAt: string;
   messages: Message[];
 }
@@ -94,14 +100,65 @@ export interface ImportThreadsResult {
 }
 
 const HISTORY_FILE = 'zotero-ai-sidebar-chat-history.json';
+export const DEFAULT_CHAT_THREAD_ID = 'main';
 let writeQueue: Promise<void> = Promise.resolve();
 
-export async function loadChatMessages(itemID: number | null): Promise<Message[]> {
-  const threads = await readThreads();
-  return normalizeMessages(threads[threadKey(itemID)]?.messages);
+export interface ChatThreadSnapshot {
+  itemID: number | null;
+  threadID: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messages: Message[];
 }
 
-export function saveChatMessages(itemID: number | null, messages: Message[]): Promise<void> {
+export interface SaveChatMessagesOptions {
+  threadID?: string;
+  title?: string;
+  createdAt?: string;
+}
+
+export async function loadChatMessages(
+  itemID: number | null,
+  threadID: string = DEFAULT_CHAT_THREAD_ID,
+): Promise<Message[]> {
+  const threads = await readThreads();
+  return normalizeMessages(threads[threadKey(itemID, threadID)]?.messages);
+}
+
+export async function loadChatThreads(
+  itemID: number | null,
+): Promise<ChatThreadSnapshot[]> {
+  const threads = await readThreads();
+  const snapshots: ChatThreadSnapshot[] = [];
+  for (const [key, thread] of Object.entries(threads)) {
+    const parsed = parseThreadKey(key);
+    if (!parsed || parsed.itemID !== itemID) continue;
+    const messages = normalizeMessages(thread.messages);
+    if (!messages.length) continue;
+    const threadID = normalizeThreadID(thread.threadID || parsed.threadID);
+    const updatedAt = stringOr(thread.updatedAt, new Date(0).toISOString());
+    const createdAt = stringOr(thread.createdAt, updatedAt);
+    snapshots.push({
+      itemID,
+      threadID,
+      title: sanitizeThreadTitle(thread.title) || titleFromMessages(messages),
+      createdAt,
+      updatedAt,
+      messages,
+    });
+  }
+  return snapshots.sort(compareThreadSnapshots);
+}
+
+export function saveChatMessages(
+  itemID: number | null,
+  messages: Message[],
+  options: SaveChatMessagesOptions | string = {},
+): Promise<void> {
+  const normalizedOptions =
+    typeof options === 'string' ? { threadID: options } : options;
+  const threadID = normalizeThreadID(normalizedOptions.threadID);
   // Chain the next write onto the queue. `.catch(() => undefined)` ensures
   // a previous write's failure does NOT cancel the next write — callers
   // observe their own write's outcome via the returned promise.
@@ -109,7 +166,7 @@ export function saveChatMessages(itemID: number | null, messages: Message[]): Pr
   // sidebar uses this for "clear chat" without a separate delete API.
   writeQueue = writeQueue.catch(() => undefined).then(async () => {
     const threads = await readThreads();
-    const key = threadKey(itemID);
+    const key = threadKey(itemID, threadID);
     const safeMessages = normalizeMessages(messages);
 
     if (safeMessages.length === 0) {
@@ -117,11 +174,30 @@ export function saveChatMessages(itemID: number | null, messages: Message[]): Pr
     } else {
       threads[key] = {
         itemID,
+        threadID,
+        title:
+          sanitizeThreadTitle(normalizedOptions.title) ||
+          titleFromMessages(safeMessages),
+        createdAt:
+          stringOr(normalizedOptions.createdAt, threads[key]?.createdAt) ||
+          new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         messages: safeMessages,
       };
     }
 
+    await writeThreads(threads);
+  });
+  return writeQueue;
+}
+
+export function deleteChatThread(
+  itemID: number | null,
+  threadID: string,
+): Promise<void> {
+  writeQueue = writeQueue.catch(() => undefined).then(async () => {
+    const threads = await readThreads();
+    delete threads[threadKey(itemID, threadID)];
     await writeThreads(threads);
   });
   return writeQueue;
@@ -299,8 +375,78 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-function threadKey(itemID: number | null): string {
+function threadKey(
+  itemID: number | null,
+  threadID: string = DEFAULT_CHAT_THREAD_ID,
+): string {
+  const base = baseThreadKey(itemID);
+  const safeThreadID = normalizeThreadID(threadID);
+  return safeThreadID === DEFAULT_CHAT_THREAD_ID
+    ? base
+    : `${base}:chat:${safeThreadID}`;
+}
+
+function baseThreadKey(itemID: number | null): string {
   return itemID == null ? 'global' : `item:${itemID}`;
+}
+
+function parseThreadKey(
+  key: string,
+): { itemID: number | null; threadID: string } | null {
+  const chatMarker = ':chat:';
+  const markerIndex = key.indexOf(chatMarker);
+  const base = markerIndex >= 0 ? key.slice(0, markerIndex) : key;
+  const rawThreadID =
+    markerIndex >= 0 ? key.slice(markerIndex + chatMarker.length) : '';
+  if (base === 'global') {
+    return {
+      itemID: null,
+      threadID: normalizeThreadID(rawThreadID),
+    };
+  }
+  if (!base.startsWith('item:')) return null;
+  const id = Number(base.slice('item:'.length));
+  if (!Number.isFinite(id)) return null;
+  return {
+    itemID: id,
+    threadID: normalizeThreadID(rawThreadID),
+  };
+}
+
+function normalizeThreadID(value: unknown): string {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (!text || text === DEFAULT_CHAT_THREAD_ID) return DEFAULT_CHAT_THREAD_ID;
+  const safe = text.replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 80);
+  return safe || DEFAULT_CHAT_THREAD_ID;
+}
+
+function sanitizeThreadTitle(value: unknown): string {
+  return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, 80) : '';
+}
+
+function titleFromMessages(messages: Message[]): string {
+  const firstUser = messages.find((message) => message.role === 'user');
+  const title =
+    firstUser?.task?.title ||
+    firstUser?.task?.promptPreview ||
+    firstUser?.content ||
+    messages[0]?.content ||
+    '';
+  const normalized = sanitizeThreadTitle(title);
+  return normalized || '新对话';
+}
+
+function stringOr(value: unknown, fallback: unknown): string {
+  return typeof value === 'string' && value ? value : typeof fallback === 'string' ? fallback : '';
+}
+
+function compareThreadSnapshots(
+  a: ChatThreadSnapshot,
+  b: ChatThreadSnapshot,
+): number {
+  if (a.threadID === DEFAULT_CHAT_THREAD_ID) return -1;
+  if (b.threadID === DEFAULT_CHAT_THREAD_ID) return 1;
+  return a.createdAt.localeCompare(b.createdAt) || a.threadID.localeCompare(b.threadID);
 }
 
 function getZotero(): ZoteroGlobal {
@@ -320,9 +466,12 @@ export async function exportAllThreads(): Promise<PortableThread[]> {
   const threads = await readThreads();
   const result: PortableThread[] = [];
   for (const [key, thread] of Object.entries(threads)) {
+    const parsed = parseThreadKey(key);
+    if (!parsed) continue;
     if (key === 'global' || thread.itemID == null) {
       result.push({
         libraryType: 'global',
+        ...portableThreadFields(thread, parsed.threadID),
         updatedAt: thread.updatedAt,
         messages: thread.messages,
       });
@@ -332,6 +481,7 @@ export async function exportAllThreads(): Promise<PortableThread[]> {
     if (!portable) continue; // item no longer in local library — drop
     result.push({
       ...portable,
+      ...portableThreadFields(thread, parsed.threadID),
       updatedAt: thread.updatedAt,
       messages: thread.messages,
     });
@@ -367,6 +517,9 @@ export function importAllThreads(
       }
       existing[localKey] = {
         itemID: candidate.libraryType === 'global' ? null : itemIDForKey(localKey),
+        threadID: normalizeThreadID(candidate.threadID),
+        title: sanitizeThreadTitle(candidate.title),
+        createdAt: stringOr(candidate.createdAt, candidate.updatedAt),
         updatedAt: candidate.updatedAt,
         messages: safeMessages,
       };
@@ -376,6 +529,20 @@ export function importAllThreads(
     outcome = { imported, unchanged, unresolved };
   });
   return writeQueue.then(() => outcome);
+}
+
+function portableThreadFields(
+  thread: StoredThread,
+  parsedThreadID: string,
+): Pick<PortableThread, 'threadID' | 'title' | 'createdAt'> {
+  const threadID = normalizeThreadID(thread.threadID || parsedThreadID);
+  return {
+    ...(threadID !== DEFAULT_CHAT_THREAD_ID ? { threadID } : {}),
+    ...(sanitizeThreadTitle(thread.title) ? { title: sanitizeThreadTitle(thread.title) } : {}),
+    ...(typeof thread.createdAt === 'string' && thread.createdAt
+      ? { createdAt: thread.createdAt }
+      : {}),
+  };
 }
 
 function portableFromItemID(itemID: number): Omit<PortableThread, 'updatedAt' | 'messages'> | null {
@@ -397,7 +564,8 @@ function portableFromItemID(itemID: number): Omit<PortableThread, 'updatedAt' | 
 }
 
 function resolvePortableKey(thread: PortableThread): string | null {
-  if (thread.libraryType === 'global') return 'global';
+  const threadID = normalizeThreadID(thread.threadID);
+  if (thread.libraryType === 'global') return threadKey(null, threadID);
   const Zotero = getZotero();
   if (typeof thread.itemKey !== 'string' || thread.itemKey.length === 0) return null;
   let libraryID: number | undefined;
@@ -417,11 +585,12 @@ function resolvePortableKey(thread: PortableThread): string | null {
   // typed shape. The cast is safe — Zotero items always expose `id`.
   const id = (item as unknown as { id?: number }).id;
   if (typeof id !== 'number') return null;
-  return `item:${id}`;
+  return threadKey(id, threadID);
 }
 
 function itemIDForKey(threadKey: string): number | null {
-  if (!threadKey.startsWith('item:')) return null;
-  const id = Number(threadKey.slice('item:'.length));
+  const parsed = parseThreadKey(threadKey);
+  if (!parsed) return null;
+  const id = parsed.itemID;
   return Number.isFinite(id) ? id : null;
 }

@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { loadChatMessages, saveChatMessages } from '../../src/settings/chat-history';
+import {
+  deleteChatThread,
+  loadChatMessages,
+  loadChatThreads,
+  saveChatMessages,
+} from '../../src/settings/chat-history';
 
 let stored = '{}';
 
@@ -157,6 +162,43 @@ describe('chat history', () => {
           },
         },
       },
+    ]);
+  });
+
+  it('stores multiple chat threads for the same Zotero item', async () => {
+    await saveChatMessages(42, [{ role: 'user', content: 'default chat' }]);
+    await saveChatMessages(
+      42,
+      [{ role: 'user', content: 'parallel chat' }],
+      { threadID: 'chat-second', title: '第二个对话', createdAt: '2026-05-01T00:00:00.000Z' },
+    );
+
+    expect(await loadChatMessages(42)).toEqual([
+      { role: 'user', content: 'default chat' },
+    ]);
+    expect(await loadChatMessages(42, 'chat-second')).toEqual([
+      { role: 'user', content: 'parallel chat' },
+    ]);
+    const threads = await loadChatThreads(42);
+    expect(threads.map((thread) => thread.threadID)).toEqual([
+      'main',
+      'chat-second',
+    ]);
+    expect(threads[1].title).toBe('第二个对话');
+  });
+
+  it('deletes only the selected chat thread', async () => {
+    await saveChatMessages(42, [{ role: 'user', content: 'default chat' }]);
+    await saveChatMessages(42, [{ role: 'user', content: 'parallel chat' }], {
+      threadID: 'chat-second',
+    });
+
+    await deleteChatThread(42, 'chat-second');
+
+    expect(await loadChatMessages(42)).toHaveLength(1);
+    expect(await loadChatMessages(42, 'chat-second')).toEqual([]);
+    expect((await loadChatThreads(42)).map((thread) => thread.threadID)).toEqual([
+      'main',
     ]);
   });
 });

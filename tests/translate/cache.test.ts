@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   cacheKey,
+  deleteCachedTranslationsForSources,
   getFullTextCachedTranslation,
+  getLooseCachedTranslation,
   loadCache,
   saveCache,
   setCachedTranslation,
@@ -37,6 +39,72 @@ describe('translate cache', () => {
     setCachedTranslation(prefs, 'k1', { text: '你好。', model: 'gpt-5.4', createdAt: 1000 });
     const got = getCachedTranslation(prefs, 'k1');
     expect(got?.text).toBe('你好。');
+  });
+
+  it('deletes cached translations for one paper source set', () => {
+    const prefs = makePrefs();
+    const paragraph = 'This paper paragraph should be retranslated.';
+    const exactFullTextKey = cacheKey({
+      sentence: paragraph,
+      target: 'zh',
+      endpoint: 'https://api.example.com',
+      model: 'gpt-5.4',
+      thinking: 'low',
+      ctxLevel: 'full-text',
+    });
+    const exactPointKey = cacheKey({
+      sentence: paragraph,
+      target: 'zh',
+      endpoint: 'https://api.example.com',
+      model: 'gpt-5.4',
+      thinking: 'low',
+      ctxLevel: 'none',
+    });
+    setCachedTranslation(prefs, exactFullTextKey, {
+      text: '旧全文译文。',
+      model: 'gpt-5.4',
+      createdAt: 1000,
+    });
+    setCachedTranslation(prefs, exactPointKey, {
+      text: '旧点译译文。',
+      model: 'gpt-5.4',
+      createdAt: 1001,
+    });
+    setCachedTranslation(prefs, 'source-match-other-model', {
+      text: '其他模型旧译文。',
+      model: 'gpt-5.5',
+      createdAt: 1002,
+      sourceText: paragraph,
+      target: 'zh',
+      endpoint: 'https://api.example.com',
+      thinking: 'medium',
+      ctxLevel: 'full-text',
+    });
+    setCachedTranslation(prefs, 'unrelated', {
+      text: '保留。',
+      model: 'gpt-5.4',
+      createdAt: 1003,
+      sourceText: 'An unrelated paragraph.',
+      target: 'zh',
+      endpoint: 'https://api.example.com',
+      thinking: 'low',
+      ctxLevel: 'full-text',
+    });
+
+    const deleted = deleteCachedTranslationsForSources(prefs, {
+      sources: [paragraph],
+      target: 'zh',
+      endpoint: 'https://api.example.com',
+      model: 'gpt-5.4',
+      thinking: 'low',
+    });
+    const entries = loadCache(prefs).entries;
+
+    expect(deleted).toBe(3);
+    expect(entries[exactFullTextKey]).toBeUndefined();
+    expect(entries[exactPointKey]).toBeUndefined();
+    expect(entries['source-match-other-model']).toBeUndefined();
+    expect(entries.unrelated?.text).toBe('保留。');
   });
 
   it('finds old full-text cache entries using paragraph context', () => {
@@ -83,7 +151,7 @@ describe('translate cache', () => {
     });
 
     const got = getFullTextCachedTranslation(prefs, {
-      sentence: 'model translates paragraphs in a full text',
+      sentence: 'The model translates paragraphs in a full text',
       target: 'zh',
       endpoint: 'https://api.example.com',
       model: 'gpt-5.4',
@@ -92,6 +160,58 @@ describe('translate cache', () => {
     });
 
     expect(got?.text).toBe('模型会在全文批处理中翻译段落。');
+  });
+
+  it('does not match a full-text source when the clicked text starts in the middle', () => {
+    const prefs = makePrefs();
+    setCachedTranslation(prefs, 'k1', {
+      text: '这是上一段加当前段的译文。',
+      model: 'gpt-5.4',
+      createdAt: 1000,
+      sourceText:
+        'Previous paragraph tail. The clicked paragraph starts here and continues.',
+      target: 'zh',
+      endpoint: 'https://api.example.com',
+      thinking: 'low',
+      ctxLevel: 'full-text',
+    });
+
+    const got = getFullTextCachedTranslation(prefs, {
+      sentence: 'The clicked paragraph starts here and continues.',
+      target: 'zh',
+      endpoint: 'https://api.example.com',
+      model: 'gpt-5.4',
+      thinking: 'low',
+      ctxLevel: 'none',
+    });
+
+    expect(got).toBeUndefined();
+  });
+
+  it('does not loosely match a full-text source when the clicked text starts in the middle', () => {
+    const prefs = makePrefs();
+    setCachedTranslation(prefs, 'k1', {
+      text: '这是上一段加当前段的译文。',
+      model: 'gpt-5.4',
+      createdAt: 1000,
+      sourceText:
+        'Previous paragraph tail. The clicked paragraph starts here and continues.',
+      target: 'zh',
+      endpoint: 'https://api.example.com',
+      thinking: 'low',
+      ctxLevel: 'full-text',
+    });
+
+    const got = getLooseCachedTranslation(prefs, {
+      sentence: 'The clicked paragraph starts here and continues.',
+      target: 'zh',
+      endpoint: 'https://api.example.com',
+      model: 'gpt-5.4',
+      thinking: 'low',
+      ctxLevel: 'none',
+    });
+
+    expect(got).toBeUndefined();
   });
 
   it('finds full-text chunks contained inside a larger point paragraph', () => {
@@ -130,6 +250,58 @@ describe('translate cache', () => {
     });
 
     expect(got?.text).toBe('第一块译文。\n\n第二块译文。');
+  });
+
+  it('does not combine partial overlaps from adjacent full-text chunks', () => {
+    const prefs = makePrefs();
+    const clickedParagraph = [
+      'Joint Embedding Predictive Architectures offer a compelling framework for learning world models in compact latent spaces.',
+      'Existing methods remain fragile and rely on complex multi-term losses, exponential moving averages, pretrained encoders, or auxiliary supervision.',
+      'In this work, we introduce LeWorldModel, the first JEPA that trains stably end-to-end from raw pixels using only two loss terms.',
+      'Surprise evaluation confirms that the model reliably detects physically implausible events.',
+    ].join(' ');
+    setCachedTranslation(prefs, 'k1', {
+      text: '第一块译文。',
+      model: 'gpt-5.5',
+      createdAt: 1000,
+      sourceText: [
+        'LeWorldModel: Stable End-to-End Joint-Embedding Predictive Architecture from Pixels.',
+        clickedParagraph.slice(0, 360),
+      ].join(' '),
+      target: 'zh',
+      endpoint: 'https://api.example.com',
+      thinking: 'low',
+      ctxLevel: 'full-text',
+    });
+    setCachedTranslation(prefs, 'k2', {
+      text: '第二块译文。',
+      model: 'gpt-5.5',
+      createdAt: 2000,
+      sourceText: [
+        clickedParagraph.slice(260),
+        'Figure 1: LeWorldModel Training Pipeline.',
+      ].join(' '),
+      target: 'zh',
+      endpoint: 'https://api.example.com',
+      thinking: 'low',
+      ctxLevel: 'full-text',
+    });
+
+    const got = getFullTextCachedTranslation(prefs, {
+      sentence: clickedParagraph,
+      fullTextContext: [
+        'LeWorldModel: Stable End-to-End Joint-Embedding Predictive Architecture from Pixels.',
+        clickedParagraph,
+        'Figure 1: LeWorldModel Training Pipeline.',
+      ].join(' '),
+      target: 'zh',
+      endpoint: 'https://api.example.com',
+      model: 'gpt-5.5',
+      thinking: 'low',
+      ctxLevel: 'none',
+    });
+
+    expect(got).toBeUndefined();
   });
 
   it('reconstructs legacy chunk keys from a long point paragraph', () => {
@@ -189,7 +361,7 @@ describe('translate cache', () => {
     });
 
     const got = getFullTextCachedTranslation(prefs, {
-      sentence: 'B'.repeat(80),
+      sentence: second,
       paragraphContext: 'page context that does not match full text chunking',
       fullTextContext: fullText,
       target: 'zh',

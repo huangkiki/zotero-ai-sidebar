@@ -13,6 +13,41 @@ const STRICT_SYSTEM_PROMPT =
   "严格英译中。上一次输出可能是英文润色，这是错误的。现在必须输出简体中文译文；除术语、缩写、公式、模型名外，不要保留英文句子。只输出译文，不要解释或引号。";
 const TRANSLATE_CONTEXT_CHAR_LIMIT = 600;
 const TRANSLATE_MAX_OUTPUT_TOKENS = 384;
+export const NON_CHINESE_TRANSLATION_ERROR_MESSAGE =
+  "模型返回了英文改写而不是中文翻译，本次结果已丢弃且不会写入缓存。请点重试，或换一个翻译模型。";
+const ARXIV_ID_PATTERN =
+  "(?:\\d{4}\\.\\d{4,5}|[a-z-]+(?:\\.[A-Z]{2})?/\\d{7})(?:v\\d+)?";
+const ARXIV_ID_RE = new RegExp(`\\b${ARXIV_ID_PATTERN}\\b`, "i");
+const ARXIV_METADATA_RE = new RegExp(
+  `^\\s*(?:arxiv\\s*:\\s*)?${ARXIV_ID_PATTERN}\\s*(?:\\[[A-Za-z. -]+\\])?\\s*(?:${datePattern()})?\\s*$`,
+  "i",
+);
+const MONTHS: Record<string, number> = {
+  jan: 1,
+  january: 1,
+  feb: 2,
+  february: 2,
+  mar: 3,
+  march: 3,
+  apr: 4,
+  april: 4,
+  may: 5,
+  jun: 6,
+  june: 6,
+  jul: 7,
+  july: 7,
+  aug: 8,
+  august: 8,
+  sep: 9,
+  sept: 9,
+  september: 9,
+  oct: 10,
+  october: 10,
+  nov: 11,
+  november: 11,
+  dec: 12,
+  december: 12,
+};
 
 export interface TranslateRequest {
   sentence: string;
@@ -62,6 +97,13 @@ function buildUserMessage(req: TranslateRequest): string {
 export async function* translateSentence(
   req: TranslateRequest,
 ): AsyncIterable<TranslateChunk> {
+  const metadataTranslation = deterministicMetadataTranslation(req.sentence);
+  if (metadataTranslation) {
+    yield { type: "text", text: metadataTranslation };
+    yield { type: "done" };
+    return;
+  }
+
   const overriddenPreset: ModelPreset = {
     ...req.preset,
     model: req.model || req.preset.model,
@@ -105,8 +147,7 @@ export async function* translateSentence(
   if (translationNeedsRetry(req.sentence, result.text)) {
     yield {
       type: "error",
-      message:
-        "模型返回了英文改写而不是中文翻译，本次结果已丢弃且不会写入缓存。请点重试，或换一个翻译模型。",
+      message: NON_CHINESE_TRANSLATION_ERROR_MESSAGE,
     };
     return;
   }
@@ -195,6 +236,7 @@ export function translationNeedsRetry(source: string, output: string): boolean {
   const trimmed = output.trim();
   if (!trimmed) return false;
   if (hasCjk(trimmed)) return false;
+  if (isAcceptableMetadataTranslation(source, trimmed)) return false;
   return asciiWordCount(source) >= 4 && asciiWordCount(trimmed) >= 4;
 }
 
@@ -203,6 +245,44 @@ export function cleanTranslationOutput(output: string): string {
     .trim()
     .replace(/^(?:译文|翻译|Translation|Translated text)\s*[:：]\s*/i, "")
     .trim();
+}
+
+export function deterministicMetadataTranslation(source: string): string | null {
+  const trimmed = source.replace(/\s+/g, " ").trim();
+  if (!trimmed || !ARXIV_METADATA_RE.test(trimmed)) return null;
+  return localizeEnglishDate(trimmed);
+}
+
+function isAcceptableMetadataTranslation(source: string, output: string): boolean {
+  if (!deterministicMetadataTranslation(source)) return false;
+  const sourceId = source.match(ARXIV_ID_RE)?.[0]?.toLowerCase();
+  const outputId = output.match(ARXIV_ID_RE)?.[0]?.toLowerCase();
+  if (!sourceId || sourceId !== outputId) return false;
+  return asciiWordCount(output) <= asciiWordCount(source) + 2;
+}
+
+function localizeEnglishDate(text: string): string {
+  return text
+    .replace(
+      /\b(\d{1,2})\s+(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t|tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(\d{4})\b/gi,
+      (_match, day: string, month: string, year: string) =>
+        `${year}年${monthNumber(month)}月${Number(day)}日`,
+    )
+    .replace(
+      /\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t|tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(\d{1,2}),?\s+(\d{4})\b/gi,
+      (_match, month: string, day: string, year: string) =>
+        `${year}年${monthNumber(month)}月${Number(day)}日`,
+    );
+}
+
+function monthNumber(month: string): number {
+  return MONTHS[month.toLowerCase()] ?? 0;
+}
+
+function datePattern(): string {
+  const month =
+    "(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t|tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)";
+  return `(?:\\d{1,2}\\s+${month}\\s+\\d{4}|${month}\\s+\\d{1,2},?\\s+\\d{4}|\\d{4}年\\d{1,2}月\\d{1,2}日|\\d{4}-\\d{1,2}-\\d{1,2})`;
 }
 
 function hasCjk(text: string): boolean {

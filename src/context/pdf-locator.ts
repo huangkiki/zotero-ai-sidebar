@@ -79,6 +79,7 @@ export interface PdfLocator {
     pageIndex: number,
     paragraphIndex: number,
   ): Promise<LocatedSentence | null>;
+  getParagraphs?(): Promise<LocatedSentence[]>;
   locate(
     needle: string,
     opts?: { minConfidence?: number; pageIndex?: number },
@@ -339,6 +340,25 @@ export async function createPdfLocator(reader: unknown): Promise<PdfLocator> {
         paragraphIndex,
         await cumulativeOffset(pageIndex),
       );
+    },
+    async getParagraphs() {
+      const paragraphs: LocatedSentence[] = [];
+      for (let pageIndex = 0; pageIndex < source.pageCount; pageIndex++) {
+        const page = await bundleFor(pageIndex);
+        if (!page) continue;
+        const segments = paragraphSegmentsForPage(page);
+        const pageGlobalOffset = await cumulativeOffset(pageIndex);
+        for (const segment of segments) {
+          const located = locatedSentenceFromSegment(
+            page,
+            segments,
+            segment,
+            pageGlobalOffset,
+          );
+          if (located) paragraphs.push(located);
+        }
+      }
+      return paragraphs;
     },
     // Two-stage match. WHY two stages: most model-supplied passages match
     // verbatim (they were copied from getFullText output), so an O(N) page

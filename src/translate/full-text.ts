@@ -2,8 +2,17 @@ const FULL_TRANSLATE_MAX_PARAGRAPH_CHARS = 900;
 
 export function splitFullTextParagraphs(text: string): string[] {
   const normalized = stripReferenceSection(text.replace(/\r\n?/g, "\n"));
-  const raw = normalized
-    .split(/\n\s*\n+/)
+  return splitPreparedParagraphs(
+    normalized.split(/\n\s*\n+/).map((part) => part.trim()),
+  );
+}
+
+export function splitReaderFullTextParagraphs(paragraphs: string[]): string[] {
+  return splitFullTextParagraphs(paragraphs.join("\n\n"));
+}
+
+function splitPreparedParagraphs(paragraphs: string[]): string[] {
+  const raw = paragraphs
     .map((part) => part.replace(/[ \t\f\v]+/g, " ").trim())
     .filter((part) => part.length >= 20 && /[A-Za-z\u4e00-\u9fff]/.test(part));
   const out: string[] = [];

@@ -167,6 +167,15 @@ function normalizePortableThreads(value: unknown): PortableThread[] {
       updatedAt,
       messages: stripLocalTaskState(messages as PortableThread['messages']),
     };
+    if (typeof entry.threadID === 'string' && entry.threadID.trim()) {
+      portable.threadID = entry.threadID;
+    }
+    if (typeof entry.title === 'string' && entry.title.trim()) {
+      portable.title = entry.title;
+    }
+    if (typeof entry.createdAt === 'string' && entry.createdAt.trim()) {
+      portable.createdAt = entry.createdAt;
+    }
     if (libraryType === 'group' && typeof entry.groupID === 'number') {
       portable.groupID = entry.groupID;
     }

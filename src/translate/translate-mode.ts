@@ -581,23 +581,11 @@ export class TranslateModeController {
       ? undefined
       : (getCachedTranslation(this.ctx.prefs, key) ??
         getCachedTranslation(this.ctx.prefs, fullTextKey) ??
-        getLooseCachedTranslation(this.ctx.prefs, keyInput) ??
         getFullTextCachedTranslation(this.ctx.prefs, {
           ...keyInput,
           paragraphContext: current.paragraphContext,
-        }));
-    if (!cached && !forceRefresh && this.locator) {
-      try {
-        const fullTextContext = await this.locator.getFullText();
-        cached = getFullTextCachedTranslation(this.ctx.prefs, {
-          ...keyInput,
-          paragraphContext: current.paragraphContext,
-          fullTextContext,
-        });
-      } catch (err) {
-        debugLog("full text cache lookup failed", { error: errorMessage(err) });
-      }
-    }
+        }) ??
+        getLooseCachedTranslation(this.ctx.prefs, keyInput));
     if (cached) {
       if (translationNeedsRetry(current.text, cached.text)) {
         debugLog("translation cache ignored: non-Chinese output", {

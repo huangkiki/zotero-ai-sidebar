@@ -455,6 +455,46 @@ describe("pdf locator", () => {
     expect(hit?.pageSentenceCount).toBe(2);
   });
 
+  it("enumerates the same PDF paragraphs used by point translation", async () => {
+    const locator = await createPdfLocator(
+      readerWithProcessedPages([
+        processedPage([
+          ...processedWord("First paragraph begins.", 0, 140, {
+            lineBreakAfter: true,
+          }),
+          ...processedWord("It continues here.", 0, 120, {
+            lineBreakAfter: true,
+            paragraphBreakAfter: true,
+          }),
+          ...processedWord("Second paragraph begins.", 0, 90, {
+            lineBreakAfter: true,
+          }),
+        ]),
+        processedPage([
+          ...processedWord("Third paragraph on page two.", 0, 100, {
+            lineBreakAfter: true,
+          }),
+        ]),
+      ]),
+    );
+
+    const paragraphs = await locator.getParagraphs?.();
+    const clicked = await locator.paragraphAtPoint?.(0, {
+      x: "First".length * 5,
+      y: 125,
+    });
+
+    expect(paragraphs?.map((paragraph) => paragraph.text)).toEqual([
+      "First paragraph begins. It continues here.",
+      "Second paragraph begins.",
+      "Third paragraph on page two.",
+    ]);
+    expect(paragraphs?.[0]?.text).toBe(clicked?.text);
+    expect(paragraphs?.map((paragraph) => paragraph.pageIndex)).toEqual([
+      0, 0, 1,
+    ]);
+  });
+
   it("keeps a sentence together across a column continuation", async () => {
     const locator = await createPdfLocator(
       readerWithProcessedPages([

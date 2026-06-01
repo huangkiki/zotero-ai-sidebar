@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { splitFullTextParagraphs } from '../../src/translate/full-text';
+import {
+  splitFullTextParagraphs,
+  splitReaderFullTextParagraphs,
+} from '../../src/translate/full-text';
 
 describe('splitFullTextParagraphs', () => {
   it('skips the References section during full-text translation', () => {
@@ -57,6 +60,20 @@ describe('splitFullTextParagraphs', () => {
     expect(paragraphs).toEqual([
       'The method references prior work but this is still body text.',
       'The next paragraph should also remain available for translation.',
+    ]);
+  });
+
+  it('keeps Reader paragraph boundaries instead of chunking raw page text', () => {
+    const paragraphs = splitReaderFullTextParagraphs([
+      'LeWorldModel: Stable End-to-End Joint-Embedding Predictive Architecture from Pixels.',
+      'Joint Embedding Predictive Architectures offer a compelling framework for learning world models in compact latent spaces.',
+      'Figure 1: LeWorldModel Training Pipeline.',
+    ]);
+
+    expect(paragraphs).toEqual([
+      'LeWorldModel: Stable End-to-End Joint-Embedding Predictive Architecture from Pixels.',
+      'Joint Embedding Predictive Architectures offer a compelling framework for learning world models in compact latent spaces.',
+      'Figure 1: LeWorldModel Training Pipeline.',
     ]);
   });
 });
