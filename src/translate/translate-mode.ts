@@ -17,9 +17,7 @@ import {
 } from "./translator";
 import {
   cacheKey,
-  getCachedTranslation,
-  getLooseCachedTranslation,
-  getFullTextCachedTranslation,
+  getParagraphCachedTranslation,
   setCachedTranslation,
 } from "./cache";
 import { loadTranslateSettings } from "./settings";
@@ -44,6 +42,17 @@ export interface TranslateModeContext {
   prefs: PrefsStore;
   presets: ModelPreset[];
   reader: ReaderLike;
+  onParagraphTranslation?: (result: ParagraphTranslationResult) => void;
+  showOverlay?: boolean;
+}
+
+export interface ParagraphTranslationResult {
+  sourceText: string;
+  translation: string;
+  cached: boolean;
+  cacheKind?: string;
+  pageIndex: number;
+  pageLabel: string;
 }
 
 export class TranslateModeController {
@@ -81,6 +90,12 @@ export class TranslateModeController {
 
   refreshPresets(presets: ModelPreset[]): void {
     this.ctx.presets = presets;
+  }
+
+  setParagraphTranslationCallback(
+    onParagraphTranslation?: (result: ParagraphTranslationResult) => void,
+  ): void {
+    this.ctx.onParagraphTranslation = onParagraphTranslation;
   }
 
   async enable(): Promise<void> {
@@ -518,74 +533,94 @@ export class TranslateModeController {
 
     this.clearOverlay();
     this.abortCtrl = new AbortController();
+    const showOverlay = this.ctx.showOverlay ?? true;
 
     const model = settings.model || preset?.model || "";
     const hint = `${displayKey(settings.nextSentenceKey)} 下一段 · ${displayKey(settings.prevSentenceKey)} 上一段`;
     let latestTranslation = "";
     let translationDone = false;
     let overlay: OverlayHandle | null = null;
-    overlay = mountOverlay({
-      iframeDoc: this.boundWindow.document,
-      pageEl,
-      rects: current.rects,
-      pageContent: current.bundle,
-      position: settings.overlayPosition,
-      size: settings.overlaySize,
-      actions: {
-        onClose: () => this.dismissOverlay(),
-        onPrev: () => void this.jump(-1),
-        onNext: () => void this.jump(+1),
-        onRetry: () => void this.renderForCurrent(true),
-        onSave: () => {
-          if (!overlay) return;
-          void this.saveTranslationAnnotation(
-            current,
-            overlay,
-            latestTranslation,
-            translationDone,
-          );
+    if (showOverlay) {
+      overlay = mountOverlay({
+        iframeDoc: this.boundWindow.document,
+        pageEl,
+        rects: current.rects,
+        pageContent: current.bundle,
+        position: settings.overlayPosition,
+        size: settings.overlaySize,
+        actions: {
+          onClose: () => this.dismissOverlay(),
+          onPrev: () => void this.jump(-1),
+          onNext: () => void this.jump(+1),
+          onRetry: () => void this.renderForCurrent(true),
+          onSave: () => {
+            if (!overlay) return;
+            void this.saveTranslationAnnotation(
+              current,
+              overlay,
+              latestTranslation,
+              translationDone,
+            );
+          },
+          hint,
         },
-        hint,
-      },
-    });
-    this.overlay = overlay;
-    overlay.setStatus("正在翻译…");
-    debugLog("overlay mounted", {
-      connected: overlay.el.isConnected,
-      position: settings.overlayPosition,
-      size: settings.overlaySize,
-    });
-
-    if (!preset) {
-      debugLog("renderForCurrent missing preset");
-      overlay.setError("请先在设置中配置一个 GPT (openai) API。");
-      return;
-    }
-    if (!model) {
-      debugLog("renderForCurrent missing model");
-      overlay.setError("请先为 GPT (openai) 配置选择模型。");
-      return;
+      });
+      this.overlay = overlay;
+      overlay.setStatus("正在翻译…");
+      debugLog("overlay mounted", {
+        connected: overlay.el.isConnected,
+        position: settings.overlayPosition,
+        size: settings.overlaySize,
+      });
     }
 
-    const keyInput = {
-      sentence: current.text,
-      target: "zh",
-      endpoint: preset.baseUrl,
-      model,
-      thinking: settings.thinking,
-      ctxLevel: settings.ctxLevel,
+    const setOverlayStatus = (status: string) => {
+      if (!overlay) return;
+      overlay.setStatus(status);
     };
-    const key = cacheKey(keyInput);
-    const fullTextKey = cacheKey({ ...keyInput, ctxLevel: "full-text" });
+    const setOverlayStatusLabel = (status: string) => {
+      if (!overlay) return;
+      overlay.setStatusLabel(status);
+    };
+    const setOverlayText = (text: string) => {
+      if (!overlay) return;
+      overlay.setText(text);
+    };
+    const appendOverlayText = (text: string) => {
+      if (!overlay) return;
+      overlay.appendText(text);
+    };
+    const setOverlayDone = () => {
+      if (!overlay) return;
+      overlay.setDone();
+    };
+    const setOverlayError = (message: string) => {
+      if (!overlay) return;
+      overlay.setError(message);
+    };
+
+    const keyInput =
+      preset && model
+        ? {
+            sentence: current.text,
+            target: "zh",
+            endpoint: preset.baseUrl,
+            model,
+            thinking: settings.thinking,
+            ctxLevel: settings.ctxLevel,
+          }
+        : null;
     let cached = forceRefresh
       ? undefined
-      : (getCachedTranslation(this.ctx.prefs, key) ??
-        getCachedTranslation(this.ctx.prefs, fullTextKey) ??
-        getFullTextCachedTranslation(this.ctx.prefs, {
-          ...keyInput,
+      : getParagraphCachedTranslation(this.ctx.prefs, {
+          sentence: current.text,
+          target: "zh",
+          endpoint: preset?.baseUrl,
+          model,
+          thinking: settings.thinking,
+          ctxLevel: settings.ctxLevel,
           paragraphContext: current.paragraphContext,
-        }) ??
-        getLooseCachedTranslation(this.ctx.prefs, keyInput));
+        });
     if (cached) {
       if (translationNeedsRetry(current.text, cached.text)) {
         debugLog("translation cache ignored: non-Chinese output", {
@@ -602,11 +637,32 @@ export class TranslateModeController {
       });
       latestTranslation = cleanTranslationOutput(cached.text);
       translationDone = true;
-      overlay.setText(latestTranslation);
-      overlay.setStatusLabel("● 已完成 · 本地缓存");
+      setOverlayText(latestTranslation);
+      setOverlayStatusLabel(
+        cached.ctxLevel === "full-text"
+          ? "● 已完成 · 全文缓存"
+          : "● 已完成 · 本地缓存",
+      );
+      this.emitParagraphTranslation(current, latestTranslation, {
+        cached: true,
+        cacheKind: cached.ctxLevel,
+      });
       return;
     }
-    overlay.setStatus("本地缓存未命中，正在翻译…");
+    setOverlayStatus("本地缓存未命中，正在翻译…");
+
+    if (!preset) {
+      debugLog("renderForCurrent missing preset");
+      setOverlayError("请先在设置中配置一个 GPT (openai) API。");
+      return;
+    }
+    if (!model || !keyInput) {
+      debugLog("renderForCurrent missing model");
+      setOverlayError("请先为 GPT (openai) 配置选择模型。");
+      return;
+    }
+
+    const key = cacheKey(keyInput);
 
     let buffer = "";
     let usageLabel = "";
@@ -631,7 +687,7 @@ export class TranslateModeController {
         }
         if (chunk.type === "text" && chunk.text) {
           const text = cleanTranslationOutput(chunk.text);
-          overlay.appendText(text);
+          appendOverlayText(text);
           buffer += text;
           latestTranslation = buffer;
           debugLog("translation text chunk", {
@@ -640,7 +696,7 @@ export class TranslateModeController {
           });
         } else if (chunk.type === "error" && chunk.message) {
           debugLog("translation chunk error", { message: chunk.message });
-          overlay.setError(chunk.message);
+          setOverlayError(chunk.message);
         } else if (chunk.type === "usage") {
           usageLabel = formatUsageLabel(
             chunk.input,
@@ -665,18 +721,46 @@ export class TranslateModeController {
           });
           latestTranslation = buffer;
           translationDone = true;
-          if (usageLabel) overlay.setStatusLabel(`● 已完成 · ${usageLabel}`);
-          else overlay.setDone();
+          this.emitParagraphTranslation(current, buffer, {
+            cached: false,
+            cacheKind: settings.ctxLevel,
+          });
+          if (usageLabel) setOverlayStatusLabel(`● 已完成 · ${usageLabel}`);
+          else setOverlayDone();
           debugLog("translation done", { chars: buffer.length });
         } else if (chunk.type === "done") {
           debugLog("translation done empty");
-          overlay.setError("模型没有返回译文。");
+          setOverlayError("模型没有返回译文。");
         }
       }
     } catch (err) {
       const message = errorMessage(err);
       debugLog("translation threw", { error: message });
-      if (this.overlay === overlay) overlay.setError(message);
+      if (!showOverlay) return;
+      if (this.overlay === overlay) setOverlayError(message);
+    }
+  }
+
+  private emitParagraphTranslation(
+    current: DetectedSentence,
+    translation: string,
+    meta: { cached: boolean; cacheKind?: string },
+  ): void {
+    const cleaned = cleanTranslationOutput(translation);
+    if (!cleaned) return;
+    try {
+      this.ctx.onParagraphTranslation?.({
+        sourceText: current.text,
+        translation: cleaned,
+        cached: meta.cached,
+        cacheKind: meta.cacheKind,
+        pageIndex: current.pageIndex,
+        pageLabel: current.pageLabel,
+      });
+    } catch (err) {
+      debugLog("paragraph translation callback failed", {
+        error: errorMessage(err),
+      });
     }
   }
 

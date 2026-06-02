@@ -34,6 +34,17 @@ interface CacheKeyInput {
   ctxLevel: string;
 }
 
+interface ParagraphCacheLookupInput {
+  sentence: string;
+  target: string;
+  endpoint?: string;
+  model?: string;
+  thinking?: string;
+  ctxLevel?: string;
+  paragraphContext?: string;
+  fullTextContext?: string;
+}
+
 interface DeleteCachedTranslationSourcesInput {
   sources: string[];
   target: string;
@@ -274,6 +285,164 @@ export function getFullTextCachedTranslation(
   return combineFullTextMatches(deduped, input);
 }
 
+export function getParagraphCachedTranslation(
+  prefs: PrefsStore,
+  input: ParagraphCacheLookupInput,
+): CacheEntry | undefined {
+  const keyedInput = completeCacheKeyInput(input);
+  if (keyedInput) {
+    const fullTextKey = cacheKey({ ...keyedInput, ctxLevel: "full-text" });
+    const fullTextCached =
+      getCachedTranslation(prefs, fullTextKey) ??
+      getFullTextCachedTranslation(prefs, {
+        ...keyedInput,
+        paragraphContext: input.paragraphContext,
+        fullTextContext: input.fullTextContext,
+      });
+    if (fullTextCached) return fullTextCached;
+  }
+
+  const broadFullText = findSourceMatchedCachedTranslation(prefs, input, {
+    fullTextOnly: true,
+  });
+  if (broadFullText) return broadFullText;
+
+  if (keyedInput) {
+    const currentCached =
+      getCachedTranslation(prefs, cacheKey(keyedInput)) ??
+      getLooseCachedTranslation(prefs, keyedInput);
+    if (currentCached) return currentCached;
+  }
+
+  return findSourceMatchedCachedTranslation(prefs, input, {
+    fullTextOnly: false,
+  });
+}
+
+function completeCacheKeyInput(
+  input: ParagraphCacheLookupInput,
+): CacheKeyInput | null {
+  if (!input.endpoint || !input.model || !input.thinking || !input.ctxLevel) {
+    return null;
+  }
+  return {
+    sentence: input.sentence,
+    target: input.target,
+    endpoint: input.endpoint,
+    model: input.model,
+    thinking: input.thinking,
+    ctxLevel: input.ctxLevel,
+  };
+}
+
+function findSourceMatchedCachedTranslation(
+  prefs: PrefsStore,
+  input: ParagraphCacheLookupInput,
+  options: { fullTextOnly: boolean },
+): CacheEntry | undefined {
+  const state = loadCache(prefs);
+  const needles = uniqueNonEmpty([input.sentence, input.paragraphContext])
+    .map((candidate) => ({
+      raw: candidate,
+      loose: normalizeForLooseMatch(candidate),
+    }))
+    .filter((candidate) => candidate.loose.length >= 20);
+  if (!needles.length) return undefined;
+
+  const matches: Array<{
+    entry: CacheEntry;
+    sourceLoose: string;
+    position: number;
+    exact: boolean;
+  }> = [];
+  for (const entry of Object.values(state.entries)) {
+    if (options.fullTextOnly && entry.ctxLevel !== "full-text") continue;
+    if (entry.target && entry.target !== input.target) continue;
+    const sourceText = entry.sourceText ?? "";
+    const sourceLoose = normalizeForLooseMatch(sourceText);
+    if (sourceLoose.length < 20) continue;
+    const position = bestLooseMatchPosition(sourceLoose, needles);
+    if (position < 0) continue;
+    matches.push({
+      entry,
+      sourceLoose,
+      position,
+      exact: needles.some((needle) => needle.loose === sourceLoose),
+    });
+  }
+  if (!matches.length) return undefined;
+
+  const groups = groupSourceMatches(matches);
+  const candidates: Array<{
+    entry: CacheEntry;
+    score: number;
+    createdAt: number;
+  }> = [];
+  for (const group of groups) {
+    const deduped = dedupeOverlappingMatches(
+      group.sort((a, b) => {
+        const byPosition = a.position - b.position;
+        if (byPosition !== 0) return byPosition;
+        return b.sourceLoose.length - a.sourceLoose.length;
+      }),
+    );
+    if (!hasStartAnchoredMatch(deduped)) continue;
+    const entry =
+      deduped.length > 1 ? combineFullTextMatches(deduped) : deduped[0]!.entry;
+    const createdAt = Math.max(
+      ...deduped.map((match) => match.entry.createdAt),
+    );
+    candidates.push({
+      entry,
+      createdAt,
+      score: sourceMatchScore(deduped, input),
+    });
+  }
+  if (!candidates.length) return undefined;
+  candidates.sort((a, b) => {
+    const byScore = b.score - a.score;
+    if (byScore !== 0) return byScore;
+    return b.createdAt - a.createdAt;
+  });
+  return candidates[0]!.entry;
+}
+
+function groupSourceMatches<T extends { entry: CacheEntry }>(
+  matches: T[],
+): T[][] {
+  const groups = new Map<string, T[]>();
+  for (const match of matches) {
+    const entry = match.entry;
+    const key = [
+      entry.target ?? "",
+      entry.endpoint ?? "",
+      entry.model,
+      entry.thinking ?? "",
+      entry.ctxLevel ?? "",
+    ].join("|");
+    const group = groups.get(key);
+    if (group) group.push(match);
+    else groups.set(key, [match]);
+  }
+  return Array.from(groups.values());
+}
+
+function sourceMatchScore(
+  matches: Array<{ entry: CacheEntry; exact: boolean }>,
+  input: ParagraphCacheLookupInput,
+): number {
+  const first = matches[0]!.entry;
+  let score = 0;
+  if (first.ctxLevel === "full-text") score += 100;
+  if (matches.some((match) => match.exact)) score += 30;
+  if (input.endpoint && first.endpoint === input.endpoint) score += 10;
+  if (input.model && first.model === input.model) score += 10;
+  if (input.thinking && first.thinking === input.thinking) score += 5;
+  if (input.ctxLevel && first.ctxLevel === input.ctxLevel) score += 3;
+  score += Math.min(matches.length, 5);
+  return score;
+}
+
 function uniqueNonEmpty(values: Array<string | undefined>): string[] {
   return Array.from(
     new Set(
@@ -412,22 +581,19 @@ function combineFullTextMatches(
   matches: Array<{ entry: CacheEntry }>,
   input?: CacheKeyInput,
 ): CacheEntry {
+  const first = matches[0]!.entry;
   return {
     text: matches.map((match) => match.entry.text).join("\n\n"),
-    model: matches[0]!.entry.model,
+    model: first.model,
     createdAt: Math.max(...matches.map((match) => match.entry.createdAt)),
     sourceText: matches
       .map((match) => match.entry.sourceText ?? "")
       .filter(Boolean)
       .join("\n\n"),
-    ...(input
-      ? {
-          target: input.target,
-          endpoint: input.endpoint,
-          thinking: input.thinking,
-          ctxLevel: "full-text",
-        }
-      : {}),
+    target: input?.target ?? first.target,
+    endpoint: input?.endpoint ?? first.endpoint,
+    thinking: input?.thinking ?? first.thinking,
+    ctxLevel: "full-text",
   };
 }
 
@@ -450,7 +616,10 @@ function bestLooseMatchPosition(
   return best;
 }
 
-function isSafePrefixSuperset(sourceLoose: string, needleLoose: string): boolean {
+function isSafePrefixSuperset(
+  sourceLoose: string,
+  needleLoose: string,
+): boolean {
   if (!hasSameLooseStart(sourceLoose, needleLoose)) return false;
   const extra = sourceLoose.length - needleLoose.length;
   if (extra <= 0) return true;
@@ -468,9 +637,7 @@ function hasSameLooseStart(a: string, b: string): boolean {
   return length > 0 && a.slice(0, length) === b.slice(0, length);
 }
 
-function hasStartAnchoredMatch(
-  matches: Array<{ position: number }>,
-): boolean {
+function hasStartAnchoredMatch(matches: Array<{ position: number }>): boolean {
   return matches.some((match) => match.position === 0);
 }
 

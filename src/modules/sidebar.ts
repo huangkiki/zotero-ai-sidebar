@@ -76,7 +76,10 @@ import {
   type MathRenderMode,
 } from "../ui/math";
 import { serializeSelectionAsMarkdown } from "../ui/selection-serialize";
-import { TranslateModeController } from "../translate/translate-mode";
+import {
+  TranslateModeController,
+  type ParagraphTranslationResult,
+} from "../translate/translate-mode";
 import {
   cacheKey,
   deleteCachedTranslationsForSources,
@@ -625,7 +628,10 @@ function renderNoActiveMessages(doc: Document): HTMLElement {
   return messages;
 }
 
-function renderNoActiveComposer(doc: Document, mount: HTMLElement): HTMLElement {
+function renderNoActiveComposer(
+  doc: Document,
+  mount: HTMLElement,
+): HTMLElement {
   const composer = el(doc, "div", "composer zai-no-active-composer");
   const actions = el(doc, "div", "zai-no-chat-actions");
   const newChat = buttonEl(doc, "新建对话");
@@ -644,7 +650,9 @@ function updateNoActiveChatPanel(mount: HTMLElement): void {
   mount.querySelectorAll(".zai-new-chat-button").forEach((node: Element) => {
     const button = node as HTMLButtonElement;
     button.textContent = newChatText;
-    button.title = title ? `为「${title}」新建对话` : "新建一个未绑定论文的对话";
+    button.title = title
+      ? `为「${title}」新建对话`
+      : "新建一个未绑定论文的对话";
   });
   mount.querySelectorAll(".zai-chat-tab-add").forEach((node: Element) => {
     (node as HTMLButtonElement).title = title
@@ -766,14 +774,18 @@ function renderChatTabs(
       .join(" ");
     tab.title = chatTabTooltip(tabState);
     tab.disabled = active;
-    tab.addEventListener("click", () => switchChatThread(mount, state, tabState));
+    tab.addEventListener("click", () =>
+      switchChatThread(mount, state, tabState),
+    );
     row.append(tab);
   });
 
   const add = buttonEl(doc, "+");
   add.className = "zai-chat-tab-add";
   add.title = "为当前选中的论文新建一个独立对话";
-  add.addEventListener("click", () => createChatThreadFromSelection(mount, state));
+  add.addEventListener("click", () =>
+    createChatThreadFromSelection(mount, state),
+  );
   row.append(add);
 
   if (state) {
@@ -796,7 +808,10 @@ function chatTabStates(mount: HTMLElement): PanelState[] {
 }
 
 function comparePanelThreadStates(a: PanelState, b: PanelState): number {
-  return a.threadCreatedAt - b.threadCreatedAt || a.threadID.localeCompare(b.threadID);
+  return (
+    a.threadCreatedAt - b.threadCreatedAt ||
+    a.threadID.localeCompare(b.threadID)
+  );
 }
 
 function isSamePanelThread(a: PanelState, b: PanelState): boolean {
@@ -889,6 +904,71 @@ function savePanelMessages(state: PanelState): void {
     title: state.threadTitle,
     createdAt: new Date(state.threadCreatedAt).toISOString(),
   });
+}
+
+async function appendPointTranslationMessage(
+  win: Window,
+  result: ParagraphTranslationResult,
+): Promise<void> {
+  const sidebar = windowSidebars.get(win);
+  if (!sidebar) return;
+  setColumnCollapsed(win, sidebar, false);
+
+  const mount = sidebar.mount;
+  const readerItemID = activeReaderConversationItemID(win);
+
+  if (readerItemID != null) {
+    latestSelectionItems.set(mount, readerItemID);
+  }
+
+  let state = states.get(mount);
+  const targetItemID =
+    readerItemID ?? state?.itemID ?? latestSidebarItemID(mount);
+  if (!state || state.itemID !== targetItemID) {
+    const threadID = activeThreadID(mount, targetItemID);
+    const cached = panelStateCache(mount).get(
+      panelStateKey(targetItemID, threadID),
+    );
+    if (cached) {
+      setActiveThreadID(mount, targetItemID, threadID);
+      states.set(mount, cached);
+      state = cached;
+    } else {
+      state = createChatThreadFromSelection(mount);
+    }
+  } else {
+    // Keep latest active context synced with current paper after reader switch.
+    if (state.itemID !== readerItemID) {
+      latestSelectionItems.set(mount, state.itemID);
+    }
+  }
+  await ensureHistoryLoaded(mount, state);
+  state = states.get(mount) ?? state;
+  if (!state) return;
+
+  const cacheLabel = result.cached
+    ? result.cacheKind === "full-text"
+      ? "全文缓存"
+      : "本地缓存"
+    : "即时翻译";
+  const page = result.pageLabel ? ` · 第 ${result.pageLabel} 页` : "";
+  const message: Message = {
+    role: "assistant",
+    content: `## 点译段落\n\n${result.translation}`,
+    task: {
+      id: makeTaskID(),
+      kind: "general",
+      title: `点译段落（${cacheLabel}${page}）`,
+      promptPreview: contentPreview(result.sourceText, 120),
+      createdAt: Date.now(),
+      completedAt: Date.now(),
+    },
+  };
+  state.messages.push(message);
+  state.autoFollowMessages = true;
+  state.scrollToBottom = true;
+  savePanelMessages(state);
+  renderPanelIfActive(mount, state);
 }
 
 function renderToolbar(doc: Document, mount: HTMLElement, state: PanelState) {
@@ -3574,13 +3654,14 @@ async function translateSelectedPapersFullText(
     task: {
       id: makeTaskID(),
       kind: "full_text",
-      title: itemIDs.length > 1
-        ? options.forceRefresh
-          ? "批量重新全文翻译"
-          : "批量全文翻译"
-        : options.forceRefresh
-          ? "重新全文翻译"
-          : "全文翻译",
+      title:
+        itemIDs.length > 1
+          ? options.forceRefresh
+            ? "批量重新全文翻译"
+            : "批量全文翻译"
+          : options.forceRefresh
+            ? "重新全文翻译"
+            : "全文翻译",
       promptPreview:
         itemIDs.length > 1
           ? `${options.forceRefresh ? "重新" : "批量"}全文逐段翻译 ${itemIDs.length} 篇论文`
@@ -4600,7 +4681,8 @@ async function loadPersistedMessages(mount: HTMLElement, state: PanelState) {
     applyChatThreadSnapshot(threadState, snapshot);
     const cancelledStale = cancelStaleQueuedTasks(threadState.messages);
     if (cancelledStale > 0) savePanelMessages(threadState);
-    if (threadState.threadID === state.threadID) replacementActive = threadState;
+    if (threadState.threadID === state.threadID)
+      replacementActive = threadState;
   }
 
   if (
@@ -4608,13 +4690,16 @@ async function loadPersistedMessages(mount: HTMLElement, state: PanelState) {
     !replacementActive &&
     state.messages.length === 0
   ) {
-    replacementActive = cache.get(
-      panelStateKey(state.itemID, snapshots[0]!.threadID),
-    ) ?? null;
+    replacementActive =
+      cache.get(panelStateKey(state.itemID, snapshots[0]!.threadID)) ?? null;
   }
 
   if (replacementActive && active === state) {
-    setActiveThreadID(mount, replacementActive.itemID, replacementActive.threadID);
+    setActiveThreadID(
+      mount,
+      replacementActive.itemID,
+      replacementActive.threadID,
+    );
     states.set(mount, replacementActive);
     active = replacementActive;
   }
@@ -4680,7 +4765,8 @@ function applyChatThreadSnapshot(
   state.messages = snapshot.messages;
   state.threadTitle = snapshot.title || "新对话";
   state.threadCreatedAt = Date.parse(snapshot.createdAt) || Date.now();
-  state.threadUpdatedAt = Date.parse(snapshot.updatedAt) || state.threadCreatedAt;
+  state.threadUpdatedAt =
+    Date.parse(snapshot.updatedAt) || state.threadCreatedAt;
   state.historyLoaded = true;
 }
 
@@ -8828,9 +8914,13 @@ function installReaderTranslateToolbar(
         event.stopPropagation();
         const panelState = states.get(state.mount);
         if (!panelState) {
-          startFullTextTranslationWithOptionalChat(state.mount, retranslateBtn, {
-            forceRefresh: true,
-          });
+          startFullTextTranslationWithOptionalChat(
+            state.mount,
+            retranslateBtn,
+            {
+              forceRefresh: true,
+            },
+          );
           return;
         }
         void translateSelectedPapersFullText(
@@ -10282,6 +10372,9 @@ async function getOrCreateTranslateController(
   const presets = loadPresets(prefs);
   if (existing?.isForReader(reader)) {
     existing.refreshPresets(presets);
+    existing.setParagraphTranslationCallback((result) => {
+      void appendPointTranslationMessage(win, result);
+    });
     return existing;
   }
   existing?.disable();
@@ -10289,6 +10382,10 @@ async function getOrCreateTranslateController(
     prefs,
     presets,
     reader,
+    showOverlay: false,
+    onParagraphTranslation: (result) => {
+      void appendPointTranslationMessage(win, result);
+    },
   });
   translateControllers.set(win, ctrl);
   return ctrl;
