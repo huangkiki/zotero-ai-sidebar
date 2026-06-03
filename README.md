@@ -1,175 +1,184 @@
 # Zotero AI Sidebar
 
-[English](README.md) | [中文](README.zh-CN.md)
+[中文](README.md) | [English](README.en.md)
 
-Zotero AI Sidebar is a Zotero 7/8/9 plugin that adds an AI chat panel to the Zotero item pane / PDF reading workflow. It is designed as a lightweight research agent: the model decides when to inspect the current Zotero item, annotations, PDF snippets, full PDF text, screenshots, or write annotations through exposed Zotero tools.
+把论文阅读时最常用的几件事放回 Zotero：提问、点译、全文翻译、整理笔记、截图追问。
 
-📖 **[Full usage guide (HTML, Chinese)](docs/usage.html)** — step-by-step install, config, slash commands, cloud sync, and disaster backup.
+这个插件不是一个单独的聊天窗口，而是 Zotero 右侧的一条阅读侧栏。你打开 PDF，它跟着当前论文走；你问的问题、点译的段落、整理出来的笔记，也都留在这篇论文下面。
 
-## Architecture
+![Zotero PDF 与 AI 侧栏同屏](docs/assets/zotero-real-overview.png)
 
-```mermaid
-flowchart LR
-    subgraph Zotero[Zotero main window]
-        PDF[PDF Reader]
-        Note[Note editor]
-        Side[AI sidebar]
-    end
-    User([You]) -->|prompt / selection / screenshot| Side
-    Side -->|tool calls| Tools[Local AgentTool]
-    Tools -->|read / write| Zotero
-    Side <-->|HTTPS| Provider[OpenAI / Anthropic /<br/>OpenAI-compatible]
-    Side -.chat / settings / annotations.-> WebDAV[(WebDAV cloud<br/>e.g. Nutstore)]
-    Zotero -.PDF files.-> WebDAV
-    Zotero -.library metadata.-> ZoteroOrg[(zotero.org)]
+## 它适合解决什么问题
+
+读论文时，很多小动作其实很打断节奏：
+
+- 复制一段 PDF 文字去翻译；
+- 把摘要、标题、选区复制给聊天工具；
+- 截图问图表含义；
+- 把回答再搬回 Zotero 笔记；
+- 换电脑后发现之前的对话不在了。
+
+Zotero AI Sidebar 主要就是把这些动作收回来。你仍然在 Zotero 里读 PDF，只是在右侧多了一块可以理解当前论文上下文的侧栏。
+
+## 怎么读起来
+
+### 看到不顺的段落，直接点译
+
+![点译结果预览](docs/assets/zotero-real-translation.png)
+
+开启 `点译` 后，点击 PDF 里的段落，译文会出现在右侧对话里。它不会额外弹一个浮动框挡住 PDF。
+
+如果你之前已经跑过 `全文译`，点译会优先使用缓存译文。也就是说，同一段不会反复请求模型。
+
+### 想快速进入论文，就先问一个粗问题
+
+比如：
+
+```text
+这篇论文主要解决什么问题？方法和实验分别可靠吗？
 ```
 
-## Three-layer cloud-sync split
+或者更具体一点：
+
+```text
+请按“问题、方法、实验、局限”整理这篇论文。
+```
+
+侧栏可以读取当前 Zotero 条目、PDF 文字、选区和注释。你不用先手动复制一堆上下文。
+
+### 要沉淀下来，就写回 Zotero 笔记
+
+读完一轮后，可以让它整理成笔记：
+
+```text
+整理成文献笔记：背景、核心方法、实验设置、主要结果、局限、我后续可以追的问题。
+```
+
+确认内容可用后，点 `写入笔记`，结果会追加到当前 Zotero 条目的子笔记里。
+
+## 侧栏里几个按钮是干什么的
+
+![输入区与快捷按钮预览](docs/assets/zotero-real-composer.png)
+
+- `总结论文`：让模型先读当前论文，给一个概览。
+- `全文重点`：读完整篇 PDF，整理值得标记的重点。
+- `解释选区`：选中 PDF 文字后，围绕选区提问。
+- `队列`：查看还没处理完，或之前已经完成的任务。
+- `截图` / `图片`：把图表、公式、界面状态一起发给模型。
+- `联网`：需要查当前论文之外的信息时再打开。
+
+底部也可以切换模型、推理等级和 YOLO 模式。API Key 和模型配置都保存在 Zotero 本地偏好里。
+
+## 安装
+
+1. 从 [GitHub Releases](https://github.com/huangkiki/zotero-ai-sidebar/releases/latest) 下载最新版 `zotero-ai-sidebar.xpi`。
+2. 打开 Zotero 7、8 或 9。
+3. 进入 `工具` -> `插件`。
+4. 点击齿轮图标，选择 `从文件安装插件...`。
+5. 选择刚下载的 `.xpi` 文件，按提示重启 Zotero。
+6. 在侧栏设置里配置一个模型预设。
+
+目前只发布 `.xpi` 文件，暂时没有 Zotero 自动更新清单。更新时重新安装最新版 `.xpi` 即可。
+
+## 配置模型
+
+在插件设置里新增一个模型预设：
+
+- 提供商：`openai`、`anthropic`，或 OpenAI 兼容端点。
+- API Key：保存在本地 Zotero 偏好中。
+- Base URL：官方地址，或你自己的中转地址。
+- 模型：填写该端点支持的模型 ID。
+- Max tokens / 工具循环上限：控制输出长度、成本和工具调用次数。
+
+不要把 API Key、Base URL 或私有模型名写进仓库。
+
+## 还能做什么
+
+- 读取当前条目元信息、PDF 选区、注释、PDF 片段和 PDF 全文。
+- 全文翻译，并把段落译文存进当前论文的聊天记录。
+- 点译段落，并复用全文翻译缓存。
+- 把回答复制成 Markdown，或写入 Zotero 子笔记。
+- 按自定义颜色规则起草 PDF 注释。
+- 支持截图、图片、快捷提示词和 slash 命令。
+- 支持 arXiv 检索和全文抓取。
+- 支持 WebDAV 同步聊天、提示词、设置和选定注释。
+- 支持 JSON 配置备份与恢复。
+
+## 同步怎么分工
+
+Zotero 自己同步题录和 PDF 文件；这个插件同步的是它额外产生的内容，例如聊天记录、快捷提示词和部分注释状态。
 
 ```mermaid
 flowchart TB
-    subgraph Local[Local machine]
-        Lib[(Zotero library + annotations)]
+    subgraph Local[本机]
+        Lib[(Zotero 题录 + 注释)]
         Storage[storage/*.pdf]
-        Plugin[Plugin state<br/>chats / settings / prompts]
+        Plugin[插件状态<br/>对话 / 设置 / 提示词]
     end
-    subgraph Cloud[Cloud]
-        ZS[zotero.org<br/>free 300MB tier]
-        WD1[WebDAV<br/>Zotero File Sync writes]
-        WD2[WebDAV<br/>this plugin writes]
+    subgraph Cloud[云端]
+        ZS[zotero.org<br/>题录同步]
+        WD1[WebDAV<br/>Zotero 文件同步]
+        WD2[WebDAV<br/>插件同步]
     end
-    Lib <-->|metadata sync| ZS
-    Storage <-->|file sync| WD1
+    Lib <-->|metadata| ZS
+    Storage <-->|PDF 文件| WD1
     Plugin <-->|push / pull| WD2
 ```
 
-## Features
+这样做的好处是：Zotero 原来的同步方式不需要改，插件自己的阅读现场也可以单独备份。
 
-- **AI chat inside Zotero**: open a dedicated sidebar and discuss the current paper without leaving Zotero.
-- **Configurable providers**: supports Anthropic, OpenAI, and OpenAI-compatible endpoints through local Zotero preferences. Model presets include connectivity tests and a per-preset model list with a footer switcher.
-- **Model-driven Zotero tools**: follows a Codex-style tool loop; no local keyword/regex intent planner decides what PDF content to send.
-- **PDF context tools**: current item metadata, annotations, PDF search, PDF range reading, full PDF reading, and selected-text context.
-- **Customizable annotation color guide**: edit the natural-language rubric the model uses when picking PDF highlight colors, with a default that maps Zotero's six preset hexes to common review categories (background, problem, method, dataset, results, etc.).
-- **Image context**: attach screenshots/images so the model can analyze figures, UI states, or PDF screenshots.
-- **Quick prompts & slash commands**: customizable prompt buttons next to the composer plus built-in slash commands (`/arxiv-search`, `/web-search`) that expand into explicit instructions for the model.
-- **arXiv paper tools**: `paper_search_arxiv` and `paper_fetch_arxiv_fulltext` let the model search arXiv and fetch full text on demand.
-- **In-pane note editor**: open a note column alongside the chat to edit Zotero's rich note in place, with an assistant-to-note write tool.
-- **Model-driven note writes**: the model can also call `zotero_append_to_note` on its own to append assistant output to the current item's child note, auto-creating one when none exists.
-- **Markdown output**: renders headings, lists, code blocks, quotes, links, thinking/context blocks, and tool-call traces.
-- **Customizable chat UI**: nickname and avatar (emoji or image URL) for both user and AI, plus configurable position and layout for the per-message action buttons.
-- **Clean / debug copy modes**: copy the conversation as Markdown with just the paper introduction and dialogue, or include tool context, PDF snippets, and thinking summaries for debugging.
-- **Config backup & restore**: export/import account presets, UI settings, quick prompts, and tool/MCP settings as a single JSON file.
-- **WebDAV cloud sync**: push and pull chats, settings, quick prompts, and selected paper annotations to a WebDAV endpoint (e.g. Nutstore) via a single `state.json` snapshot, with portable thread keys so conversations follow you across machines.
-- **Local-first config**: API keys, base URLs, model names, and private provider settings stay in Zotero prefs, not in source code.
+## 简单说一下工作原理
 
-## Install
+侧栏会把 Zotero 里的真实操作暴露成本地工具，比如读取当前论文、搜索 PDF、读取全文、写入笔记、起草注释。模型只决定“要不要调用工具、调用哪个工具、参数是什么”，真正的读写都由插件在本机执行。
 
-1. Download the latest `zotero-ai-sidebar.xpi` from GitHub Releases.
-2. Open Zotero 7, 8, or 9.
-3. Go to `Tools` -> `Plugins`.
-4. Click the gear icon and choose `Install Plugin From File...`.
-5. Select the downloaded `.xpi` file and restart Zotero if prompted.
+```mermaid
+flowchart LR
+    subgraph Zotero[Zotero]
+        PDF[PDF 阅读器]
+        Note[笔记]
+        Side[侧栏]
+    end
+    User([读者]) -->|提问 / 选区 / 截图| Side
+    Side -->|工具调用| Tools[本地 Zotero 工具]
+    Tools -->|读 / 写| Zotero
+    Side <-->|HTTPS| Provider[OpenAI / Anthropic /<br/>OpenAI 兼容端点]
+    Side -.插件状态.-> WebDAV[(WebDAV)]
+```
 
-This repository currently publishes only the `.xpi` file. Zotero automatic update manifests (`update.json` / `update-beta.json`) are intentionally not published in the simplified release flow.
+## 开发
 
-## Configuration
-
-Open the AI Sidebar settings in Zotero and configure at least one model preset:
-
-- Provider: `anthropic` or `openai`
-- API key: stored locally in Zotero preferences
-- Base URL: official endpoint or an OpenAI-compatible endpoint
-- Model: any model ID supported by that endpoint
-- Max tokens / tool iterations: local safety and output controls
-
-Do not hardcode personal API keys, base URLs, or private model IDs in this repository.
-
-## Development
-
-Install dependencies:
+安装依赖：
 
 ```bash
 npm install
 ```
 
-Run tests:
+运行测试：
 
 ```bash
 npm test
 ```
 
-Build a local XPI:
+构建 XPI：
 
 ```bash
 npm run build
 ```
 
-The build output is written to `.scaffold/build/`. Local `.xpi` files are ignored by Git and should not be committed.
+构建产物会写入 `.scaffold/build/`。本地 `.xpi` 文件已被 Git 忽略，不应提交。
 
-## Release Flow
+## 发布
 
-After `/auto-commit` has updated the version and committed the repository, the
-release flow is one command:
+当工作区干净、`package.json` 里的版本号也准备好后：
 
 ```bash
 npm run release:xpi
 ```
 
-The script reads `package.json` version and releases `v<version>`. You can also
-pass the expected tag explicitly:
+脚本会运行测试、构建 XPI、创建并推送匹配的 `v<version>` tag，等待 GitHub Actions，并把 `.scaffold/build/*.xpi` 上传到 GitHub Release。
 
-```bash
-npm run release:xpi -- v0.1.2
-```
+更多细节见 [docs/RELEASE.md](docs/RELEASE.md)。
 
-The script verifies the working tree is clean, runs tests, builds locally, creates
-the annotated tag if needed, pushes `master`, pushes the tag, waits for GitHub
-Actions, and prints the final Release/XPI URL.
+## 许可证
 
-To recreate a deleted GitHub Release for an existing tag without moving the tag:
-
-```bash
-npm run release:xpi -- v0.1.2 --republish
-```
-
-The lower-level tag-only command is still available when needed:
-
-```bash
-npm run release:tag -- v0.1.2
-```
-
-The release scripts check that:
-
-- the working tree is clean
-- the tag starts with `v`
-- the tag matches `package.json` version
-- the Git remote exists
-- GitHub Actions uploads only `.scaffold/build/*.xpi`
-
-More details are in `docs/RELEASE.md`.
-
-## Agent Design Notes
-
-The project should keep the agent architecture close to Codex-style harness design:
-
-- expose real Zotero operations as structured tools
-- let the model decide which tools to call
-- validate and execute tool calls locally
-- enforce safety budgets in the harness
-- require explicit YOLO / approval behavior for write tools
-- avoid hardcoded keyword routing and regex-based intent detection
-
-The UI direction follows Claudian-style readability:
-
-- clean Markdown rendering
-- visible thinking/context sections
-- tool-call trace visibility
-- stable scrolling while streaming
-- copyable assistant output
-
-See `CLAUDE.md` for project-specific modification guidance.
-See `docs/TOOLS_AND_MCP.md` for when to use local tools, Web Search, or MCP.
-
-## License
-
-AGPL-3.0-or-later.
+AGPL-3.0-or-later。
