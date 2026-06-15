@@ -1,6 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TranslateModeController } from "../../src/translate/translate-mode";
 import type { PrefsStore } from "../../src/settings/storage";
+import type { ModelPreset } from "../../src/settings/types";
+import { translateSentence } from "../../src/translate/translator";
+
+vi.mock("../../src/translate/translator", () => ({
+  cleanTranslationOutput: (text: string) => text,
+  translateSentence: vi.fn(async function* () {
+    yield { type: "text", text: "译文" };
+    yield { type: "done" };
+  }),
+  translationNeedsRetry: () => false,
+}));
 
 function prefs(triggerMode: "single" | "double"): PrefsStore {
   return {
@@ -8,6 +19,23 @@ function prefs(triggerMode: "single" | "double"): PrefsStore {
       key.endsWith(".translateSettings")
         ? JSON.stringify({ triggerMode })
         : undefined,
+    set: () => undefined,
+  };
+}
+
+function prefsWithPresets(
+  triggerMode: "single" | "double",
+  presets: ModelPreset[],
+  presetId: string,
+): PrefsStore {
+  return {
+    get: (key) => {
+      if (key.endsWith(".translateSettings")) {
+        return JSON.stringify({ enabled: true, triggerMode, presetId });
+      }
+      if (key.endsWith(".presets")) return JSON.stringify(presets);
+      return undefined;
+    },
     set: () => undefined,
   };
 }
@@ -32,6 +60,10 @@ function readyController(triggerMode: "single" | "double") {
   return { ctrl, page };
 }
 
+beforeEach(() => {
+  vi.mocked(translateSentence).mockClear();
+});
+
 function mouseUpAt(x = 10, y = 10): MouseEvent {
   return new MouseEvent("mouseup", {
     button: 0,
@@ -42,6 +74,55 @@ function mouseUpAt(x = 10, y = 10): MouseEvent {
 }
 
 describe("TranslateModeController trigger routing", () => {
+  it("uses the selected Anthropic preset for paragraph translation", async () => {
+    const anthropicPreset: ModelPreset = {
+      id: "deepseek",
+      label: "DeepSeek",
+      provider: "anthropic",
+      apiKey: "sk-test",
+      baseUrl: "https://api.deepseek.com/anthropic",
+      model: "deepseek-v4-pro",
+      maxTokens: 8192,
+    };
+    const translations: string[] = [];
+    const ctrl = new TranslateModeController({
+      prefs: prefsWithPresets("single", [anthropicPreset], "deepseek"),
+      presets: [anthropicPreset],
+      reader: {},
+      showOverlay: false,
+      onParagraphTranslation: (result) => translations.push(result.translation),
+    }) as unknown as Record<string, any>;
+    const page = document.createElement("div");
+    page.className = "page";
+    page.dataset.pageNumber = "1";
+    document.body.append(page);
+    ctrl.active = true;
+    ctrl.boundWindow = window;
+    ctrl.current = {
+      text: "We describe a new model.",
+      pageIndex: 0,
+      pageLabel: "1",
+      rects: [],
+      sortIndex: 0,
+      bundle: {
+        pageIndex: 0,
+        pageLabel: "1",
+        pageText: "We describe a new model.",
+      },
+    };
+
+    await ctrl.renderForCurrent();
+
+    expect(translateSentence).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preset: expect.objectContaining({ provider: "anthropic" }),
+        model: "deepseek-v4-pro",
+      }),
+    );
+    expect(translations).toEqual(["译文"]);
+    page.remove();
+  });
+
   it("activates immediately on pointerup in single-click mode", () => {
     const { ctrl, page } = readyController("single");
     const ev = mouseUpAt();

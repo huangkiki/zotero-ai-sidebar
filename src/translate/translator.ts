@@ -1,4 +1,4 @@
-import { OpenAIProvider } from "../providers/openai";
+import { getProvider } from "../providers/factory";
 import type { Message, StreamChunk } from "../providers/types";
 import type {
   ModelPreset,
@@ -178,7 +178,7 @@ async function collectTranslation(
   preset: ModelPreset,
   signal: AbortSignal,
 ): Promise<TranslationResult> {
-  const provider = new OpenAIProvider();
+  const provider = getProvider(preset);
   let text = "";
   let usage: TranslationUsage | undefined;
   try {
@@ -247,13 +247,18 @@ export function cleanTranslationOutput(output: string): string {
     .trim();
 }
 
-export function deterministicMetadataTranslation(source: string): string | null {
+export function deterministicMetadataTranslation(
+  source: string,
+): string | null {
   const trimmed = source.replace(/\s+/g, " ").trim();
   if (!trimmed || !ARXIV_METADATA_RE.test(trimmed)) return null;
   return localizeEnglishDate(trimmed);
 }
 
-function isAcceptableMetadataTranslation(source: string, output: string): boolean {
+function isAcceptableMetadataTranslation(
+  source: string,
+  output: string,
+): boolean {
   if (!deterministicMetadataTranslation(source)) return false;
   const sourceId = source.match(ARXIV_ID_RE)?.[0]?.toLowerCase();
   const outputId = output.match(ARXIV_ID_RE)?.[0]?.toLowerCase();

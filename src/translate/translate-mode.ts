@@ -512,7 +512,7 @@ export class TranslateModeController {
     if (!this.isEnabled() || !current || !this.boundWindow) return;
     const settings = loadTranslateSettings(this.ctx.prefs);
     this.ctx.presets = loadPresets(this.ctx.prefs);
-    const preset = pickOpenAiPreset(this.ctx.presets, settings.presetId);
+    const preset = pickTranslatePreset(this.ctx.presets, settings.presetId);
     debugLog("renderForCurrent start", {
       forceRefresh,
       text: current.text.slice(0, 60),
@@ -653,12 +653,12 @@ export class TranslateModeController {
 
     if (!preset) {
       debugLog("renderForCurrent missing preset");
-      setOverlayError("请先在设置中配置一个 GPT (openai) API。");
+      setOverlayError("请先在设置中配置一个翻译模型 API。");
       return;
     }
     if (!model || !keyInput) {
       debugLog("renderForCurrent missing model");
-      setOverlayError("请先为 GPT (openai) 配置选择模型。");
+      setOverlayError("请先为翻译模型选择模型 ID。");
       return;
     }
 
@@ -892,13 +892,12 @@ function distance(
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
-function pickOpenAiPreset(
+function pickTranslatePreset(
   presets: ModelPreset[],
   desiredId: string,
 ): ModelPreset | null {
-  const openai = presets.filter((p) => p.provider === "openai");
-  if (!openai.length) return null;
-  return openai.find((p) => p.id === desiredId) ?? openai[0]!;
+  if (!presets.length) return null;
+  return presets.find((p) => p.id === desiredId) ?? presets[0]!;
 }
 
 function displayKey(formatted: string): string {

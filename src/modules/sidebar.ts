@@ -3981,9 +3981,8 @@ function pickTranslatePreset(
   presets: ModelPreset[],
   desiredId: string,
 ): ModelPreset | null {
-  const openai = presets.filter((preset) => preset.provider === "openai");
-  if (!openai.length) return null;
-  return openai.find((preset) => preset.id === desiredId) ?? openai[0]!;
+  if (!presets.length) return null;
+  return presets.find((preset) => preset.id === desiredId) ?? presets[0]!;
 }
 
 function paperTitle(itemID: number): string {
