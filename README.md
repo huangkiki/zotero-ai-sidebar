@@ -1,194 +1,150 @@
 # Zotero AI Sidebar
 
-[中文](README.md) | [English](README.en.md)
+[English](README.en.md) · [下载安装包](https://github.com/huangkiki/zotero-ai-sidebar/releases/latest) · [反馈问题](https://github.com/huangkiki/zotero-ai-sidebar/issues)
 
-把论文阅读时最常用的几件事放回 Zotero：提问、点译、全文翻译、整理笔记、截图追问。
+在 Zotero 的 PDF 阅读器旁边提问、翻译、解释选区和整理笔记。对话按论文保存，支持同一篇论文下的多个对话。
 
-这个插件不是一个单独的聊天窗口，而是 Zotero 右侧的一条阅读侧栏。你打开 PDF，它跟着当前论文走；你问的问题、点译的段落、整理出来的笔记，也都留在这篇论文下面。
+支持 **本机 Codex 的 ChatGPT 登录**、**OpenAI Responses API / 兼容服务**和 **Anthropic API**。不同接入方式的功能范围见下文。
 
-![Zotero PDF 与 AI 侧栏同屏](docs/assets/zotero-real-overview.png)
+![Zotero PDF 阅读器与 AI 侧栏](docs/assets/zotero-real-overview.png)
 
-## 它适合解决什么问题
+> 本地 ChatGPT 接入仍在验证中。目前仍有「模型只看到题录、未调用 PDF 读取工具」的使用反馈，实际 Zotero 场景尚未全部验证通过。检测到账号、能聊天，并不代表 PDF 读取和注释已正常工作。参见[常见问题](#常见问题)。
 
-读论文时，很多小动作其实很打断节奏：
+## 安装与更新
 
-- 复制一段 PDF 文字去翻译；
-- 把摘要、标题、选区复制给聊天工具；
-- 截图问图表含义；
-- 把回答再搬回 Zotero 笔记；
-- 换电脑后发现之前的对话不在了。
+1. 打开 [Releases](https://github.com/huangkiki/zotero-ai-sidebar/releases/latest)，在 **Assets** 中下载 `zotero-ai-sidebar.xpi`。
+2. 在 Zotero 中打开 **工具 → 插件**，点击齿轮，选择 **从文件安装插件…**。
+3. 选择下载的 `.xpi` 文件，完成安装。
+4. 更新旧版后，完全退出并重新打开 Zotero；macOS 使用 **⌘Q** 退出。
+5. 打开侧栏的 **设置**，在 **账号与模型** 中配置接入方式。
 
-Zotero AI Sidebar 主要就是把这些动作收回来。你仍然在 Zotero 里读 PDF，只是在右侧多了一块可以理解当前论文上下文的侧栏。
+当前兼容性声明为 **Zotero 7.0 至 10.0.2**；近期适配面向 macOS 上的 Zotero 10.0.2。这一声明不代表所有系统和版本都已完成运行验证。
 
-## 怎么读起来
+更新时重新安装最新 `.xpi`，无需先卸载。`Source code (zip)` 是开发源码，不能作为插件安装。本仓库的发布流程暂不提供可用的自动更新清单，请以 Releases 中的安装包为准。
 
-### 看到不顺的段落，直接点译
+## 选择接入方式
 
-![点译结果预览](docs/assets/zotero-real-translation.png)
+| 接入方式              | 登录或配置                                   | Zotero 文献读取 / 注释工具                | 需要了解的限制                                               |
+| --------------------- | -------------------------------------------- | ----------------------------------------- | ------------------------------------------------------------ |
+| 本地 ChatGPT（Codex） | 本机 Codex 已通过 ChatGPT 登录，无需 API Key | 已接入，实际使用仍在验证                  | 使用 Codex 可用模型和额度；依赖本机 Codex App Server         |
+| OpenAI / OpenAI 兼容  | API Key、Base URL、模型 ID                   | 支持，服务端须支持 Responses API 工具调用 | 仅支持 Chat Completions 的服务不适用                         |
+| Anthropic             | API Key、可选 Base URL、模型 ID              | 暂未实现工具循环                          | 可对话并接收已附带的选区或图片，不能依靠工具自动读取整篇 PDF |
 
-开启 `点译` 后，点击 PDF 里的段落，译文会出现在右侧对话里。它不会额外弹一个浮动框挡住 PDF。
+### 本地 ChatGPT（Codex）
 
-如果你之前已经跑过 `全文译`，点译会优先使用缓存译文。也就是说，同一段不会反复请求模型。
+这里复用的是 **Codex 的 ChatGPT 账号登录**。仅在浏览器中登录 ChatGPT，不等于本机 Codex 已登录。
 
-### 想快速进入论文，就先问一个粗问题
+1. 安装 ChatGPT/Codex 桌面应用或 [Codex CLI](https://learn.chatgpt.com/docs/auth)。
+2. 如果尚未登录，在终端运行 `codex login` 并完成登录。可用 `codex login status` 检查状态。
+3. 在插件设置的 **账号与模型** 中点击 **检测本地 ChatGPT 登录**。
+4. 检测到可用模型后，点击 **保存账号配置**。
+5. 回到侧栏，选择 **本地 ChatGPT（Codex）** 和需要的模型。
 
-比如：
+macOS 上会搜索 ChatGPT/Codex 应用内、Homebrew 和 `PATH` 中的 Codex。登录凭据由 Codex 管理；插件通过本机标准输入输出连接 [Codex App Server](https://learn.chatgpt.com/docs/app-server)，不会读取浏览器 Cookie，也不会把 ChatGPT 登录令牌复制到 Zotero 偏好中。
+
+本地模式使用 Codex 默认的推理参数和输出长度。侧栏中的联网开关目前只对 OpenAI Responses 接入生效。
+
+### OpenAI / Anthropic API
+
+在 **账号与模型** 中点击 **+ OpenAI** 或 **+ Anthropic**，填写：
+
+- **API Key**：对应服务的密钥。
+- **Base URL**：使用官方服务时可留空；使用兼容服务时填写其 API 地址。
+- **Models**：该服务实际提供的模型 ID，可保存多个并在侧栏切换。
+- **Max tokens**：输出长度配置。OpenAI 保存测试会探测服务是否接受该参数。
+
+点击 **保存账号配置**。新增或修改的配置会先经过连接检查；检测失败时，按状态提示检查地址、模型、密钥和接口兼容性。
+
+## 阅读一篇论文
+
+打开 PDF，在侧栏选择账号与模型，然后直接输入问题，例如：
 
 ```text
-这篇论文主要解决什么问题？方法和实验分别可靠吗？
+请读取这篇论文，按研究问题、核心方法、实验结果和局限整理，并给出原文依据。
 ```
 
-或者更具体一点：
+模型需要正文时，会通过 Zotero 工具读取 PDF；工具调用记录会显示在对话中。标题和摘要不等于全文，模型表示没有正文时应先排查读取问题。
 
-```text
-请按“问题、方法、实验、局限”整理这篇论文。
-```
+### 快捷按钮
 
-侧栏可以读取当前 Zotero 条目、PDF 文字、选区和注释。你不用先手动复制一堆上下文。
+| 按钮        | 用途                                        | 使用条件                                                            |
+| ----------- | ------------------------------------------- | ------------------------------------------------------------------- |
+| 总结论文    | 发送论文总结提示词，由模型按需读取原文      | 选择可用模型；自动读取 PDF 需要工具支持                             |
+| 🔖 全文重点 | 寻找重要段落，并通过工具写入 PDF 高亮与注释 | OpenAI 或本地 ChatGPT；当前论文的 PDF 已在 Reader 中打开；开启 YOLO |
+| 解释选区    | 解释选中的文字，可生成注释建议              | 先在 PDF 中选中文字；侧栏应显示选区提示                             |
+| 全文译      | 分段翻译论文，并将结果保存到论文对话中      | 配置翻译账号和模型                                                  |
+| 点译        | 点击 PDF 段落，在对话中查看译文             | 开启点译并配置翻译账号和模型                                        |
+| 重译        | 重新发起全文翻译                            | 会产生新的模型请求                                                  |
+| 截图 / 图片 | 把图表或公式附在问题中                      | 所选模型支持图片输入                                                |
+| 打开笔记    | 查看和整理当前论文的笔记                    | 当前对话关联 Zotero 条目                                            |
 
-### 要沉淀下来，就写回 Zotero 笔记
+**YOLO 是写入权限开关。** 普通模式拒绝模型调用需要审批的写入工具；开启后，模型可以按请求写入高亮、注释和笔记，无需逐次确认。读取论文和普通问答不需要开启 YOLO。
 
-读完一轮后，可以让它整理成笔记：
+### 翻译与笔记
 
-```text
-整理成文献笔记：背景、核心方法、实验设置、主要结果、局限、我后续可以追的问题。
-```
+翻译功能面向 **英文译为简体中文**。在设置的 **逐段翻译设置** 中选择 OpenAI 或本地 ChatGPT 账号及模型。翻译配置与对话当前选择的模型可以不同。
 
-确认内容可用后，点 `写入笔记`，结果会追加到当前 Zotero 条目的子笔记里。
+![段落点译示例](docs/assets/zotero-real-translation.png)
 
-## 侧栏里几个按钮是干什么的
+点译会尝试复用已有全文翻译缓存；缓存未命中或结果无效时仍会请求模型。可以在回答下复制 Markdown、保存笔记，或使用注释建议卡片把内容写回 PDF。
 
-![输入区与快捷按钮预览](docs/assets/zotero-real-composer.png)
+## 常见问题
 
-- `总结论文`：让模型先读当前论文，给一个概览。
-- `全文重点`：读完整篇 PDF，整理值得标记的重点。
-- `解释选区`：选中 PDF 文字后，围绕选区提问。
-- `队列`：查看还没处理完，或之前已经完成的任务。
-- `截图` / `图片`：把图表、公式、界面状态一起发给模型。
-- `联网`：需要查当前论文之外的信息时再打开。
+### 能聊天，但模型说「没有 PDF 正文」或「没有 Zotero 工具」
 
-底部也可以切换模型、推理等级和 YOLO 模式。API Key 和模型配置都保存在 Zotero 本地偏好里。
+1. 在 **工具 → 插件** 中确认安装并启用了最新版本。v0.3.3 开始为本地 ChatGPT 接入 Zotero 工具调用。
+2. 更新后完全退出并重启 Zotero，再打开 PDF，确认侧栏标题对应当前论文。
+3. 新建一个对话测试，观察是否出现读取 PDF 的工具记录。重启只是排查步骤，不能保证解决问题。
+4. 如果仍然失败，请在 [Issues](https://github.com/huangkiki/zotero-ai-sidebar/issues) 中提供插件版本、Zotero 版本、系统、接入方式，以及工具记录或错误截图。侧栏有 **调试** 开关，可辅助定位。
 
-## 安装
+本地 ChatGPT 的此类反馈仍在排查中。扫描版 PDF 或无法提取文字的附件，也可能无法提供可用正文。插件没有内置 OCR，正文读取也有长度和范围限制，不能保证任何 PDF 都完整提取。
 
-1. 从 [GitHub Releases](https://github.com/huangkiki/zotero-ai-sidebar/releases/latest) 下载最新版 `zotero-ai-sidebar.xpi`。
-2. 打开 Zotero 7、8、9 或 10.0.2。
-3. 进入 `工具` -> `插件`。
-4. 点击齿轮图标，选择 `从文件安装插件...`。
-5. 选择刚下载的 `.xpi` 文件，按提示重启 Zotero。
-6. 在侧栏设置里配置一个模型预设。
+### 「全文重点」是灰色
 
-目前只发布 `.xpi` 文件，暂时没有 Zotero 自动更新清单。更新时重新安装最新版 `.xpi` 即可。
+检查是否选中了 OpenAI 或本地 ChatGPT 账号、当前论文的 PDF 是否已打开，以及 YOLO 是否开启。将鼠标停在按钮上可查看禁用原因。
 
-## 配置模型
+### 「解释选区」是灰色
 
-### 使用本机 ChatGPT 登录（Codex）
+先用鼠标在 PDF 中选中一段文字。只有检测到文本选区时按钮才可用；选中图片或仅打开 PDF 不会产生文本选区。若侧栏未出现选区提示，请重新选择并检查调试记录。单纯解释选区不需要开启 YOLO。
 
-无需 API Key：在插件设置的「账号与模型」中点击 **检测本地 ChatGPT 登录**，再点击 **保存账号配置**。随后在侧边栏选择「本地 ChatGPT（Codex）」和检测到的模型；逐段翻译也可以选择该账号。
+### 检测不到本地 ChatGPT 登录
 
-此方式通过官方 Codex App Server 复用本机 Codex 的 ChatGPT 登录，使用 Codex 可用模型和额度。请先安装 ChatGPT/Codex 桌面应用或 Codex CLI，并通过 `codex login` 登录。macOS 上会自动搜索应用内、Homebrew 和 PATH 中的 Codex。
+先运行 `codex login status`。未登录时运行 `codex login`；登录过期后完成重新登录，再点击插件中的检测按钮。安装了桌面应用但未检测到 Codex 时，请附上系统及安装方式反馈。
 
-登录凭据由 Codex 管理，插件不会读取浏览器 Cookie 或将登录令牌写入 Zotero 配置。登录过期时，重新运行 `codex login` 后再次检测。本地模式支持问答、翻译和图片输入，支持 Zotero 文献读取和注释工具（写入需要开启 YOLO）；推理参数和输出长度使用 Codex 默认设置。
+### 安装时提示不兼容
 
-### 使用 API Key
+确认选择的是 Release 中的 `.xpi`，并核对 Zotero 版本是否处于声明范围内。不要选择源码 ZIP，也不要把其他插件的安装包改名后安装。
 
-在插件设置里新增一个模型预设：
+## 数据、备份与同步
 
-- 提供商：`openai`、`anthropic`，或 OpenAI 兼容端点。
-- API Key：保存在本地 Zotero 偏好中。
-- Base URL：官方地址，或你自己的中转地址。
-- 模型：填写该端点支持的模型 ID。
-- Max tokens / 工具循环上限：控制输出长度、成本和工具调用次数。
+对话按论文保存在本机，支持多个对话、任务队列、快捷提示词和 JSON 配置备份。插件也支持 WebDAV 同步自己的对话、设置、提示词及部分注释状态；它不替代 Zotero 自身的题录和 PDF 文件同步。
 
-不要把 API Key、Base URL 或私有模型名写进仓库。
+调用模型时，相关提问、选区、图片及工具读取的文献内容会发送到所选服务。本地 ChatGPT 登录方式同样需要联网请求模型，并非离线推理。
 
-## 还能做什么
+API Key 保存在 Zotero 偏好中。配置备份和 WebDAV 设置快照可能包含密钥，请勿公开上传这些文件。ChatGPT 登录令牌由 Codex 单独管理，不包含在插件的模型预设中。
 
-- 读取当前条目元信息、PDF 选区、注释、PDF 片段和 PDF 全文。
-- 全文翻译，并把段落译文存进当前论文的聊天记录。
-- 点译段落，并复用全文翻译缓存。
-- 把回答复制成 Markdown，或写入 Zotero 子笔记。
-- 按自定义颜色规则起草 PDF 注释。
-- 支持截图、图片、快捷提示词和 slash 命令。
-- 支持 arXiv 检索和全文抓取。
-- 支持 WebDAV 同步聊天、提示词、设置和选定注释。
-- 支持 JSON 配置备份与恢复。
+## 开发与发布
 
-## 同步怎么分工
-
-Zotero 自己同步题录和 PDF 文件；这个插件同步的是它额外产生的内容，例如聊天记录、快捷提示词和部分注释状态。
-
-```mermaid
-flowchart TB
-    subgraph Local[本机]
-        Lib[(Zotero 题录 + 注释)]
-        Storage[storage/*.pdf]
-        Plugin[插件状态<br/>对话 / 设置 / 提示词]
-    end
-    subgraph Cloud[云端]
-        ZS[zotero.org<br/>题录同步]
-        WD1[WebDAV<br/>Zotero 文件同步]
-        WD2[WebDAV<br/>插件同步]
-    end
-    Lib <-->|metadata| ZS
-    Storage <-->|PDF 文件| WD1
-    Plugin <-->|push / pull| WD2
-```
-
-这样做的好处是：Zotero 原来的同步方式不需要改，插件自己的阅读现场也可以单独备份。
-
-## 简单说一下工作原理
-
-侧栏会把 Zotero 里的真实操作暴露成本地工具，比如读取当前论文、搜索 PDF、读取全文、写入笔记、起草注释。模型只决定“要不要调用工具、调用哪个工具、参数是什么”，真正的读写都由插件在本机执行。
-
-```mermaid
-flowchart LR
-    subgraph Zotero[Zotero]
-        PDF[PDF 阅读器]
-        Note[笔记]
-        Side[侧栏]
-    end
-    User([读者]) -->|提问 / 选区 / 截图| Side
-    Side -->|工具调用| Tools[本地 Zotero 工具]
-    Tools -->|读 / 写| Zotero
-    Side <-->|HTTPS| Provider[OpenAI / Anthropic /<br/>OpenAI 兼容端点]
-    Side -.插件状态.-> WebDAV[(WebDAV)]
-```
-
-## 开发
-
-安装依赖：
+CI 使用 Node.js 22。克隆仓库后运行：
 
 ```bash
-npm install
-```
-
-运行测试：
-
-```bash
+npm ci
 npm test
-```
-
-构建 XPI：
-
-```bash
 npm run build
 ```
 
-构建产物会写入 `.scaffold/build/`。本地 `.xpi` 文件已被 Git 忽略，不应提交。
+安装包生成在 `.scaffold/build/zotero-ai-sidebar.xpi`。格式和静态检查命令为 `npm run lint:check`；当前仓库仍有历史格式问题，功能测试通过不代表该检查通过。
 
-## 发布
-
-当工作区干净、`package.json` 里的版本号也准备好后：
+**推送代码不会自动更新 Release。** 修改并提交 `package.json` 与 `package-lock.json` 的版本后，在干净工作区中运行：
 
 ```bash
 npm run release:xpi
 ```
 
-脚本会运行测试、构建 XPI、创建并推送匹配的 `v<version>` tag，等待 GitHub Actions，并把 `.scaffold/build/*.xpi` 上传到 GitHub Release。
+该脚本需要 GitHub CLI `gh`，会测试、构建、推送版本标签，并等待 GitHub Actions 的 **Release XPI** 工作流发布安装包。也可以在 GitHub Actions 中手动运行该工作流。详见[发布说明](docs/RELEASE.md)。
 
-更多细节见 [docs/RELEASE.md](docs/RELEASE.md)。
+## 项目与许可证
 
-## 许可证
+本仓库基于 [xuhan-rgb/zotero-ai-sidebar](https://github.com/xuhan-rgb/zotero-ai-sidebar) 继续开发。
 
-AGPL-3.0-or-later。
+采用 [AGPL-3.0-or-later](LICENSE) 许可证。
