@@ -1221,7 +1221,7 @@ function presetRow(doc: Document, preset: ModelPreset): HTMLElement {
         doc,
         "p",
         "zai-pref-help",
-        "复用本机 Codex 的 ChatGPT 登录，使用 Codex 额度。支持文献问答、翻译和图片输入；本地模式不执行插件工具。登录失效时请运行 codex login 后重新检测。",
+        "复用本机 Codex 的 ChatGPT 登录，使用 Codex 额度。支持文献问答、翻译和图片输入；本地模式支持 Zotero 文献读取和注释工具，写入需要开启 YOLO。登录失效时请运行 codex login 后重新检测。",
       ),
     );
   return card;

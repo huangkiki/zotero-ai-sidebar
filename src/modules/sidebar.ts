@@ -1599,7 +1599,9 @@ function renderQuickPrompts(
   state: PanelState,
 ) {
   const promptSettings = loadQuickPromptSettings(zoteroPrefs());
-  const selectedText = getStoredSelectedText(state.itemID);
+  const selectedText =
+    refreshActiveReaderSelection(doc.defaultView, state.itemID, false) ||
+    getStoredSelectedText(state.itemID);
   const preset = selectedChatPreset(state);
   const fullTextHighlightDisabled = fullTextHighlightDisabledReason(
     doc.defaultView,
@@ -2131,8 +2133,9 @@ function fullTextHighlightDisabledReason(
   state: PanelState,
   preset: ModelPreset | null,
 ): string {
-  if (!preset) return "请先配置并选择一个 OpenAI 模型";
-  if (preset.provider !== "openai") return "全文重点 v1 仅支持 OpenAI 工具循环";
+  if (!preset) return "请先配置并选择一个 OpenAI 或本地 ChatGPT 模型";
+  if (preset.provider !== "openai" && preset.provider !== "codex")
+    return "全文重点支持 OpenAI 和本地 ChatGPT（Codex）";
   if (state.agentPermissionMode !== "yolo")
     return "批量写注释需要先开启 YOLO 模式";
   if (!getActiveReaderForItem(win, state.itemID))

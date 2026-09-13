@@ -189,4 +189,4 @@ In the plugin preferences, under Accounts and Models, click **检测本地 ChatG
 
 Install ChatGPT/Codex desktop or Codex CLI and sign in with `codex login` first. The adapter uses the official Codex App Server over stdio, with Codex-managed authentication, model availability, and usage limits. It does not read browser cookies or copy tokens into Zotero preferences. On macOS it discovers app-bundled, Homebrew, and PATH installations.
 
-This mode supports chat, translation, and image input, but does not execute plugin tools. Reasoning and output length use Codex defaults. Existing OpenAI and Anthropic API-key presets remain supported. The compatibility declaration includes Zotero 10.0.2.
+This mode supports chat, translation, and image input, and Zotero retrieval/annotation tools. Annotation writes require the existing YOLO permission mode. Reasoning and output length use Codex defaults. Existing OpenAI and Anthropic API-key presets remain supported. The compatibility declaration includes Zotero 10.0.2.

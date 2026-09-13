@@ -363,7 +363,7 @@ export function functionCallReplayItem(
   };
 }
 
-async function executeToolCall(
+export async function executeToolCall(
   call: ResponseFunctionCallLike,
   toolMap: Map<string, AgentTool>,
   signal: AbortSignal,

@@ -201,3 +201,118 @@ describe("Codex local account adapter", () => {
     expect(f.process.kill).toHaveBeenCalledOnce();
   });
 });
+
+describe("Zotero dynamic tools through Codex", () => {
+  it.each([
+    {
+      name: "retrieves paper text",
+      write: false,
+      mode: "default",
+      shouldRun: true,
+    },
+    {
+      name: "refuses unapproved annotation writes",
+      write: true,
+      mode: "default",
+      shouldRun: false,
+    },
+    {
+      name: "writes annotations in YOLO mode",
+      write: true,
+      mode: "yolo",
+      shouldRun: true,
+    },
+  ] as const)("$name", async ({ write, mode, shouldRun }) => {
+    const f = fakeProcess();
+    const execute = vi.fn(async () => ({
+      output: "paper evidence",
+      summary: "Evidence loaded",
+      context: { planMode: "full_pdf" as const, fullTextChars: 14 },
+    }));
+    let toolReply: any;
+    let declaration: any;
+    vi.mocked(f.process.stdin.write).mockImplementation(async (line) => {
+      const p = JSON.parse(line);
+      if (p.method === "thread/start") declaration = p.params.dynamicTools;
+      const responses: Record<string, unknown> = {
+        initialize: {},
+        "account/read": { account: { type: "chatgpt" } },
+        "thread/start": { thread: { id: "t" } },
+        "turn/start": { turn: { id: "u" } },
+      };
+      if (p.method && p.id) f.send({ id: p.id, result: responses[p.method] });
+      if (p.method === "turn/start")
+        f.send({
+          id: 900,
+          method: "item/tool/call",
+          params: {
+            threadId: "t",
+            turnId: "u",
+            callId: "call1",
+            tool: "zotero_get_full_pdf",
+            arguments: {},
+          },
+        });
+      if (p.id === 900 && p.result) {
+        toolReply = p.result;
+        f.send({
+          method: "item/agentMessage/delta",
+          params: { threadId: "t", turnId: "u", delta: "Done" },
+        });
+        f.send({
+          method: "turn/completed",
+          params: { threadId: "t", turn: { id: "u", status: "completed" } },
+        });
+      }
+    });
+    vi.stubGlobal("ChromeUtils", {
+      importESModule: () => ({
+        Subprocess: {
+          pathSearch: async () => "/fake",
+          call: async () => f.process,
+        },
+      }),
+    });
+    const chunks = [];
+    for await (const c of new CodexProvider().stream(
+      [{ role: "user", content: "Read paper" }],
+      "system",
+      preset,
+      new AbortController().signal,
+      {
+        permissionMode: mode,
+        tools: [
+          {
+            name: "zotero_get_full_pdf",
+            description: "Read paper",
+            parameters: { type: "object", properties: {} },
+            requiresApproval: write,
+            execute,
+          },
+        ],
+      },
+    ))
+      chunks.push(c);
+    expect(declaration[0]).toMatchObject({
+      type: "function",
+      name: "zotero_get_full_pdf",
+      inputSchema: { type: "object" },
+    });
+    expect(execute).toHaveBeenCalledTimes(shouldRun ? 1 : 0);
+    expect(toolReply.success).toBe(shouldRun);
+    expect(toolReply.contentItems[0].type).toBe("inputText");
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: "tool_call",
+        status: shouldRun ? "completed" : "error",
+      }),
+    );
+    if (shouldRun)
+      expect(chunks).toContainEqual(
+        expect.objectContaining({
+          context: { planMode: "full_pdf", fullTextChars: 14 },
+        }),
+      );
+    expect(f.process.kill).toHaveBeenCalledOnce();
+  });
+});

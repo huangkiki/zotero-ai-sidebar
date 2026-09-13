@@ -88,7 +88,7 @@ Zotero AI Sidebar 主要就是把这些动作收回来。你仍然在 Zotero 里
 
 此方式通过官方 Codex App Server 复用本机 Codex 的 ChatGPT 登录，使用 Codex 可用模型和额度。请先安装 ChatGPT/Codex 桌面应用或 Codex CLI，并通过 `codex login` 登录。macOS 上会自动搜索应用内、Homebrew 和 PATH 中的 Codex。
 
-登录凭据由 Codex 管理，插件不会读取浏览器 Cookie 或将登录令牌写入 Zotero 配置。登录过期时，重新运行 `codex login` 后再次检测。本地模式支持问答、翻译和图片输入，不执行插件工具；推理参数和输出长度使用 Codex 默认设置。
+登录凭据由 Codex 管理，插件不会读取浏览器 Cookie 或将登录令牌写入 Zotero 配置。登录过期时，重新运行 `codex login` 后再次检测。本地模式支持问答、翻译和图片输入，支持 Zotero 文献读取和注释工具（写入需要开启 YOLO）；推理参数和输出长度使用 Codex 默认设置。
 
 ### 使用 API Key
 
