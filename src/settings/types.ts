@@ -1,4 +1,4 @@
-export type ProviderKind = 'anthropic' | 'openai';
+export type ProviderKind = 'anthropic' | 'openai' | 'codex';
 export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 export type ReasoningSummary = 'auto' | 'concise' | 'detailed' | 'none';
 export type AgentPermissionMode = 'default' | 'yolo';
@@ -29,16 +29,19 @@ export interface ModelPreset {
 }
 
 export const DEFAULT_BASE_URLS: Record<ProviderKind, string> = {
+  codex: '',
   anthropic: '',
   openai: '',
 };
 
 export const DEFAULT_MODELS: Record<ProviderKind, string> = {
+  codex: '',
   anthropic: '',
   openai: '',
 };
 
 export const MODEL_SUGGESTIONS: Record<ProviderKind, string[]> = {
+  codex: [],
   anthropic: [],
   openai: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2'],
 };
@@ -111,3 +114,7 @@ export const DEFAULT_TRANSLATE_SETTINGS: TranslateSettings = {
   prevSentenceKey: 'Shift+Enter',
   nextSentenceKey: 'Enter',
 };
+
+export function hasPresetAuth(preset: ModelPreset | null | undefined): boolean {
+  return !!preset && (preset.provider === 'codex' || !!preset.apiKey.trim());
+}

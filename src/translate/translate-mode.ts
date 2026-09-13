@@ -896,7 +896,9 @@ function pickOpenAiPreset(
   presets: ModelPreset[],
   desiredId: string,
 ): ModelPreset | null {
-  const openai = presets.filter((p) => p.provider === "openai");
+  const openai = presets.filter(
+    (p) => p.provider === "openai" || p.provider === "codex",
+  );
   if (!openai.length) return null;
   return openai.find((p) => p.id === desiredId) ?? openai[0]!;
 }

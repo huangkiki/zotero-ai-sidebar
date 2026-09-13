@@ -182,3 +182,11 @@ More details are in [docs/RELEASE.md](docs/RELEASE.md).
 ## License
 
 AGPL-3.0-or-later.
+
+## Local ChatGPT sign-in through Codex
+
+In the plugin preferences, under Accounts and Models, click **检测本地 ChatGPT 登录** (Detect local ChatGPT login), then **保存账号配置** (Save account configuration). Select the local ChatGPT preset and a discovered model in the sidebar. The same preset is available for paragraph translation.
+
+Install ChatGPT/Codex desktop or Codex CLI and sign in with `codex login` first. The adapter uses the official Codex App Server over stdio, with Codex-managed authentication, model availability, and usage limits. It does not read browser cookies or copy tokens into Zotero preferences. On macOS it discovers app-bundled, Homebrew, and PATH installations.
+
+This mode supports chat, translation, and image input, but does not execute plugin tools. Reasoning and output length use Codex defaults. Existing OpenAI and Anthropic API-key presets remain supported. The compatibility declaration includes Zotero 10.0.2.

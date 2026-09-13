@@ -1,3 +1,5 @@
+import { detectCodex } from "../providers/codex";
+import { hasPresetAuth } from "../settings/types";
 import { buildContext } from "../context/builder";
 import {
   createZoteroAgentToolSession,
@@ -690,7 +692,7 @@ function canStartFullTextTranslation(
   const presets = loadPresets(prefs);
   const preset = pickTranslatePreset(presets, settings.presetId);
   const model = settings.model || preset?.model || "";
-  if (!preset || !model || !preset.apiKey) {
+  if (!preset || !model || !hasPresetAuth(preset)) {
     flashButton(trigger, "先配置");
     openAddonPreferences(mount.ownerDocument!);
     return false;
@@ -1212,12 +1214,16 @@ function renderPresetEditor(
   const box = el(doc, "div", "preset-edit native-preset-edit");
 
   const provider = selectEl(doc, [
+    ["codex", "本地 ChatGPT（Codex）"],
     ["openai", "OpenAI 兼容"],
     ["anthropic", "Anthropic"],
   ]);
   provider.value = draft.provider;
   const label = inputEl(doc, draft.label);
   const apiKey = inputEl(doc, draft.apiKey, "password");
+  apiKey.disabled = draft.provider === "codex";
+  apiKey.placeholder =
+    draft.provider === "codex" ? "复用本地 ChatGPT 登录" : "";
   const baseUrl = inputEl(
     doc,
     draft.baseUrl || DEFAULT_BASE_URLS[draft.provider],
@@ -1419,6 +1425,8 @@ function renderPresetEditor(
 
   provider.addEventListener("change", () => {
     const nextProvider = provider.value as ProviderKind;
+    apiKey.disabled = nextProvider === "codex";
+    baseUrl.disabled = nextProvider === "codex";
     label.value =
       label.value || (nextProvider === "anthropic" ? "Claude" : "GPT");
     if (
@@ -2177,7 +2185,9 @@ function renderInput(doc: Document, mount: HTMLElement, state: PanelState) {
   const preset = selectedChatPreset(state);
   const queueAllowed = queueWhileSendingEnabled(state);
   const canSubmit =
-    !!preset?.apiKey && !!preset.model && (!state.sending || queueAllowed);
+    hasPresetAuth(preset) &&
+    !!preset?.model &&
+    (!state.sending || queueAllowed);
   input.placeholder = preset
     ? state.sending
       ? queueAllowed
@@ -2293,7 +2303,7 @@ function renderInput(doc: Document, mount: HTMLElement, state: PanelState) {
   send.className = state.sending ? "send-btn send-queue-btn" : "send-btn";
   send.disabled = !canSubmit;
   send.title = preset
-    ? !preset.apiKey || !preset.model
+    ? !hasPresetAuth(preset) || !preset.model
       ? "请先填写 API Key 和 Model ID"
       : state.sending
         ? "加入队列：当前回复结束后按顺序执行"
@@ -3518,7 +3528,7 @@ async function sendMessage(
   if ((!baseContent && images.length === 0) || !preset) return;
   await ensureHistoryLoaded(mount, state);
   if (!isCachedPanelState(mount, state)) return;
-  if (!preset.apiKey || !preset.model) {
+  if (!hasPresetAuth(preset) || !preset.model) {
     openAddonPreferences(mount.ownerDocument!);
     return;
   }
@@ -3636,7 +3646,7 @@ async function translateSelectedPapersFullText(
   const presets = loadPresets(prefs);
   const preset = pickTranslatePreset(presets, settings.presetId);
   const model = settings.model || preset?.model || "";
-  if (!preset || !model || !preset.apiKey) {
+  if (!preset || !model || !hasPresetAuth(preset)) {
     flashButton(trigger, "先配置");
     openAddonPreferences(mount.ownerDocument!);
     return;
@@ -8379,7 +8389,7 @@ function configuredPresets(state: PanelState): ModelPreset[] {
 }
 
 function isPresetConfigured(preset: ModelPreset): boolean {
-  return !!preset.apiKey.trim() && !!preset.model.trim();
+  return hasPresetAuth(preset) && !!preset?.model.trim();
 }
 
 function agentPermissionMode(
@@ -8456,7 +8466,22 @@ async function testPresetConnectivity(
   preset: ModelPreset,
   signal: AbortSignal,
 ): Promise<{ message: string; preset: ModelPreset }> {
-  if (!preset.apiKey.trim()) throw new Error("API Key 为空");
+  if (preset.provider === "codex") {
+    const info = await detectCodex(signal);
+    if (
+      !info.models.some(
+        (m) => m.model === preset.model || m.id === preset.model,
+      )
+    )
+      throw new Error(
+        "该模型不在本地 ChatGPT 可用模型列表中，请重新检测登录。 ",
+      );
+    return {
+      preset,
+      message: `已识别 ChatGPT 登录${info.account.planType ? `（${info.account.planType}）` : ""}，模型可用：${preset.model}`,
+    };
+  }
+  if (!hasPresetAuth(preset)) throw new Error("API Key 为空");
   if (!preset.model.trim()) throw new Error("Model 为空");
   if (preset.provider === "openai") {
     return testOpenAIConnectivity(preset, signal);
@@ -8625,7 +8650,7 @@ function sanitizedTestError(err: unknown, apiKey: string): string {
 
 function updateSendControls(mount: HTMLElement, state: PanelState) {
   const preset = selectedChatPreset(state);
-  const ready = !!preset?.apiKey && !!preset.model && !state.sending;
+  const ready = hasPresetAuth(preset) && !!preset?.model && !state.sending;
   const textarea = mount.querySelector(
     ".input-row textarea",
   ) as HTMLTextAreaElement | null;

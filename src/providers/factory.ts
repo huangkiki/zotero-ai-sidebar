@@ -1,3 +1,4 @@
+import { CodexProvider } from './codex';
 import type { Provider } from './types';
 import type { ModelPreset } from '../settings/types';
 import { AnthropicProvider } from './anthropic';
@@ -10,6 +11,8 @@ import { OpenAIProvider } from './openai';
 // per stream() with the preset's apiKey/baseUrl, so caching gains nothing.
 export function getProvider(preset: ModelPreset): Provider {
   switch (preset.provider) {
+    case 'codex':
+      return new CodexProvider();
     case 'anthropic':
       return new AnthropicProvider();
     case 'openai':

@@ -1,3 +1,4 @@
+import { CodexProvider } from "../providers/codex";
 import { OpenAIProvider } from "../providers/openai";
 import type { Message, StreamChunk } from "../providers/types";
 import type {
@@ -178,7 +179,7 @@ async function collectTranslation(
   preset: ModelPreset,
   signal: AbortSignal,
 ): Promise<TranslationResult> {
-  const provider = new OpenAIProvider();
+  const provider = preset.provider === "codex" ? new CodexProvider() : new OpenAIProvider();
   let text = "";
   let usage: TranslationUsage | undefined;
   try {

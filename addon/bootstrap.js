@@ -26,6 +26,7 @@ async function startup({ id, version, resourceURI, rootURI }, reason) {
    */
   const window = Zotero.getMainWindow();
   const ctx = {
+    ChromeUtils,
     rootURI,
     window,
     document: window?.document,
@@ -71,6 +72,7 @@ async function onMainWindowUnload({ window }, reason) {
 }
 
 async function shutdown({ id, version, resourceURI, rootURI }, reason) {
+  Zotero.__addonInstance__?.hooks.stopCodexSessions();
   if (reason === APP_SHUTDOWN) {
     return;
   }

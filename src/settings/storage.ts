@@ -70,15 +70,15 @@ export function zoteroPrefs(): PrefsStore {
 function normalizePreset(value: unknown): ModelPreset | null {
   if (!value || typeof value !== 'object') return null;
   const preset = value as Partial<ModelPreset>;
-  if (preset.provider !== 'openai' && preset.provider !== 'anthropic') return null;
+  if (preset.provider !== 'openai' && preset.provider !== 'anthropic' && preset.provider !== 'codex') return null;
   const provider = preset.provider as ProviderKind;
   const { model, models } = normalizeModels(provider, preset.model, preset.models);
   return {
     id: String(preset.id || `preset-${Date.now()}`),
     label: String(preset.label || (provider === 'anthropic' ? 'Claude' : 'GPT')),
     provider,
-    apiKey: String(preset.apiKey || ''),
-    baseUrl: String(preset.baseUrl || DEFAULT_BASE_URLS[provider]),
+    apiKey: provider === 'codex' ? '' : String(preset.apiKey || ''),
+    baseUrl: provider === 'codex' ? '' : String(preset.baseUrl || DEFAULT_BASE_URLS[provider]),
     model,
     models,
     maxTokens: Number(preset.maxTokens || 8192),

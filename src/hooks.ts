@@ -1,3 +1,5 @@
+import { detectCodex, stopCodexSessions } from "./providers/codex";
+import { hasPresetAuth } from "./settings/types";
 import { initLocale } from "./utils/locale";
 import { createZToolkit } from "./utils/ztoolkit";
 import {
@@ -124,6 +126,7 @@ async function onMainWindowUnload(win: Window): Promise<void> {
 }
 
 function onShutdown(): void {
+  stopCodexSessions();
   unregisterPreferences();
   ztoolkit.unregisterAll();
   unregisterSidebar();
@@ -162,6 +165,64 @@ function setupPreferencesPane(win: Window): void {
 
   if (root.dataset.bound === "true") return;
   root.dataset.bound = "true";
+
+  byID<HTMLButtonElement>(doc, "zai-preset-add-codex")?.addEventListener(
+    "click",
+    async () => {
+      const button = byID<HTMLButtonElement>(doc, "zai-preset-add-codex");
+      if (button) button.disabled = true;
+      setStatus(
+        doc,
+        "zai-preset-status",
+        "正在检测本地 ChatGPT 登录和可用模型…",
+      );
+      try {
+        const { account, models } = await detectCodex();
+        const available = models.map((m) => m.model || m.id);
+        if (!available.length) throw new Error("该账号没有可用的 Codex 模型。");
+        const presets = readPresetControls(doc);
+        const prior = presets.find((p) => p.provider === "codex");
+        const preset: ModelPreset = {
+          ...makePreset("codex"),
+          ...prior,
+          provider: "codex",
+          label: "本地 ChatGPT（Codex）",
+          apiKey: "",
+          baseUrl: "",
+          model:
+            prior && available.includes(prior.model)
+              ? prior.model
+              : models.find((m) => m.isDefault)?.model || available[0],
+          models: available,
+        };
+        preset.models = [
+          preset.model,
+          ...available.filter((m) => m !== preset.model),
+        ];
+        renderPresetRows(
+          doc,
+          prior
+            ? presets.map((p) => (p.id === prior.id ? preset : p))
+            : [...presets, preset],
+        );
+        openPresetRow(doc, preset.id);
+        setStatus(
+          doc,
+          "zai-preset-status",
+          `已识别 ChatGPT 登录${account.planType ? `（${account.planType}）` : ""}，检测到 ${available.length} 个模型。点击保存账号配置生效。`,
+        );
+      } catch (e) {
+        setStatus(
+          doc,
+          "zai-preset-status",
+          e instanceof Error ? e.message : String(e),
+          true,
+        );
+      } finally {
+        if (button) button.disabled = false;
+      }
+    },
+  );
 
   byID<HTMLButtonElement>(doc, "zai-preset-add-openai")?.addEventListener(
     "click",
@@ -888,7 +949,7 @@ function readTranslateSettingsControls(doc: Document): TranslateSettings {
 
 function translateOpenAiPresets(): ModelPreset[] {
   return loadPresets(zoteroPrefs()).filter(
-    (preset) => preset.provider === "openai",
+    (preset) => preset.provider === "openai" || preset.provider === "codex",
   );
 }
 
@@ -1072,7 +1133,7 @@ function presetRow(doc: Document, preset: ModelPreset): HTMLElement {
   const card = doc.createElement("details");
   card.className = "zai-subcard zai-preset-row";
   card.dataset.id = preset.id;
-  card.open = !preset.apiKey || !preset.model;
+  card.open = !hasPresetAuth(preset) || !preset.model;
   const title = doc.createElement("summary");
   title.className = "zai-subcard-title zai-preset-summary";
   const main = el(doc, "span", "zai-preset-summary-main");
@@ -1092,6 +1153,7 @@ function presetRow(doc: Document, preset: ModelPreset): HTMLElement {
   const provider = select(
     doc,
     [
+      ["codex", "本地 ChatGPT（Codex）"],
       ["openai", "OpenAI 兼容"],
       ["anthropic", "Anthropic"],
     ],
@@ -1119,6 +1181,11 @@ function presetRow(doc: Document, preset: ModelPreset): HTMLElement {
   reasoningSummary.dataset.field = "reasoningSummary";
 
   const syncProvider = () => {
+    const local = provider.value === "codex";
+    apiKey.disabled = local;
+    baseUrl.disabled = local;
+    apiKey.placeholder = local ? "复用本机 Codex 登录，无需 API Key" : "";
+    baseUrl.placeholder = local ? "由本机 Codex 管理" : "";
     const isOpenAI = provider.value === "openai";
     reasoningSummary.disabled = !isOpenAI;
   };
@@ -1148,6 +1215,15 @@ function presetRow(doc: Document, preset: ModelPreset): HTMLElement {
       ["Reasoning Summary", reasoningSummary],
     ]),
   );
+  if (preset.provider === "codex")
+    card.append(
+      el(
+        doc,
+        "p",
+        "zai-pref-help",
+        "复用本机 Codex 的 ChatGPT 登录，使用 Codex 额度。支持文献问答、翻译和图片输入；本地模式不执行插件工具。登录失效时请运行 codex login 后重新检测。",
+      ),
+    );
   return card;
 }
 
@@ -1288,7 +1364,11 @@ function readPresetControls(doc: Document): ModelPreset[] {
   return Array.from(doc.querySelectorAll(".zai-preset-row")).map((row) => {
     const card = row as HTMLElement;
     const provider =
-      controlValue(card, "provider") === "anthropic" ? "anthropic" : "openai";
+      controlValue(card, "provider") === "codex"
+        ? "codex"
+        : controlValue(card, "provider") === "anthropic"
+          ? "anthropic"
+          : "openai";
     const models = splitList(controlValue(card, "models"));
     const fallbackModel = DEFAULT_MODELS[provider];
     const model = models[0] || fallbackModel;
@@ -1331,7 +1411,7 @@ async function savePresetControlsWithConnectivity(
       preset.apiKey || preset.baseUrl || preset.model || preset.models?.length,
   );
   for (const preset of rawPresets) {
-    if (!preset.apiKey.trim()) {
+    if (!hasPresetAuth(preset)) {
       setStatus(
         doc,
         "zai-preset-status",
@@ -1462,6 +1542,21 @@ function presetConnectivitySignature(preset: ModelPreset): string {
 async function testPresetConnectivity(
   preset: ModelPreset,
 ): Promise<{ message: string; preset: ModelPreset }> {
+  if (preset.provider === "codex") {
+    const info = await detectCodex();
+    if (
+      !info.models.some(
+        (m) => m.model === preset.model || m.id === preset.model,
+      )
+    )
+      throw new Error(
+        "该模型不在本地 ChatGPT 可用模型列表中，请重新检测登录。 ",
+      );
+    return {
+      preset,
+      message: `已识别 ChatGPT 登录${info.account.planType ? `（${info.account.planType}）` : ""}，模型可用：${preset.model}`,
+    };
+  }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30_000);
   try {
@@ -2149,6 +2244,7 @@ function onShortcuts(_type: string) {}
 function onDialogEvents(_type: string) {}
 
 export default {
+  stopCodexSessions,
   onStartup,
   onShutdown,
   onMainWindowLoad,
