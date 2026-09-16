@@ -19,6 +19,8 @@ import {
 } from "../context/message-format";
 import { DEFAULT_CONTEXT_POLICY } from "../context/policy";
 import { createPdfLocator } from "../context/pdf-locator";
+import { observeLocalizedUi, uiText } from "../i18n";
+import { currentUiLanguage } from "../settings/language";
 import { extractPdfRange, searchPdfPassages } from "../context/retrieval";
 import { zoteroContextSource } from "../context/zotero-source";
 import { getProvider } from "../providers/factory";
@@ -167,6 +169,7 @@ interface WindowSidebarState {
   promptShortcutCleanup?: () => void;
   readerTranslateToolbarCleanup?: () => void;
   initialRefreshCleanup?: () => void;
+  localeCleanup?: () => void;
   lastCopySelection?: { text: string; updatedAt: number };
   activeConversationItemID?: number | null;
   toggleButton?: Element;
@@ -1184,13 +1187,17 @@ function openAddonPreferences(doc: Document): void {
       zotero.PreferencePanes.open(paneID);
       return;
     }
-  } catch {}
+  } catch {
+    // Fall through to Zotero's legacy preference-opening API.
+  }
   try {
     if (typeof zotero.Utilities?.Internal?.openPreferences === "function") {
       zotero.Utilities.Internal.openPreferences(paneID);
       return;
     }
-  } catch {}
+  } catch {
+    // Fall through to the preferences dialog as the final compatibility path.
+  }
   doc.defaultView?.openDialog(
     "chrome://zotero/content/preferences/preferences.xhtml",
     "zotero-prefs",
@@ -2163,9 +2170,11 @@ function renderMessages(doc: Document, mount: HTMLElement, state: PanelState) {
         doc,
         "div",
         "bubble-body",
-        itemBound
-          ? "已就绪。这个对话已绑定到当前论文，可以直接询问 Zotero 条目或 PDF 内容。"
-          : "已就绪。这个对话未绑定论文；选中论文后点输入框上方的 + 可为该论文新建对话。",
+        uiText(
+          itemBound
+            ? "已就绪。这个对话已绑定到当前论文，可以直接询问 Zotero 条目或 PDF 内容。"
+            : "已就绪。这个对话未绑定论文；选中论文后点输入框上方的 + 可为该论文新建对话。",
+        ),
       ),
     );
     messages.append(hint);
@@ -3718,7 +3727,7 @@ async function translateSelectedPapersFullText(
     markMessageTaskCompleted(userMessage);
   } catch (err) {
     if (isAbortError(err) || controller.signal.aborted) {
-      assistant.content += "\n\n已取消全文翻译。";
+      assistant.content += uiText("\n\n已取消全文翻译。");
       markMessageTaskCancelled(userMessage);
     } else {
       const message = errorMessage(err);
@@ -3778,9 +3787,9 @@ async function runFullTextTranslationBatch(
   for (let paperIndex = 0; paperIndex < itemIDs.length; paperIndex++) {
     throwIfAborted(signal);
     const itemID = itemIDs[paperIndex]!;
-    const title = paperTitle(itemID) || `论文 ${paperIndex + 1}`;
+    const title = paperTitle(itemID) || uiText(`论文 ${paperIndex + 1}`);
     state.activeAssistantStage = "building_context";
-    state.activeAssistantDetail = `读取全文：${title}`;
+    state.activeAssistantDetail = uiText(`读取全文：${title}`);
     appendAssistantSection(
       assistant,
       itemIDs.length > 1 ? `# ${paperIndex + 1}. ${title}` : `# ${title}`,
@@ -3789,7 +3798,7 @@ async function runFullTextTranslationBatch(
 
     const paragraphs = await paragraphsForTranslation(win, itemID);
     if (!paragraphs.length) {
-      assistant.content += "\n\n未读取到可翻译的 PDF 全文。";
+      assistant.content += uiText("\n\n未读取到可翻译的 PDF 全文。");
       updateMessageBubble(mount, state, assistantIndex, assistant);
       continue;
     }
@@ -3802,11 +3811,15 @@ async function runFullTextTranslationBatch(
         model,
         thinking,
       });
-      assistant.content += `\n\n已清除本篇 ${deleted} 条段落翻译缓存，将重新翻译。`;
+      assistant.content += uiText(
+        `\n\n已清除本篇 ${deleted} 条段落翻译缓存，将重新翻译。`,
+      );
       updateMessageBubble(mount, state, assistantIndex, assistant);
     }
 
-    assistant.content += `\n\n共 ${paragraphs.length} 段，开始翻译。`;
+    assistant.content += uiText(
+      `\n\n共 ${paragraphs.length} 段，开始翻译。`,
+    );
     updateMessageBubble(mount, state, assistantIndex, assistant);
 
     let skippedCached = 0;
@@ -3815,7 +3828,9 @@ async function runFullTextTranslationBatch(
       throwIfAborted(signal);
       const paragraph = paragraphs[index]!;
       state.activeAssistantStage = "writing";
-      state.activeAssistantDetail = `翻译 ${paperIndex + 1}/${itemIDs.length} · ${index + 1}/${paragraphs.length}`;
+      state.activeAssistantDetail = uiText(
+        `翻译 ${paperIndex + 1}/${itemIDs.length} · ${index + 1}/${paragraphs.length}`,
+      );
       let translated: TranslateParagraphResult;
       try {
         translated = await translateParagraphWithCache({
@@ -3831,20 +3846,21 @@ async function runFullTextTranslationBatch(
         const message = errorMessage(err);
         if (!isRecoverableFullTextParagraphError(message)) throw err;
         failedParagraphs++;
-        assistant.content += `\n\n## 第 ${index + 1} 段\n\n[Error] ${message}\n\n原文：${contentPreview(paragraph, 180)}\n\n已跳过本段，继续翻译后续段落。`;
+        assistant.content += `\n\n## ${uiText(`第 ${index + 1} 段`)}\n\n[Error] ${message}\n\n${uiText("原文：")}${contentPreview(paragraph, 180)}\n\n${uiText("已跳过本段，继续翻译后续段落。")}`;
         updateMessageBubble(mount, state, assistantIndex, assistant);
         continue;
       }
       if (translated.cached) {
         skippedCached++;
         if (skippedCached === 1) {
-          assistant.content +=
-            "\n\n已跳过前面已翻译缓存段落，继续翻译未完成部分。";
+          assistant.content += uiText(
+            "\n\n已跳过前面已翻译缓存段落，继续翻译未完成部分。",
+          );
           updateMessageBubble(mount, state, assistantIndex, assistant);
         }
         continue;
       }
-      assistant.content += `\n\n## 第 ${index + 1} 段\n\n${translated.text}`;
+      assistant.content += `\n\n## ${uiText(`第 ${index + 1} 段`)}\n\n${translated.text}`;
       translatedCount++;
       if (translatedCount % FULL_TRANSLATE_RENDER_EVERY === 0) {
         updateMessageBubble(mount, state, assistantIndex, assistant);
@@ -3854,12 +3870,15 @@ async function runFullTextTranslationBatch(
       }
     }
     if (failedParagraphs > 0) {
-      assistant.content += `\n\n本篇有 ${failedParagraphs} 段模型没有返回中文译文，已跳过并继续处理。`;
+      assistant.content += uiText(
+        `\n\n本篇有 ${failedParagraphs} 段模型没有返回中文译文，已跳过并继续处理。`,
+      );
       updateMessageBubble(mount, state, assistantIndex, assistant);
     }
     if (skippedCached === paragraphs.length) {
-      assistant.content +=
-        "\n\n本篇所有段落都已有翻译缓存；可用「点译」点击 PDF 段落查看。";
+      assistant.content += uiText(
+        "\n\n本篇所有段落都已有翻译缓存；可用「点译」点击 PDF 段落查看。",
+      );
       updateMessageBubble(mount, state, assistantIndex, assistant);
     }
   }
@@ -4526,7 +4545,13 @@ function contextAwareSystemPrompt(
   systemPrompt: string,
   contextLedger: string,
 ): string {
-  const toolManual = toolManualWithConfiguredGuides();
+  const languageInstruction =
+    currentUiLanguage() === "en-US"
+      ? "Write all user-facing responses in natural, idiomatic English for a native English speaker unless the user explicitly requests another language."
+      : "";
+  const toolManual = [languageInstruction, toolManualWithConfiguredGuides()]
+    .filter(Boolean)
+    .join("\n\n");
   return `${systemPrompt}\n\n${toolManual}\n\nThe ledger below records previous context metadata that may no longer be visible. Use it as a planning map for tool choice, including source identity, ranges, and whether prior snippets can be reloaded with chat_get_previous_context. Do not treat the ledger itself as source text. The model decides whether to answer from current conversation, reload prior chat context, call targeted tools, or fetch fresh text.\n\nPreviously sent context ledger (not currently attached):\n${contextLedger}`;
 }
 
@@ -5733,7 +5758,7 @@ function normalizeSelectedTextLine(line: string): string {
 }
 
 function selectedTextBlockKind(line: string): SelectedTextBlockKind {
-  if (/^(?:\d{1,3}[\).]|\([a-zA-Z0-9]\)|[a-zA-Z]\))\s+/.test(line)) {
+  if (/^(?:\d{1,3}[).]|\([a-zA-Z0-9]\)|[a-zA-Z]\))\s+/.test(line)) {
     return "list";
   }
   if (/^(?:[A-Z]\.|[IVXLC]+\.|Fig(?:ure)?\.?\s*\d+[:.])\s+/.test(line)) {
@@ -8865,6 +8890,11 @@ export function registerSidebarForWindow(win: Window) {
     noteSplitter,
     noteMount,
   };
+  const localeCleanups = [
+    observeLocalizedUi(mount),
+    observeLocalizedUi(noteMount),
+  ];
+  state.localeCleanup = () => localeCleanups.forEach((cleanup) => cleanup());
   splitter.addEventListener("command", () => updateToggleButton(state));
   splitter.addEventListener("mouseup", () => updateToggleButton(state));
   windowSidebars.set(win, state);
@@ -8914,8 +8944,10 @@ function installReaderTranslateToolbar(
       const translateBtn = doc.createElement("button");
       translateBtn.type = "button";
       translateBtn.className = "zai-reader-full-translate-button";
-      translateBtn.textContent = "全文译";
-      translateBtn.title = "一键全文逐段翻译，翻译参数在插件设置中配置";
+      translateBtn.textContent = uiText("全文译");
+      translateBtn.title = uiText(
+        "一键全文逐段翻译，翻译参数在插件设置中配置",
+      );
       translateBtn.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -8934,9 +8966,10 @@ function installReaderTranslateToolbar(
       const retranslateBtn = doc.createElement("button");
       retranslateBtn.type = "button";
       retranslateBtn.className = "zai-reader-full-translate-button";
-      retranslateBtn.textContent = "重译";
-      retranslateBtn.title =
-        "清除当前论文段落翻译缓存后重新全文翻译，翻译参数在插件设置中配置";
+      retranslateBtn.textContent = uiText("重译");
+      retranslateBtn.title = uiText(
+        "清除当前论文段落翻译缓存后重新全文翻译，翻译参数在插件设置中配置",
+      );
       retranslateBtn.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -8962,8 +8995,10 @@ function installReaderTranslateToolbar(
       const pointTranslateBtn = doc.createElement("button");
       pointTranslateBtn.type = "button";
       pointTranslateBtn.className = "zai-reader-translate-button";
-      pointTranslateBtn.textContent = "点译";
-      pointTranslateBtn.title = "开启后点击 PDF 段落显示译文，不写入注释";
+      pointTranslateBtn.textContent = uiText("点译");
+      pointTranslateBtn.title = uiText(
+        "开启后点击 PDF 段落显示译文，不写入注释",
+      );
       pointTranslateBtn.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -10020,6 +10055,8 @@ export function unregisterSidebarForWindow(win: Window) {
   state.readerTranslateToolbarCleanup = undefined;
   state.initialRefreshCleanup?.();
   state.initialRefreshCleanup = undefined;
+  state.localeCleanup?.();
+  state.localeCleanup = undefined;
   state.noteColumn.remove();
   state.toggleButton?.remove();
   state.floatingButton?.remove();
@@ -10162,7 +10199,7 @@ function installToggleButton(win: Window, state: WindowSidebarState) {
   button.id = TOGGLE_BUTTON_ID;
   button.setAttribute("class", "zotero-tb-button zai-toggle-button");
   button.setAttribute("label", "AI");
-  button.setAttribute("tooltiptext", "显示/隐藏 AI 对话");
+  button.setAttribute("tooltiptext", uiText("显示/隐藏 AI 对话"));
   const icon = `chrome://${addon.data.config.addonRef}/content/icons/ai-chat.svg`;
   button.setAttribute("image", icon);
   button.setAttribute("style", `list-style-image: url("${icon}");`);
@@ -10186,7 +10223,7 @@ function installFloatingToggle(win: Window, state: WindowSidebarState) {
   button.id = FLOATING_TOGGLE_ID;
   button.className = "zai-floating-toggle";
   button.type = "button";
-  button.title = "打开/隐藏 AI 对话";
+  button.title = uiText("打开/隐藏 AI 对话");
 
   const icon = doc.createElementNS(XHTML_NS, "img") as HTMLImageElement;
   icon.src = `chrome://${addon.data.config.addonRef}/content/icons/ai-chat.svg`;
@@ -10265,7 +10302,7 @@ function updateToggleButton(state: WindowSidebarState) {
   const collapsed = isColumnCollapsed(state);
   for (const button of [state.toggleButton, state.floatingButton]) {
     if (!button) continue;
-    const tooltip = collapsed ? "打开 AI 对话" : "隐藏 AI 对话";
+    const tooltip = uiText(collapsed ? "打开 AI 对话" : "隐藏 AI 对话");
     button.setAttribute("tooltiptext", tooltip);
     button.setAttribute("title", tooltip);
     button.setAttribute("aria-pressed", collapsed ? "false" : "true");
@@ -10456,7 +10493,7 @@ function setTranslateButtonLabel(btn: HTMLElement, enabled: boolean): void {
   ) {
     return;
   }
-  btn.textContent = enabled ? "译✓" : "译";
+  btn.textContent = uiText(enabled ? "译✓" : "译");
 }
 
 declare global {

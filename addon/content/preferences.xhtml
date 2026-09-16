@@ -115,6 +115,26 @@
     </html:style>
 
     <html:div class="zai-pref-card">
+      <html:div class="zai-pref-title">界面语言</html:div>
+      <html:p class="zai-pref-help">
+        切换后立即刷新插件界面；不会翻译论文内容、聊天消息、笔记或自定义提示词。
+      </html:p>
+      <html:div class="zai-pref-grid">
+        <html:label for="zai-interface-language">界面语言</html:label>
+        <html:select id="zai-interface-language">
+          <html:option value="zh-CN">中文</html:option>
+          <html:option value="en-US">English</html:option>
+        </html:select>
+      </html:div>
+      <html:div class="zai-pref-actions">
+        <html:span
+          id="zai-language-status"
+          class="zai-pref-status"
+        ></html:span>
+      </html:div>
+    </html:div>
+
+    <html:div class="zai-pref-card">
       <html:div class="zai-pref-title">账号与模型</html:div>
       <html:p class="zai-pref-help">
         在 Zotero 设置里统一管理 Provider、API Key、Base
@@ -342,7 +362,7 @@
       <html:div class="zai-pref-grid">
         <html:label for="zai-tool-web-search">Web search 模式</html:label>
         <html:select id="zai-tool-web-search">
-          <html:option value="disabled">关闭</html:option>
+          <html:option value="disabled">禁用</html:option>
           <html:option value="cached">Cached - OpenAI 托管搜索</html:option>
           <html:option value="live"
             >Live - OpenAI 托管搜索，高上下文</html:option

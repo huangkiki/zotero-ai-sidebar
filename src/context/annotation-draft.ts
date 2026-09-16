@@ -17,9 +17,12 @@
 // The header marker is fixed Chinese (`建议注释`) because the assistant
 // system prompt is Chinese-first; if you change the marker you must also
 // update the prompt where it instructs the model to emit it.
-const SUGGESTION_HEADER = /^[ \t]*建议注释[：:][ \t]*(.*)$/m;
-const COLOR_LINE = /^[ \t]*(?:建议颜色|颜色|color)[：:][^\n#]*(#[0-9a-fA-F]{6})\b/i;
-const COLOR_INLINE = /[ \t]*(?:建议颜色|颜色|color)[：:][^\n#]*(#[0-9a-fA-F]{6})\b/i;
+const SUGGESTION_HEADER =
+  /^[ \t]*(?:建议注释|Suggested annotation)[：:][ \t]*(.*)$/im;
+const COLOR_LINE =
+  /^[ \t]*(?:建议颜色|颜色|suggested color|color)[：:][^\n#]*(#[0-9a-fA-F]{6})\b/i;
+const COLOR_INLINE =
+  /[ \t]*(?:建议颜色|颜色|suggested color|color)[：:][^\n#]*(#[0-9a-fA-F]{6})\b/i;
 const BULLET_LINE = /^[ \t]*[-•·*][ \t]+(.+)$/;
 
 export interface ParsedAnnotationSuggestion {
@@ -48,7 +51,7 @@ export function parseAnnotationSuggestion(content: string): ParsedAnnotationSugg
 // suggestion mid-output and a refined one near the end. We always promote
 // the most recent occurrence so revisions overwrite drafts.
 function findLastHeaderIndex(text: string): number {
-  const re = /^[ \t]*建议注释[：:][ \t]*/gm;
+  const re = /^[ \t]*(?:建议注释|Suggested annotation)[：:][ \t]*/gim;
   let last = -1;
   let match: RegExpExecArray | null;
   while ((match = re.exec(text)) != null) last = match.index;

@@ -1,4 +1,5 @@
 import type { Message } from "../providers/types";
+import { currentUiLanguage } from "../settings/language";
 import { DEFAULT_CONTEXT_POLICY, type ContextPolicy } from "./policy";
 import type { ItemAnnotation, RetrievedPassage } from "./types";
 
@@ -388,6 +389,15 @@ function formatContextBlocks(
 }
 
 function selectedTextHandlingInstruction(): string {
+  if (currentUiLanguage() === "en-US") {
+    return [
+      "If the user asks to translate, rewrite, polish, extract, or process the current PDF selection sentence by sentence, process the entire selected text.",
+      "For these tasks, operate only on [Selected PDF text]. Do not mix [Retrieved PDF passages], nearby context, or previous selections into the translated or rewritten result.",
+      "Preserve paragraphs, numbered lists, and list structure where practical, while removing mechanical line breaks introduced by the PDF layout.",
+      "Unless the user explicitly requests a summary or compression, never replace untranslated or unprocessed content with ellipses.",
+      "Ellipses present in the source may be preserved, but do not add new ones to skip content.",
+    ].join("\n");
+  }
   return [
     "用户问题若要求翻译、改写、润色、提取或逐句处理当前 PDF 选区，必须处理完整选区文本。",
     "这类任务只处理 [Selected PDF text]；不要把 [Retrieved PDF passages]、附近上下文或历史选区混入译文/改写结果。",
@@ -400,6 +410,22 @@ function selectedTextHandlingInstruction(): string {
 function annotationSuggestionInstruction(
   context: NonNullable<Message["context"]>,
 ): string {
+  if (currentUiLanguage() === "en-US") {
+    const lines = [
+      context.explainSelection
+        ? "This turn explains a PDF selection. End the response with a separate section beginning with `Suggested annotation:` and list 1–3 concise bullet points that can be saved directly to the PDF (each no more than 80 words)."
+        : "The user asked a free-form question about a PDF selection. Answer the question first, then add a separate section beginning with `Suggested annotation:` and list 1–3 concise bullet points that can be saved directly to the PDF (each no more than 80 words).",
+      "Suggested annotations may contain only claims supported by the current selection and verified context. If evidence is insufficient, write “This cannot be determined from the available context.”",
+    ];
+    if (context.annotationColorGuide) {
+      lines.push(
+        "Use the PDF annotation color presets to choose the best matching color. Omit the color when the category is unclear; do not force a classification.",
+        `Current color presets:\n${context.annotationColorGuide}`,
+        "If you choose a color, add a final line in the Suggested annotation section formatted as `Suggested color: #hex`. Use only a hex value present in the presets.",
+      );
+    }
+    return lines.join("\n");
+  }
   const lines = [
     context.explainSelection
       ? "本轮是解释选区。回答末尾必须另起一段，以 `建议注释：` 开头，用 `- ` 列出 1-3 条可直接保存到 PDF 的简短注释要点（每条 <= 80 字）。"

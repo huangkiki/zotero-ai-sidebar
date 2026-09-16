@@ -4,6 +4,7 @@ import type {
 } from "../settings/types";
 import type { PdfPageContent, PdfRect } from "../context/pdf-locator";
 import { logTranslateDebug } from "./debug-log";
+import { uiText } from "../i18n";
 
 export interface OverlayHandle {
   el: HTMLElement;
@@ -62,10 +63,10 @@ export function mountOverlay(input: MountOverlayInput): OverlayHandle {
   meta.className = "zai-translate-overlay__meta";
   const lang = iframeDoc.createElement("span");
   lang.className = "zai-translate-overlay__lang";
-  lang.textContent = "EN → 简体中文";
+  lang.textContent = uiText("EN → 简体中文");
   const status = iframeDoc.createElement("span");
   status.className = "zai-translate-overlay__status";
-  status.textContent = "● 翻译中…";
+  status.textContent = uiText("● 翻译中…");
   meta.append(lang, status);
   el.appendChild(meta);
 
@@ -91,7 +92,7 @@ export function mountOverlay(input: MountOverlayInput): OverlayHandle {
   actionsRow.appendChild(makeBtn(iframeDoc, "▼", "下一段", actions.onNext));
   const hintEl = iframeDoc.createElement("span");
   hintEl.className = "zai-translate-overlay__hint";
-  hintEl.textContent = actions.hint;
+  hintEl.textContent = uiText(actions.hint);
   actionsRow.appendChild(hintEl);
   actionsRow.appendChild(
     makeBtn(iframeDoc, "✕", "关闭 (Esc)", actions.onClose),
@@ -133,7 +134,7 @@ export function mountOverlay(input: MountOverlayInput): OverlayHandle {
     setText(text) {
       body.classList.remove("zai-translate-overlay__body--status");
       body.textContent = text;
-      status.textContent = "● 已完成";
+      status.textContent = uiText("● 已完成");
       schedulePosition();
     },
     appendText(delta) {
@@ -145,24 +146,26 @@ export function mountOverlay(input: MountOverlayInput): OverlayHandle {
       schedulePosition();
     },
     setDone() {
-      status.textContent = "● 已完成";
+      status.textContent = uiText("● 已完成");
       schedulePosition();
     },
     setError(message) {
       body.classList.remove("zai-translate-overlay__body--status");
-      body.textContent = `⚠️ ${message}`;
-      status.textContent = "● 翻译失败";
+      body.textContent = `⚠️ ${uiText(message)}`;
+      status.textContent = uiText("● 翻译失败");
       el.classList.add("zai-translate-overlay--error");
       schedulePosition();
     },
     setStatus(message) {
       body.classList.add("zai-translate-overlay__body--status");
-      body.textContent = message;
-      status.textContent = message.includes("翻译") ? "● 翻译中…" : "● 等待中…";
+      body.textContent = uiText(message);
+      status.textContent = uiText(
+        message.includes("翻译") ? "● 翻译中…" : "● 等待中…",
+      );
       schedulePosition();
     },
     setStatusLabel(message) {
-      status.textContent = message;
+      status.textContent = uiText(message);
       schedulePosition();
     },
     destroy() {
@@ -404,7 +407,7 @@ function makeBtn(
   b.className = "zai-translate-overlay__btn";
   if (primary) b.classList.add("zai-translate-overlay__btn--primary");
   b.textContent = label;
-  b.title = title;
+  b.title = uiText(title);
   if (!handler) {
     b.disabled = true;
     return b;

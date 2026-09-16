@@ -1,4 +1,5 @@
 import type { PrefsStore } from './storage';
+import { currentUiLanguage } from './language';
 
 export type BuiltInPromptID =
   | 'summary'
@@ -553,6 +554,108 @@ export const DEFAULT_EXPLAIN_SELECTION_PROMPT = [
   '在解释正文之后，另起一段，以 `建议注释：` 开头，下面用 `- ` 列出 1-3 条简短要点（每条 ≤ 80 字），可以直接贴到 PDF 上当注释。建议注释只能写当前选区和已核对上下文支持的内容。如果当前没有可用 PDF 选区，请提示我先选中文本，并省略 `建议注释：` 段。',
 ].join('\n');
 
+export const DEFAULT_SUMMARY_PROMPT_EN = String.raw`---
+name: paper-summary-review
+description: A structured paper summary and candid senior-researcher review based on the Zotero PDF.
+---
+
+Before starting, say “Starting the paper review 📘” and state today’s date.
+
+# Paper Review
+
+Act as a senior researcher with broad experience in embodied AI, world models, diffusion models, robotics, 3D/4D reconstruction, and simulation. Read the paper itself through the available Zotero tools. Do not merely paraphrase the abstract, and do not invent details that are absent from the paper.
+
+Write in natural, idiomatic English for a native English-speaking researcher. Be direct, specific, and evidence-led. Praise or criticize concrete choices; avoid empty phrases such as “generally solid” or “somewhat insightful.” Distinguish statements made by the authors from your own inference. If evidence is missing, say so.
+
+Use this structure:
+
+## 1. Background and research question
+- What problem does the paper address, and why does it matter?
+- What gap in prior work motivates it?
+- Is the problem genuinely important or overstated?
+
+## 2. Method at a glance
+Explain the complete input → modeling/training → inference/output pipeline in 4–8 steps. Identify the essential mechanism, not just module names, and separate methodological novelty from gains due to scale, data, or engineering.
+
+## 3. Implementation and algorithmic logic
+Explain how data enters the system, how modules interact, what happens during training, and how inference works. Use plain language; formulas are unnecessary unless the user requests them.
+
+## 4. Main contributions
+List the real contributions and say how each differs from prior work. Flag incremental contributions explicitly.
+
+## 5. Experiments and conclusions
+Identify the decisive comparisons, tasks, metrics, ablations, and results. Evaluate whether the baselines and settings are fair and whether the evidence actually supports the claims.
+
+## 6. Where it is useful
+Describe suitable tasks, data regimes, deployment settings, and prerequisites.
+
+## 7. Limitations
+Analyze assumptions, compute/data requirements, benchmark dependence, missing ablations, unclear implementation details, and likely deployment friction.
+
+## 8. Counterexamples and next steps
+Give plausible failure cases and concrete improvements or experiments that would test the weak points.
+
+## 9. One-sentence summary
+State what the paper does, how it does it, and why it matters in one information-dense sentence.
+
+## 10. Verdict
+Choose a clear verdict—worth a close read, useful but overhyped, solid engineering, mostly incremental, weak evidence, or another precise judgment—and justify it. Even for a strong paper, identify at least one serious question.
+
+Ground every paper-specific claim in the PDF. Use Zotero retrieval tools when the available context is insufficient. Do not claim to have inspected figures, appendices, or experiments you have not actually read.`;
+
+export const DEFAULT_FULL_TEXT_HIGHLIGHT_PROMPT_EN = String.raw`# Highlight the paper’s key passages — senior-researcher annotation mode
+
+Read the current paper through Zotero’s PDF tools and create a selective set of useful highlights. Work from the Reader text layer so every quoted passage can be located exactly. Do not highlight the abstract alone, boilerplate, references, or long blocks simply because they look important.
+
+Prioritize passages that carry the paper’s argument:
+
+1. motivation and the precise research gap;
+2. task definition and assumptions;
+3. the method’s genuinely new mechanism;
+4. decisive training or inference details;
+5. key experimental evidence and ablations;
+6. limitations, failure modes, boundary conditions, and claims that deserve scrutiny.
+
+For each passage, call the Zotero annotation tool with text copied verbatim from the Reader text layer. Keep highlights concise and self-contained. Add a short, substantive comment explaining why the passage matters—its role in the argument, what it proves, or what should be questioned. Avoid generic comments such as “important” or “core method.”
+
+Use colors only when the category is clear:
+
+- #ffd400 yellow — background, motivation, or essential context
+- #ff6666 red — core problem, missing capability, limitation, or questionable claim
+- #2ea8e5 blue — task definition, problem setup, or evaluation protocol
+- #5fb236 green — method, architecture, or algorithmic mechanism
+- #a28ae5 purple — dataset, data engine, or experimental setup
+- #f19837 orange — result, ablation, or quantitative evidence
+
+Do not invent colors or force an uncertain classification. If “Passage not found” is returned, retry only with minor fixes to whitespace, line breaks, hyphenation, or OCR artifacts while preserving at least 80% of the wording. After two failures, skip that passage.
+
+When finished, report in English:
+
+1. the paper’s central argument;
+2. which parts of the evidence chain were highlighted;
+3. what the body adds to or qualifies from the abstract;
+4. which sections, modules, experiments, or tables deserve a second close read.
+
+Do not provide a “worth reading” verdict here; that belongs to the paper-summary task.`;
+
+export const DEFAULT_EXPLAIN_SELECTION_PROMPT_EN = [
+  'Explain the currently selected PDF text in clear, idiomatic English. Use the nearby context already attached to this turn: first explain what the selection says, then its role in the surrounding argument and why it matters. Identify whether it is a claim, evidence, definition, method detail, transition, condition, limitation, or conclusion. For claims and evidence, state its precise role in the reasoning chain.',
+  '',
+  'If the attached context is insufficient and Zotero tools are available, retrieve adjacent material with zotero_search_pdf or zotero_read_pdf_range before drawing a conclusion. Mark unsupported judgments explicitly as “This cannot be determined from the available context.”',
+  '',
+  'After the explanation, add a separate section beginning with `Suggested annotation:` followed by 1–3 concise bullet points (each no more than 80 words) suitable for saving directly to the PDF. Use only information supported by the selection and verified context. If no PDF text is selected, ask me to select text first and omit the Suggested annotation section.',
+].join('\n');
+
+export const DEFAULT_QUICK_PROMPT_SETTINGS_EN: QuickPromptSettings = {
+  builtIns: {
+    summary: DEFAULT_SUMMARY_PROMPT_EN,
+    fullTextHighlight: DEFAULT_FULL_TEXT_HIGHLIGHT_PROMPT_EN,
+    explainSelection: DEFAULT_EXPLAIN_SELECTION_PROMPT_EN,
+  },
+  customButtons: [],
+  selectionQuestionAnnotationEnabled: true,
+};
+
 export const DEFAULT_QUICK_PROMPT_SETTINGS: QuickPromptSettings = {
   builtIns: {
     summary: DEFAULT_SUMMARY_PROMPT,
@@ -573,12 +676,44 @@ const MAX_PROMPT_CHARS = 20_000;
 
 export function loadQuickPromptSettings(prefs: PrefsStore): QuickPromptSettings {
   const raw = prefs.get(KEY);
-  if (!raw) return DEFAULT_QUICK_PROMPT_SETTINGS;
+  if (!raw) return currentQuickPromptDefaults();
   try {
-    return normalizeQuickPromptSettings(JSON.parse(raw));
+    return localizeBuiltInDefaults(normalizeQuickPromptSettings(JSON.parse(raw)));
   } catch {
-    return DEFAULT_QUICK_PROMPT_SETTINGS;
+    return currentQuickPromptDefaults();
   }
+}
+
+export function currentQuickPromptDefaults(): QuickPromptSettings {
+  return currentUiLanguage() === 'en-US'
+    ? DEFAULT_QUICK_PROMPT_SETTINGS_EN
+    : DEFAULT_QUICK_PROMPT_SETTINGS;
+}
+
+function localizeBuiltInDefaults(
+  settings: QuickPromptSettings,
+): QuickPromptSettings {
+  const defaults = currentQuickPromptDefaults();
+  const pairs: Array<[keyof BuiltInPromptSettings, string, string]> = [
+    ['summary', DEFAULT_SUMMARY_PROMPT, DEFAULT_SUMMARY_PROMPT_EN],
+    [
+      'fullTextHighlight',
+      DEFAULT_FULL_TEXT_HIGHLIGHT_PROMPT,
+      DEFAULT_FULL_TEXT_HIGHLIGHT_PROMPT_EN,
+    ],
+    [
+      'explainSelection',
+      DEFAULT_EXPLAIN_SELECTION_PROMPT,
+      DEFAULT_EXPLAIN_SELECTION_PROMPT_EN,
+    ],
+  ];
+  const builtIns = { ...settings.builtIns };
+  for (const [key, zh, en] of pairs) {
+    if (builtIns[key] === zh || builtIns[key] === en) {
+      builtIns[key] = defaults.builtIns[key];
+    }
+  }
+  return { ...settings, builtIns };
 }
 
 export function saveQuickPromptSettings(

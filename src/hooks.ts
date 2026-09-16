@@ -1,4 +1,9 @@
 import { detectCodex, stopCodexSessions } from "./providers/codex";
+import {
+  observeLocalizedUi,
+  refreshLocalizedUi,
+  uiText,
+} from "./i18n";
 import { hasPresetAuth } from "./settings/types";
 import { initLocale } from "./utils/locale";
 import { createZToolkit } from "./utils/ztoolkit";
@@ -16,7 +21,7 @@ import {
 import { getProvider } from "./providers/factory";
 import type { Message } from "./providers/types";
 import {
-  DEFAULT_QUICK_PROMPT_SETTINGS,
+  currentQuickPromptDefaults,
   loadQuickPromptSettings,
   normalizeQuickPromptSettings,
   saveQuickPromptSettings,
@@ -29,6 +34,7 @@ import {
   zoteroPrefs,
 } from "./settings/storage";
 import {
+  currentToolSettingsDefaults,
   DEFAULT_TOOL_SETTINGS,
   loadToolSettings,
   normalizeToolSettings,
@@ -73,6 +79,11 @@ import {
   normalizeTranslateSettings,
   saveTranslateSettings,
 } from "./translate/settings";
+import {
+  loadUiLanguage,
+  saveUiLanguage,
+  type UiLanguage,
+} from "./settings/language";
 
 // Plugin lifecycle hooks invoked by `addon/bootstrap.js`.
 //
@@ -151,10 +162,18 @@ async function onPrefsEvent(type: string, data: { [key: string]: unknown }) {
   setupPreferencesPane(win);
 }
 
+function renderLanguageSetting(doc: Document): void {
+  const select = byID<HTMLSelectElement>(doc, "zai-interface-language");
+  if (select) select.value = loadUiLanguage(zoteroPrefs());
+}
+
 function setupPreferencesPane(win: Window): void {
   const doc = win.document;
   const root = byID<HTMLElement>(doc, "zotero-ai-sidebar-tool-settings");
   if (!root) return;
+
+  observeLocalizedUi((root.parentElement as HTMLElement | null) ?? root);
+  renderLanguageSetting(doc);
 
   renderPresetSettings(doc);
   renderTranslateSettings(doc);
@@ -165,6 +184,25 @@ function setupPreferencesPane(win: Window): void {
 
   if (root.dataset.bound === "true") return;
   root.dataset.bound = "true";
+
+  byID<HTMLSelectElement>(doc, "zai-interface-language")?.addEventListener(
+    "change",
+    (event) => {
+      const language = (event.currentTarget as HTMLSelectElement)
+        .value as UiLanguage;
+      saveUiLanguage(zoteroPrefs(), language);
+      refreshLocalizedUi();
+      refreshSidebarPreferences();
+      renderPromptSettings(doc);
+      setStatus(
+        doc,
+        "zai-language-status",
+        language === "en-US"
+          ? "Interface language changed to English."
+          : "界面语言已切换为中文。",
+      );
+    },
+  );
 
   byID<HTMLButtonElement>(doc, "zai-preset-add-codex")?.addEventListener(
     "click",
@@ -288,7 +326,7 @@ function setupPreferencesPane(win: Window): void {
   byID<HTMLButtonElement>(doc, "zai-prompt-reset")?.addEventListener(
     "click",
     () => {
-      populateBuiltInPromptControls(doc, DEFAULT_QUICK_PROMPT_SETTINGS);
+      populateBuiltInPromptControls(doc, currentQuickPromptDefaults());
       savePromptControls(doc, "已恢复默认提示词并立即生效。");
     },
   );
@@ -338,7 +376,8 @@ function setupPreferencesPane(win: Window): void {
       const settings = readToolSettingsControls(doc);
       saveToolSettings(zoteroPrefs(), {
         ...settings,
-        annotationColorGuide: DEFAULT_TOOL_SETTINGS.annotationColorGuide,
+        annotationColorGuide:
+          currentToolSettingsDefaults().annotationColorGuide,
       });
       renderToolSettings(doc);
       refreshSidebarPreferences();
@@ -470,7 +509,9 @@ async function runSyncPull(doc: Document): Promise<void> {
   saveSyncAccount(zoteroPrefs(), account);
   const ok =
     doc.defaultView?.confirm(
-      "从云端下载会按时间戳合并对话历史，并直接覆盖本地账号、显示、提示词、联网/MCP 和翻译配置。继续？",
+      uiText(
+        "从云端下载会按时间戳合并对话历史，并直接覆盖本地账号、显示、提示词、联网/MCP 和翻译配置。继续？",
+      ),
     ) ?? true;
   if (!ok) {
     setStatus(doc, "zai-sync-status", "已取消下载。");
@@ -1713,27 +1754,28 @@ function populateBuiltInPromptControls(
 ): void {
   const wrap = byID<HTMLElement>(doc, "zai-built-in-prompts");
   if (!wrap) return;
+  const defaults = currentQuickPromptDefaults();
   wrap.replaceChildren(
     builtInPromptControl(
       doc,
       "summary",
       "总结论文",
       settings.builtIns.summary,
-      DEFAULT_QUICK_PROMPT_SETTINGS.builtIns.summary,
+      defaults.builtIns.summary,
     ),
     builtInPromptControl(
       doc,
       "fullTextHighlight",
       "全文重点",
       settings.builtIns.fullTextHighlight,
-      DEFAULT_QUICK_PROMPT_SETTINGS.builtIns.fullTextHighlight,
+      defaults.builtIns.fullTextHighlight,
     ),
     builtInPromptControl(
       doc,
       "explainSelection",
       "解释选区",
       settings.builtIns.explainSelection,
-      DEFAULT_QUICK_PROMPT_SETTINGS.builtIns.explainSelection,
+      defaults.builtIns.explainSelection,
     ),
     selectionQuestionAnnotationControl(
       doc,
