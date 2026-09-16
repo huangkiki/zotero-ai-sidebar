@@ -34,6 +34,20 @@ describe('parseAnnotationSuggestion', () => {
     expect(parseAnnotationSuggestion(content).comment).toBe('仅一句话');
   });
 
+  it('accepts native-English suggestion and color markers', () => {
+    const content = [
+      'The passage defines the evaluation protocol.',
+      '',
+      'Suggested annotation:',
+      '- Defines the metric used by every later comparison.',
+      'Suggested color: #2EA8E5',
+    ].join('\n');
+    const { body, comment, color } = parseAnnotationSuggestion(content);
+    expect(body).toBe('The passage defines the evaluation protocol.');
+    expect(comment).toBe('- Defines the metric used by every later comparison.');
+    expect(color).toBe('#2ea8e5');
+  });
+
   it('extracts bullets when header has trailing whitespace and bullets are mixed', () => {
     const content = [
       'Body.',

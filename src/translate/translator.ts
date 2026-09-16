@@ -8,10 +8,10 @@ import type {
 } from "../settings/types";
 
 const SYSTEM_PROMPT =
-  "你是严格的英译中引擎。把用户给出的英文原文翻译成简体中文，只输出译文。不得润色成英文，不得改写成英文，不得解释。术语、缩写、公式、模型名可保留原文，但句子主体必须是中文。";
+  "You are a strict English-to-Simplified-Chinese translation engine. Translate the user's English source text into Simplified Chinese and output only the translation. Do not polish or rewrite it in English and do not explain your work. Terms, abbreviations, formulas, and model names may remain in their original form, but the sentences themselves must be Chinese.";
 
 const STRICT_SYSTEM_PROMPT =
-  "严格英译中。上一次输出可能是英文润色，这是错误的。现在必须输出简体中文译文；除术语、缩写、公式、模型名外，不要保留英文句子。只输出译文，不要解释或引号。";
+  "Translate strictly from English into Simplified Chinese. The previous output may have polished the English instead, which is incorrect. Output a Simplified Chinese translation now. Apart from terms, abbreviations, formulas, and model names, do not retain English sentences. Output only the translation, without commentary or quotation marks.";
 const TRANSLATE_CONTEXT_CHAR_LIMIT = 600;
 const TRANSLATE_MAX_OUTPUT_TOKENS = 384;
 export const NON_CHINESE_TRANSLATION_ERROR_MESSAGE =
@@ -90,9 +90,9 @@ const THINKING_TO_EFFORT: Record<TranslateThinking, ReasoningEffort> = {
 function buildUserMessage(req: TranslateRequest): string {
   const sentence = req.sentence.trim();
   if (!req.contextText)
-    return `请把下面原文翻译成简体中文，不要润色为英文。\n原文：${sentence}`;
-  const label = req.contextLabel || "参考";
-  return `${label}：${trimContext(req.contextText)}\n请把下面原文翻译成简体中文，不要润色为英文。\n原文：${sentence}`;
+    return `Translate the following source text into Simplified Chinese. Do not polish it in English.\nSource text: ${sentence}`;
+  const label = req.contextLabel || "Context";
+  return `${label}: ${trimContext(req.contextText)}\nTranslate the following source text into Simplified Chinese. Do not polish it in English.\nSource text: ${sentence}`;
 }
 
 export async function* translateSentence(

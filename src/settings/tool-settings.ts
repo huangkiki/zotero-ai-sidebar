@@ -1,4 +1,5 @@
 import type { PrefsStore } from './storage';
+import { currentUiLanguage } from './language';
 
 export type WebSearchMode = 'disabled' | 'cached' | 'live';
 export type McpApprovalMode = 'never' | 'always';
@@ -49,6 +50,17 @@ export const DEFAULT_ANNOTATION_COLOR_GUIDE = [
   '只能使用上面列出的 hex；如果类别不明确，不要强行分彩色，省略 color 使用 Zotero 默认色。',
 ].join('\n');
 
+export const DEFAULT_ANNOTATION_COLOR_GUIDE_EN = [
+  'PDF annotation color presets (used when writing with zotero_annotate_passage):',
+  '- #ffd400 yellow: background / motivation / essential context.',
+  '- #ff6666 red: core problem / methodological gap / key limitation / questionable claim.',
+  '- #2ea8e5 blue: task definition / problem setup / evaluation protocol.',
+  '- #5fb236 green: method component / model architecture / algorithmic mechanism.',
+  '- #a28ae5 purple: dataset / data engine / experimental setup.',
+  '- #f19837 orange: experimental result / ablation / quantitative evidence.',
+  'Use only the hex values listed above. If the category is unclear, omit color and use Zotero’s default instead of forcing a classification.',
+].join('\n');
+
 export const DEFAULT_TOOL_SETTINGS: ToolSettings = {
   webSearchMode: 'disabled',
   mcpServers: [],
@@ -70,12 +82,36 @@ const MAX_ANNOTATION_COLOR_GUIDE_CHARS = 4000;
 
 export function loadToolSettings(prefs: PrefsStore): ToolSettings {
   const raw = prefs.get(KEY);
-  if (!raw) return DEFAULT_TOOL_SETTINGS;
+  if (!raw) return currentToolSettingsDefaults();
   try {
-    return normalizeToolSettings(JSON.parse(raw));
+    return localizeAnnotationColorDefault(
+      normalizeToolSettings(JSON.parse(raw)),
+    );
   } catch {
-    return DEFAULT_TOOL_SETTINGS;
+    return currentToolSettingsDefaults();
   }
+}
+
+export function currentToolSettingsDefaults(): ToolSettings {
+  return currentUiLanguage() === 'en-US'
+    ? {
+        ...DEFAULT_TOOL_SETTINGS,
+        annotationColorGuide: DEFAULT_ANNOTATION_COLOR_GUIDE_EN,
+      }
+    : DEFAULT_TOOL_SETTINGS;
+}
+
+function localizeAnnotationColorDefault(settings: ToolSettings): ToolSettings {
+  if (
+    settings.annotationColorGuide !== DEFAULT_ANNOTATION_COLOR_GUIDE &&
+    settings.annotationColorGuide !== DEFAULT_ANNOTATION_COLOR_GUIDE_EN
+  ) {
+    return settings;
+  }
+  return {
+    ...settings,
+    annotationColorGuide: currentToolSettingsDefaults().annotationColorGuide,
+  };
 }
 
 export function saveToolSettings(

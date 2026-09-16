@@ -4,6 +4,7 @@ import {
   CodexProvider,
   codexInput,
   readCodexAccount,
+  windowsDesktopCodexCandidates,
   type CodexProcess,
 } from "../../src/providers/codex";
 import { hasPresetAuth, type ModelPreset } from "../../src/settings/types";
@@ -60,6 +61,24 @@ const preset: ModelPreset = {
 };
 
 describe("Codex local account adapter", () => {
+  it("discovers the versioned Codex executable bundled with the Windows desktop app", async () => {
+    const listChildren = vi.fn(async () => [
+      "C:\\Users\\Me\\AppData\\Local\\OpenAI\\Codex\\bin\\version-a",
+      "C:\\Users\\Me\\AppData\\Local\\OpenAI\\Codex\\bin\\version-b",
+    ]);
+    await expect(
+      windowsDesktopCodexCandidates(
+        "C:\\Users\\Me\\AppData\\Local",
+        listChildren,
+      ),
+    ).resolves.toEqual([
+      "C:\\Users\\Me\\AppData\\Local\\OpenAI\\Codex\\bin\\version-a\\codex.exe",
+      "C:\\Users\\Me\\AppData\\Local\\OpenAI\\Codex\\bin\\version-b\\codex.exe",
+    ]);
+    expect(listChildren).toHaveBeenCalledWith(
+      "C:\\Users\\Me\\AppData\\Local\\OpenAI\\Codex\\bin",
+    );
+  });
   it("accepts local presets without API credentials and preserves them through storage", () => {
     expect(hasPresetAuth(preset)).toBe(true);
     expect(hasPresetAuth({ ...preset, provider: "openai" })).toBe(false);
@@ -152,6 +171,17 @@ describe("Codex local account adapter", () => {
       type: "image",
       url: "data:image/png;base64,abc",
     });
+  });
+  it("uses English role wrappers and instructions in English interface mode", () => {
+    vi.stubGlobal("Zotero", { Prefs: { get: () => "en-US" } });
+    const result = codexInput([
+      { role: "user", content: "Question" },
+      { role: "assistant", content: "Answer" },
+    ]);
+    expect(result[0].text).toContain("Zotero research chat history");
+    expect(result[0].text).toContain("User:\nQuestion");
+    expect(result[0].text).toContain("Assistant:\nAnswer");
+    expect(result[0].text).not.toMatch(/[用户助手]：/u);
   });
   it("streams output, ignores another thread, and cleans up on completion", async () => {
     const f = fakeProcess();
