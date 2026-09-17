@@ -1,10 +1,10 @@
-import { describe, expect, it } from 'vitest';
-import type { PrefsStore } from '../../src/settings/storage';
+import { describe, expect, it } from "vitest";
+import type { PrefsStore } from "../../src/settings/storage";
 import {
   DEFAULT_UI_SETTINGS,
   loadUiSettings,
   saveUiSettings,
-} from '../../src/settings/ui-settings';
+} from "../../src/settings/ui-settings";
 
 function memPrefs(): PrefsStore {
   const map = new Map<string, string>();
@@ -14,45 +14,51 @@ function memPrefs(): PrefsStore {
   };
 }
 
-describe('ui settings storage', () => {
-  it('returns defaults for missing or invalid settings', () => {
+describe("ui settings storage", () => {
+  it("returns defaults for missing or invalid settings", () => {
     expect(loadUiSettings(memPrefs())).toEqual(DEFAULT_UI_SETTINGS);
     const prefs = memPrefs();
-    prefs.set('extensions.zotero-ai-sidebar.uiSettings', '{bad');
+    prefs.set("extensions.zotero-ai-sidebar.uiSettings", "{bad");
     expect(loadUiSettings(prefs)).toEqual(DEFAULT_UI_SETTINGS);
   });
 
-  it('round trips profiles and action position', () => {
+  it("round trips profiles and action position", () => {
     const prefs = memPrefs();
     saveUiSettings(prefs, {
-      messageActionsPosition: 'top-right',
-      messageActionsLayout: 'inside',
+      messageActionsPosition: "top-right",
+      messageActionsLayout: "inside",
       chatFontFamily: '"LXGW WenKai", serif',
-      userProfile: { label: '我', avatar: '🙂' },
-      assistantProfile: { label: '助手', avatar: 'https://example.test/ai.png' },
+      userProfile: { label: "我", avatar: "🙂" },
+      assistantProfile: {
+        label: "助手",
+        avatar: "https://example.test/ai.png",
+      },
       composerQueueWhileSending: true,
     });
 
     expect(loadUiSettings(prefs)).toEqual({
-      messageActionsPosition: 'top-right',
-      messageActionsLayout: 'inside',
+      messageActionsPosition: "top-right",
+      messageActionsLayout: "inside",
       chatFontFamily: '"LXGW WenKai", serif',
-      userProfile: { label: '我', avatar: '🙂' },
-      assistantProfile: { label: '助手', avatar: 'https://example.test/ai.png' },
+      userProfile: { label: "我", avatar: "🙂" },
+      assistantProfile: {
+        label: "助手",
+        avatar: "https://example.test/ai.png",
+      },
       composerQueueWhileSending: true,
     });
   });
 
-  it('treats only an explicit `true` as enabling composerQueueWhileSending', () => {
+  it("treats only an explicit `true` as enabling composerQueueWhileSending", () => {
     const prefs = memPrefs();
     prefs.set(
-      'extensions.zotero-ai-sidebar.uiSettings',
-      JSON.stringify({ composerQueueWhileSending: 'truthy-but-not-true' }),
+      "extensions.zotero-ai-sidebar.uiSettings",
+      JSON.stringify({ composerQueueWhileSending: "truthy-but-not-true" }),
     );
     expect(loadUiSettings(prefs).composerQueueWhileSending).toBe(false);
 
     prefs.set(
-      'extensions.zotero-ai-sidebar.uiSettings',
+      "extensions.zotero-ai-sidebar.uiSettings",
       JSON.stringify({ composerQueueWhileSending: true }),
     );
     expect(loadUiSettings(prefs).composerQueueWhileSending).toBe(true);
@@ -60,21 +66,21 @@ describe('ui settings storage', () => {
     expect(loadUiSettings(memPrefs()).composerQueueWhileSending).toBe(false);
   });
 
-  it('normalizes chat font family values', () => {
+  it("normalizes chat font family values", () => {
     const prefs = memPrefs();
     saveUiSettings(prefs, {
       ...DEFAULT_UI_SETTINGS,
-      chatFontFamily: ' Noto Serif CJK SC, serif ',
+      chatFontFamily: " Noto Serif CJK SC, serif ",
     });
 
     expect(loadUiSettings(prefs).chatFontFamily).toBe(
-      'Noto Serif CJK SC, serif',
+      "Noto Serif CJK SC, serif",
     );
 
     prefs.set(
-      'extensions.zotero-ai-sidebar.uiSettings',
-      JSON.stringify({ chatFontFamily: 'safe; color:red' }),
+      "extensions.zotero-ai-sidebar.uiSettings",
+      JSON.stringify({ chatFontFamily: "safe; color:red" }),
     );
-    expect(loadUiSettings(prefs).chatFontFamily).toBe('');
+    expect(loadUiSettings(prefs).chatFontFamily).toBe("");
   });
 });

@@ -51,7 +51,11 @@ function serializeRange(range: Range, seenMath: Set<HTMLElement>): string {
   }
 
   return collapseBlankLines(
-    serializeSelectedNode(range.commonAncestorContainer, range, seenMath).trim(),
+    serializeSelectedNode(
+      range.commonAncestorContainer,
+      range,
+      seenMath,
+    ).trim(),
   );
 }
 
@@ -135,10 +139,7 @@ function mathToSource(el: HTMLElement): string {
   return display ? `\n\n$$${latex}$$\n\n` : `$${latex}$`;
 }
 
-function mathToSourceOnce(
-  el: HTMLElement,
-  seenMath: Set<HTMLElement>,
-): string {
+function mathToSourceOnce(el: HTMLElement, seenMath: Set<HTMLElement>): string {
   if (seenMath.has(el)) return "";
   seenMath.add(el);
   return mathToSource(el);

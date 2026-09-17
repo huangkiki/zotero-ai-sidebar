@@ -16,6 +16,7 @@ This project builds a fresh plugin that solves both: a persistent sidebar chat U
 ## 2. Goals & Non-Goals
 
 **Goals (MVP):**
+
 - Sidebar chat UI inside Zotero 7's item pane.
 - Streaming responses with markdown rendering.
 - Native support for Anthropic Claude and OpenAI GPT via official SDKs.
@@ -24,6 +25,7 @@ This project builds a fresh plugin that solves both: a persistent sidebar chat U
 - API key + preset storage in Zotero preferences.
 
 **Non-Goals (explicitly cut from MVP):**
+
 - Library-wide search ("find papers about X in my library").
 - BibTeX / citation generation into the conversation.
 - Local model support (Ollama, llama.cpp).
@@ -79,15 +81,15 @@ interface Provider {
   stream(
     messages: Message[],
     preset: ModelPreset,
-    signal: AbortSignal
+    signal: AbortSignal,
   ): AsyncIterable<StreamChunk>;
 }
 
 type StreamChunk =
-  | { type: 'text_delta'; text: string }
-  | { type: 'thinking_delta'; text: string }   // Anthropic extended thinking
-  | { type: 'usage'; input: number; output: number; cacheRead?: number }
-  | { type: 'error'; message: string };
+  | { type: "text_delta"; text: string }
+  | { type: "thinking_delta"; text: string } // Anthropic extended thinking
+  | { type: "usage"; input: number; output: number; cacheRead?: number }
+  | { type: "error"; message: string };
 ```
 
 Two concrete implementations:
@@ -116,12 +118,12 @@ Stored as JSON in Zotero preferences under key `extensions.zotero-ai-sidebar.pre
 
 ```typescript
 type ModelPreset = {
-  id: string;              // uuid
-  label: string;           // user-visible name, e.g. "Opus 思考模式"
-  provider: 'anthropic' | 'openai';
-  apiKey: string;          // see 4.2
-  baseUrl: string;         // overridable, default per provider
-  model: string;           // free-text model id, e.g. "claude-opus-4-7-20251101"
+  id: string; // uuid
+  label: string; // user-visible name, e.g. "Opus 思考模式"
+  provider: "anthropic" | "openai";
+  apiKey: string; // see 4.2
+  baseUrl: string; // overridable, default per provider
+  model: string; // free-text model id, e.g. "claude-opus-4-7-20251101"
   maxTokens: number;
   // provider-specific extras kept as opaque JSON
   extras?: Record<string, unknown>;

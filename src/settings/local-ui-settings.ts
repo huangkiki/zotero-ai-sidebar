@@ -1,4 +1,4 @@
-import type { PrefsStore } from './storage';
+import type { PrefsStore } from "./storage";
 
 export interface LocalUiSettings {
   chatFontSizePx: number;
@@ -8,7 +8,7 @@ export const DEFAULT_LOCAL_UI_SETTINGS: LocalUiSettings = {
   chatFontSizePx: 13,
 };
 
-const KEY = 'extensions.zotero-ai-sidebar.localUiSettings';
+const KEY = "extensions.zotero-ai-sidebar.localUiSettings";
 const MIN_CHAT_FONT_SIZE = 11;
 const MAX_CHAT_FONT_SIZE = 22;
 
@@ -30,17 +30,19 @@ export function saveLocalUiSettings(
 }
 
 export function normalizeLocalUiSettings(value: unknown): LocalUiSettings {
-  const input = value && typeof value === 'object'
-    ? (value as Partial<LocalUiSettings>)
-    : {};
+  const input =
+    value && typeof value === "object"
+      ? (value as Partial<LocalUiSettings>)
+      : {};
   return {
     chatFontSizePx: normalizeChatFontSize(input.chatFontSizePx),
   };
 }
 
 function normalizeChatFontSize(value: unknown): number {
-  const numeric = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(numeric)) return DEFAULT_LOCAL_UI_SETTINGS.chatFontSizePx;
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric))
+    return DEFAULT_LOCAL_UI_SETTINGS.chatFontSizePx;
   return Math.max(
     MIN_CHAT_FONT_SIZE,
     Math.min(MAX_CHAT_FONT_SIZE, Math.round(numeric)),

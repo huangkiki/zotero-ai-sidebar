@@ -1,4 +1,4 @@
-import type { PrefsStore } from '../settings/storage';
+import type { PrefsStore } from "../settings/storage";
 
 // Cloud-sync account credentials persisted in Zotero prefs.
 //
@@ -29,17 +29,17 @@ export const DEFAULT_SYNC_ACCOUNT: SyncAccount = {
   // 坚果云 (Nutstore) is the most common WebDAV target for Zotero users in
   // China; pre-fill it as a hint. Users on NextCloud/ownCloud/Synology just
   // overwrite this with their server URL.
-  webdavUrl: 'https://dav.jianguoyun.com/dav/',
-  username: '',
-  password: '',
-  remoteFolder: 'zotero-ai-sidebar',
-  dataDir: '',
-  profileDir: '',
-  lastPushAt: '',
-  lastPullAt: '',
+  webdavUrl: "https://dav.jianguoyun.com/dav/",
+  username: "",
+  password: "",
+  remoteFolder: "zotero-ai-sidebar",
+  dataDir: "",
+  profileDir: "",
+  lastPushAt: "",
+  lastPullAt: "",
 };
 
-const KEY = 'extensions.zotero-ai-sidebar.syncAccount';
+const KEY = "extensions.zotero-ai-sidebar.syncAccount";
 const URL_MAX = 512;
 const USER_MAX = 256;
 const PASS_MAX = 1024;
@@ -62,11 +62,10 @@ export function saveSyncAccount(prefs: PrefsStore, account: SyncAccount): void {
 
 export function normalizeSyncAccount(value: unknown): SyncAccount {
   const input =
-    value && typeof value === 'object'
-      ? (value as Partial<SyncAccount>)
-      : {};
+    value && typeof value === "object" ? (value as Partial<SyncAccount>) : {};
   return {
-    webdavUrl: trimTo(input.webdavUrl, URL_MAX) || DEFAULT_SYNC_ACCOUNT.webdavUrl,
+    webdavUrl:
+      trimTo(input.webdavUrl, URL_MAX) || DEFAULT_SYNC_ACCOUNT.webdavUrl,
     username: trimTo(input.username, USER_MAX),
     password: trimTo(input.password, PASS_MAX),
     remoteFolder:
@@ -96,14 +95,12 @@ export function detectDataDir(): string {
   // Zotero.DataDirectory.path (older). Try both, then fall back to '~/Zotero'
   // as a hint so the UI never shows a blank field on an unfamiliar build.
   const Z = (globalThis as unknown as { Zotero?: ZoteroDirsLike }).Zotero;
-  return (
-    Z?.DataDirectory?.dir ?? Z?.DataDirectory?.path ?? '~/Zotero'
-  );
+  return Z?.DataDirectory?.dir ?? Z?.DataDirectory?.path ?? "~/Zotero";
 }
 
 export function detectProfileDir(): string {
   const Z = (globalThis as unknown as { Zotero?: ZoteroDirsLike }).Zotero;
-  return Z?.Profile?.dir ?? '~/.zotero/zotero/<profile>';
+  return Z?.Profile?.dir ?? "~/.zotero/zotero/<profile>";
 }
 
 interface ZoteroDirsLike {
@@ -112,18 +109,18 @@ interface ZoteroDirsLike {
 }
 
 function trimTo(value: unknown, max: number): string {
-  if (typeof value !== 'string') return '';
+  if (typeof value !== "string") return "";
   return value.trim().slice(0, max);
 }
 
 function sanitizeFolder(value: unknown): string {
-  if (typeof value !== 'string') return '';
+  if (typeof value !== "string") return "";
   // Strip leading/trailing slashes; collapse internal "//" runs. WHY: WebDAV
   // path joining is sensitive to double slashes (some servers 404), so the
   // orchestrator can rebuild a clean URL with one slash between segments.
   return value
     .trim()
-    .replace(/^\/+|\/+$/g, '')
-    .replace(/\/{2,}/g, '/')
+    .replace(/^\/+|\/+$/g, "")
+    .replace(/\/{2,}/g, "/")
     .slice(0, FOLDER_MAX);
 }

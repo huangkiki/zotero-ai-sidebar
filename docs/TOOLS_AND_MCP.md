@@ -12,11 +12,11 @@
 
 ## 三类能力的区别
 
-| 类型 | 谁执行 | 配置位置 | 适合做什么 | 当前状态 |
-| --- | --- | --- | --- | --- |
-| 本地工具类 `AgentTool` | Zotero 插件本地执行 | 代码内注册；通常不需要用户配置 | 当前 Zotero 条目/PDF/标注/笔记、固定 arXiv 读取、可控的本地读写 | 已实现，OpenAI Responses 路径可用 |
-| OpenAI 托管 `web_search` | OpenAI/兼容服务端执行 | 聊天区联网按钮或偏好设置里的“内置联网” | 查网页、查最新信息、找后续工作或代码线索 | 已实现开关，但自定义 Base URL 不一定支持 |
-| MCP | 模型服务连接外部 MCP server 执行 | 需要 server label、server URL、allowed tools、approval | 独立外部服务、动态工具、跨客户端复用、复杂远程能力 | 代码保留支持；当前 UI 不再要求用户为 arXiv 配 MCP |
+| 类型                     | 谁执行                           | 配置位置                                               | 适合做什么                                                      | 当前状态                                          |
+| ------------------------ | -------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------- | ------------------------------------------------- |
+| 本地工具类 `AgentTool`   | Zotero 插件本地执行              | 代码内注册；通常不需要用户配置                         | 当前 Zotero 条目/PDF/标注/笔记、固定 arXiv 读取、可控的本地读写 | 已实现，OpenAI Responses 路径可用                 |
+| OpenAI 托管 `web_search` | OpenAI/兼容服务端执行            | 聊天区联网按钮或偏好设置里的“内置联网”                 | 查网页、查最新信息、找后续工作或代码线索                        | 已实现开关，但自定义 Base URL 不一定支持          |
+| MCP                      | 模型服务连接外部 MCP server 执行 | 需要 server label、server URL、allowed tools、approval | 独立外部服务、动态工具、跨客户端复用、复杂远程能力              | 代码保留支持；当前 UI 不再要求用户为 arXiv 配 MCP |
 
 ## 什么时候用本地工具类
 
@@ -152,14 +152,14 @@ https://arxiv.org/pdf/1506.02640 总结这篇论文
 
 ## 常见故障判断
 
-| 现象 | 常见原因 | 处理方式 |
-| --- | --- | --- |
-| arXiv 链接总结时一直卡住 | Base URL 不支持 hosted `web_search`/MCP 流式事件，或模型没有正常输出工具调用 | 先关闭 Web Search，只保留内置 arXiv 工具；确认使用 OpenAI Responses 兼容配置 |
-| 没有看到 `paper_fetch_arxiv_fulltext` 工具轨迹 | provider 不支持 function tools，或自定义代理丢弃了 `tools` 字段 | 换官方/确认支持 Responses function calling 的 Base URL；检查聊天工具轨迹 |
-| 只总结了摘要，没有正文 | ar5iv 不可用或该论文 HTML 转换失败 | 提示用户导入 Zotero PDF，或后续增加 PDF 下载+文本抽取工具 |
-| Web Search 打开后仍不能读 PDF 全文 | Web Search 主要是网页搜索，不保证下载/解析 PDF | 用内置 arXiv 工具或 Zotero PDF 工具读正文 |
-| MCP 配置看不到 | 当前 UI 不再把 arXiv 当作用户配置 MCP | 这是预期；arXiv 是固定内置工具，不需要 MCP URL |
-| 选择 Anthropic 后不能用 Zotero 工具 | Anthropic adapter 当前没有工具循环 | 暂用 OpenAI Responses 兼容配置，或后续为 Anthropic 实现 tool loop |
+| 现象                                           | 常见原因                                                                     | 处理方式                                                                     |
+| ---------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| arXiv 链接总结时一直卡住                       | Base URL 不支持 hosted `web_search`/MCP 流式事件，或模型没有正常输出工具调用 | 先关闭 Web Search，只保留内置 arXiv 工具；确认使用 OpenAI Responses 兼容配置 |
+| 没有看到 `paper_fetch_arxiv_fulltext` 工具轨迹 | provider 不支持 function tools，或自定义代理丢弃了 `tools` 字段              | 换官方/确认支持 Responses function calling 的 Base URL；检查聊天工具轨迹     |
+| 只总结了摘要，没有正文                         | ar5iv 不可用或该论文 HTML 转换失败                                           | 提示用户导入 Zotero PDF，或后续增加 PDF 下载+文本抽取工具                    |
+| Web Search 打开后仍不能读 PDF 全文             | Web Search 主要是网页搜索，不保证下载/解析 PDF                               | 用内置 arXiv 工具或 Zotero PDF 工具读正文                                    |
+| MCP 配置看不到                                 | 当前 UI 不再把 arXiv 当作用户配置 MCP                                        | 这是预期；arXiv 是固定内置工具，不需要 MCP URL                               |
+| 选择 Anthropic 后不能用 Zotero 工具            | Anthropic adapter 当前没有工具循环                                           | 暂用 OpenAI Responses 兼容配置，或后续为 Anthropic 实现 tool loop            |
 
 ## 新增能力时的选择清单
 

@@ -14,10 +14,7 @@ export function loadUiLanguage(prefs: PrefsStore): UiLanguage {
   return normalizeUiLanguage(prefs.get(UI_LANGUAGE_PREF));
 }
 
-export function saveUiLanguage(
-  prefs: PrefsStore,
-  language: UiLanguage,
-): void {
+export function saveUiLanguage(prefs: PrefsStore, language: UiLanguage): void {
   prefs.set(UI_LANGUAGE_PREF, normalizeUiLanguage(language));
 }
 
@@ -35,4 +32,3 @@ export function currentUiLanguage(): UiLanguage {
     runtime.Zotero?.Prefs?.get(UI_LANGUAGE_PREF, true),
   );
 }
-

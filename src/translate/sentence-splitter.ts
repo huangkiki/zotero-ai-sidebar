@@ -4,12 +4,34 @@ export interface SentenceSpan {
   end: number;
 }
 
-const DIVIDERS = new Set(['.', '?', '!', '。', '？', '！']);
+const DIVIDERS = new Set([".", "?", "!", "。", "？", "！"]);
 
 const ABBREVIATIONS = new Set<string>([
-  'a.m.', 'p.m.', 'vol.', 'inc.', 'jr.', 'dr.', 'tex.', 'co.',
-  'prof.', 'rev.', 'revd.', 'hon.', 'v.s.', 'i.e.', 'ie.',
-  'eg.', 'e.g.', 'al.', 'st.', 'ph.d.', 'capt.', 'mr.', 'mrs.', 'ms.', 'fig.',
+  "a.m.",
+  "p.m.",
+  "vol.",
+  "inc.",
+  "jr.",
+  "dr.",
+  "tex.",
+  "co.",
+  "prof.",
+  "rev.",
+  "revd.",
+  "hon.",
+  "v.s.",
+  "i.e.",
+  "ie.",
+  "eg.",
+  "e.g.",
+  "al.",
+  "st.",
+  "ph.d.",
+  "capt.",
+  "mr.",
+  "mrs.",
+  "ms.",
+  "fig.",
 ]);
 
 function isWhitespace(ch: string): boolean {
@@ -31,7 +53,7 @@ function isAcronymPeriod(text: string, dotIndex: number): boolean {
   let end = dotIndex + 1;
   while (end < text.length && !isWhitespace(text[end]!)) end++;
   const token = text.slice(start, end);
-  const segments = token.split('.').filter(Boolean);
+  const segments = token.split(".").filter(Boolean);
   if (segments.length < 2) return false;
   return segments.every((seg) => seg.length <= 2 && /^[A-Za-z]+$/.test(seg));
 }
@@ -43,11 +65,12 @@ export function splitSentences(text: string): SentenceSpan[] {
     const ch = text[i]!;
     if (!DIVIDERS.has(ch)) continue;
 
-    if (ch === '.') {
+    if (ch === ".") {
       const next = text[i + 1];
       if (next !== undefined && !isWhitespace(next)) continue;
       if (endsWithAbbreviation(text, i)) continue;
-      if (isAcronymPeriod(text, i) && !startsLikelyNextSentence(text, i + 1)) continue;
+      if (isAcronymPeriod(text, i) && !startsLikelyNextSentence(text, i + 1))
+        continue;
     }
 
     const slice = text.slice(cursor, i + 1).trim();

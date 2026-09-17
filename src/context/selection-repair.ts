@@ -26,7 +26,11 @@ export function resolveSelectedTextFromPdfText(
   for (const source of sources) {
     const match = findLongestPrefixMatch(source, selected);
     if (!match) continue;
-    const candidate = sentenceCandidate(source, match.index, match.prefixLength);
+    const candidate = sentenceCandidate(
+      source,
+      match.index,
+      match.prefixLength,
+    );
     if (isUsefulRepairCandidate(candidate, selected)) return candidate;
   }
 

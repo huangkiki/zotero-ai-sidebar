@@ -1,9 +1,5 @@
 import { detectCodex, stopCodexSessions } from "./providers/codex";
-import {
-  observeLocalizedUi,
-  refreshLocalizedUi,
-  uiText,
-} from "./i18n";
+import { observeLocalizedUi, refreshLocalizedUi, uiText } from "./i18n";
 import { hasPresetAuth } from "./settings/types";
 import { initLocale } from "./utils/locale";
 import { createZToolkit } from "./utils/ztoolkit";

@@ -7,10 +7,10 @@ debugging sessions.
 
 ## Two render contexts
 
-| Context | Where | Owner of typesetting | Math mode in our renderer |
-|---|---|---|---|
-| **Chat sidebar** | `src/modules/sidebar.ts` bubble bodies | Bundled KaTeX + our injected `katex.min.css` | `"html"` |
-| **Zotero note** | `assistantContentToNoteHTML` → `note.setNote` (or BN insert) | **Better Notes' own KaTeX pass** | `"source"` |
+| Context          | Where                                                        | Owner of typesetting                         | Math mode in our renderer |
+| ---------------- | ------------------------------------------------------------ | -------------------------------------------- | ------------------------- |
+| **Chat sidebar** | `src/modules/sidebar.ts` bubble bodies                       | Bundled KaTeX + our injected `katex.min.css` | `"html"`                  |
+| **Zotero note**  | `assistantContentToNoteHTML` → `note.setNote` (or BN insert) | **Better Notes' own KaTeX pass**             | `"source"`                |
 
 Both contexts share `findNextMathRegion` for delimiter detection. Only
 `renderMathInto`'s output shape differs by mode.
@@ -37,11 +37,11 @@ model output (Markdown + LaTeX delimiters)
 
 ## Mode matrix
 
-| `mathMode` | renderer output | Survives in… | Used by |
-|---|---|---|---|
-| `"html"` | KaTeX HTML+CSS | Anywhere our `katex.min.css` is loaded | Chat sidebar |
-| `"mathml"` | KaTeX MathML | Native browser MathML; **NOT** in Zotero note editor (gets flattened to textContent — see Issue 2) | _abandoned for note path; kept as option in case a future surface needs native rendering without our CSS_ |
-| `"source"` | `<span class="math">$..$</span>` | Better Notes ProseMirror (BN's `.math` selector renders) | Zotero note path |
+| `mathMode` | renderer output                  | Survives in…                                                                                       | Used by                                                                                                   |
+| ---------- | -------------------------------- | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `"html"`   | KaTeX HTML+CSS                   | Anywhere our `katex.min.css` is loaded                                                             | Chat sidebar                                                                                              |
+| `"mathml"` | KaTeX MathML                     | Native browser MathML; **NOT** in Zotero note editor (gets flattened to textContent — see Issue 2) | _abandoned for note path; kept as option in case a future surface needs native rendering without our CSS_ |
+| `"source"` | `<span class="math">$..$</span>` | Better Notes ProseMirror (BN's `.math` selector renders)                                           | Zotero note path                                                                                          |
 
 ## Key files
 
@@ -76,7 +76,7 @@ Numbering matches the order they were diagnosed.
 - **Root cause:** The note editor strips `<math>`/`<semantics>`/`<mrow>`
   tags down to textContent, so MathML output is flattened. KaTeX's MathML
   output contains both the rendered glyph tree AND a `<annotation
-  encoding="application/x-tex">` source-code element. Both end up as text.
+encoding="application/x-tex">` source-code element. Both end up as text.
 - **Fix:** Switched note path from `"mathml"` to `"source"` mode.
 - **Status:** ✅ Fixed (this specific failure mode).
 
@@ -115,15 +115,15 @@ Numbering matches the order they were diagnosed.
   math like `$\mathbb{E}[·]$` rendered correctly in notes. But display
   math written as `\[ ... \]` round-tripped to a literal text run
   starting with a single `$`, e.g. `$ \mathbb{E}_{\mathcal D,\tau,\omega}
-  \left[ ...` — overflowing the column, no KaTeX.
+\left[ ...` — overflowing the column, no KaTeX.
 - **Root cause:** Better Notes' storage contract distinguishes inline vs
   display math by **HTML tag**, not by class:
-    - inline:  `<span class="math">$LATEX$</span>`
-    - display: `<pre  class="math">$$LATEX$$</pre>`  ← `<pre>`, not `<span>`
-  Found in `convert.js` (`parseKatexHTML`, around the
-  `doc.querySelectorAll("span.katex, span.katex-display")` block). Our
-  `<span class="math">$$..$$</span>` got parsed as inline math whose
-  body began with `$`, leaking the dollars through.
+  - inline: `<span class="math">$LATEX$</span>`
+  - display: `<pre  class="math">$$LATEX$$</pre>` ← `<pre>`, not `<span>`
+    Found in `convert.js` (`parseKatexHTML`, around the
+    `doc.querySelectorAll("span.katex, span.katex-display")` block). Our
+    `<span class="math">$$..$$</span>` got parsed as inline math whose
+    body began with `$`, leaking the dollars through.
 - **Fix (a):** `appendMathSource` now emits `<pre>` for display, `<span>`
   for inline.
 - **Fix (b):** `<p><pre></pre></p>` is invalid HTML — BN's ProseMirror
@@ -180,7 +180,7 @@ When a math rendering issue is reported, run through these in order:
 4. **For chat issues**, check that `katex.min.css` actually loaded.
    In the Browser Console:
    ```js
-   document.querySelector('link[href*="katex"]')
+   document.querySelector('link[href*="katex"]');
    ```
    Should not be null.
 5. **For note issues**, after writing, check the saved HTML:

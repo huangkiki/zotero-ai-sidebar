@@ -1,6 +1,6 @@
-import type { RetrievedPassage } from './types';
-import type { ContextPolicy } from './policy';
-import { DEFAULT_CONTEXT_POLICY } from './policy';
+import type { RetrievedPassage } from "./types";
+import type { ContextPolicy } from "./policy";
+import { DEFAULT_CONTEXT_POLICY } from "./policy";
 
 // Lightweight in-process PDF retrieval. No embeddings, no inverted index —
 // just paragraph splitting + term-occurrence scoring with a phrase boost.
@@ -55,7 +55,11 @@ export function extractPdfRange(
   if (rangeStart >= normalizedText.length) return null;
 
   const start = rangeStart;
-  const cappedEnd = Math.min(rangeEnd, start + policy.maxRangeChars, normalizedText.length);
+  const cappedEnd = Math.min(
+    rangeEnd,
+    start + policy.maxRangeChars,
+    normalizedText.length,
+  );
   const text = normalizedText.slice(start, cappedEnd).trim();
   if (!text) return null;
   return { text, score: 1, start, end: cappedEnd };
@@ -68,7 +72,7 @@ export function extractPdfRange(
 export function queryTerms(query: string): string[] {
   const terms = new Set<string>();
   for (const token of tokenizeQuery(query)) {
-    if (token.kind === 'latin') {
+    if (token.kind === "latin") {
       if (token.text.length > 1) terms.add(token.text.toLowerCase());
       continue;
     }
@@ -86,9 +90,10 @@ function splitIntoPassages(
   policy: ContextPolicy,
 ): RetrievedPassage[] {
   const paragraphs = splitParagraphs(text);
-  const source = paragraphs.length >= 3
-    ? splitLongParts(paragraphs, policy)
-    : chunkText(text, policy);
+  const source =
+    paragraphs.length >= 3
+      ? splitLongParts(paragraphs, policy)
+      : chunkText(text, policy);
 
   const passages: RetrievedPassage[] = [];
   let cursor = 0;
@@ -118,12 +123,12 @@ function splitParagraphs(text: string): string[] {
     }
 
     if (current.length) {
-      paragraphs.push(current.join('\n'));
+      paragraphs.push(current.join("\n"));
       current = [];
     }
   }
 
-  if (current.length) paragraphs.push(current.join('\n'));
+  if (current.length) paragraphs.push(current.join("\n"));
   return paragraphs;
 }
 
@@ -157,7 +162,9 @@ function scorePassage(text: string, terms: string[], query: string): number {
   const lowered = text.toLowerCase();
   let score = 0;
   for (const term of terms) {
-    score += countOccurrences(lowered, term.toLowerCase()) * Math.max(1, Math.min(term.length, 8));
+    score +=
+      countOccurrences(lowered, term.toLowerCase()) *
+      Math.max(1, Math.min(term.length, 8));
   }
 
   const phrase = query.trim().toLowerCase();
@@ -185,7 +192,7 @@ function normalizeWhitespace(text: string): string {
 
   for (const line of normalizedLines) {
     if (line.trim()) {
-      if (pendingBlank && output.length) output.push('');
+      if (pendingBlank && output.length) output.push("");
       output.push(line);
       pendingBlank = false;
     } else if (output.length) {
@@ -193,7 +200,7 @@ function normalizeWhitespace(text: string): string {
     }
   }
 
-  return output.join('\n').trim();
+  return output.join("\n").trim();
 }
 
 function splitLines(text: string): string[] {
@@ -201,14 +208,14 @@ function splitLines(text: string): string[] {
   let start = 0;
   for (let index = 0; index < text.length; index++) {
     const char = text[index];
-    if (char === '\n') {
+    if (char === "\n") {
       const line = text.slice(start, index);
-      lines.push(line.endsWith('\r') ? line.slice(0, -1) : line);
+      lines.push(line.endsWith("\r") ? line.slice(0, -1) : line);
       start = index + 1;
     }
   }
   const line = text.slice(start);
-  lines.push(line.endsWith('\r') ? line.slice(0, -1) : line);
+  lines.push(line.endsWith("\r") ? line.slice(0, -1) : line);
   return lines;
 }
 
@@ -216,33 +223,33 @@ function trimLineEndSpaces(text: string): string {
   let end = text.length;
   while (end > 0) {
     const char = text[end - 1];
-    if (char !== ' ' && char !== '\t') break;
+    if (char !== " " && char !== "\t") break;
     end--;
   }
   return text.slice(0, end);
 }
 
 interface QueryToken {
-  kind: 'latin' | 'cjk';
+  kind: "latin" | "cjk";
   text: string;
 }
 
 function tokenizeQuery(query: string): QueryToken[] {
   const tokens: QueryToken[] = [];
-  let latin = '';
-  let cjk = '';
+  let latin = "";
+  let cjk = "";
 
   const flushLatin = () => {
-    if (latin) tokens.push({ kind: 'latin', text: latin });
-    latin = '';
+    if (latin) tokens.push({ kind: "latin", text: latin });
+    latin = "";
   };
   const flushCjk = () => {
-    if (cjk) tokens.push({ kind: 'cjk', text: cjk });
-    cjk = '';
+    if (cjk) tokens.push({ kind: "cjk", text: cjk });
+    cjk = "";
   };
 
   for (const char of query) {
-    if (isAsciiAlphaNumeric(char) || (char === '-' && latin)) {
+    if (isAsciiAlphaNumeric(char) || (char === "-" && latin)) {
       flushCjk();
       latin += char;
       continue;

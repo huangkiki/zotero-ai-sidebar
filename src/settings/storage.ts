@@ -8,7 +8,7 @@ import {
   type ProviderKind,
   type ReasoningEffort,
   type ReasoningSummary,
-} from './types';
+} from "./types";
 
 // Model-preset persistence backed by Zotero's preferences API.
 //
@@ -27,7 +27,7 @@ export interface PrefsStore {
   set(key: string, value: string): void;
 }
 
-const KEY = 'extensions.zotero-ai-sidebar.presets';
+const KEY = "extensions.zotero-ai-sidebar.presets";
 
 export function loadPresets(prefs: PrefsStore): ModelPreset[] {
   const raw = prefs.get(KEY);
@@ -52,11 +52,19 @@ export function normalizePresetList(value: unknown): ModelPreset[] {
 export function zoteroPrefs(): PrefsStore {
   return {
     get: (k) => {
-      const v = (Zotero as unknown as { Prefs: { get: (k: string, global: boolean) => unknown } }).Prefs.get(k, true);
-      return typeof v === 'string' ? v : undefined;
+      const v = (
+        Zotero as unknown as {
+          Prefs: { get: (k: string, global: boolean) => unknown };
+        }
+      ).Prefs.get(k, true);
+      return typeof v === "string" ? v : undefined;
     },
     set: (k, v) => {
-      (Zotero as unknown as { Prefs: { set: (k: string, v: string, global: boolean) => void } }).Prefs.set(k, v, true);
+      (
+        Zotero as unknown as {
+          Prefs: { set: (k: string, v: string, global: boolean) => void };
+        }
+      ).Prefs.set(k, v, true);
     },
   };
 }
@@ -68,17 +76,31 @@ export function zoteroPrefs(): PrefsStore {
 // GOTCHA: `id` defaults to `preset-${Date.now()}` rather than a UUID; this
 // fallback is only hit on legacy entries that pre-date `crypto.randomUUID()`.
 function normalizePreset(value: unknown): ModelPreset | null {
-  if (!value || typeof value !== 'object') return null;
+  if (!value || typeof value !== "object") return null;
   const preset = value as Partial<ModelPreset>;
-  if (preset.provider !== 'openai' && preset.provider !== 'anthropic' && preset.provider !== 'codex') return null;
+  if (
+    preset.provider !== "openai" &&
+    preset.provider !== "anthropic" &&
+    preset.provider !== "codex"
+  )
+    return null;
   const provider = preset.provider as ProviderKind;
-  const { model, models } = normalizeModels(provider, preset.model, preset.models);
+  const { model, models } = normalizeModels(
+    provider,
+    preset.model,
+    preset.models,
+  );
   return {
     id: String(preset.id || `preset-${Date.now()}`),
-    label: String(preset.label || (provider === 'anthropic' ? 'Claude' : 'GPT')),
+    label: String(
+      preset.label || (provider === "anthropic" ? "Claude" : "GPT"),
+    ),
     provider,
-    apiKey: provider === 'codex' ? '' : String(preset.apiKey || ''),
-    baseUrl: provider === 'codex' ? '' : String(preset.baseUrl || DEFAULT_BASE_URLS[provider]),
+    apiKey: provider === "codex" ? "" : String(preset.apiKey || ""),
+    baseUrl:
+      provider === "codex"
+        ? ""
+        : String(preset.baseUrl || DEFAULT_BASE_URLS[provider]),
     model,
     models,
     maxTokens: Number(preset.maxTokens || 8192),
@@ -102,10 +124,10 @@ function normalizeModels(
 ): { model: string; models: string[] } {
   const fromList = Array.isArray(rawModels)
     ? rawModels
-        .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+        .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
         .filter((entry) => entry.length > 0)
     : [];
-  const trimmedActive = typeof rawModel === 'string' ? rawModel.trim() : '';
+  const trimmedActive = typeof rawModel === "string" ? rawModel.trim() : "";
   const active =
     trimmedActive ||
     (fromList.length > 0 ? fromList[0] : DEFAULT_MODELS[provider]);
@@ -114,7 +136,9 @@ function normalizeModels(
   // editor survives a save/load round-trip.
   const seen = new Set<string>();
   const ordered: string[] = [];
-  const sourceOrder = fromList.includes(active) ? fromList : [active, ...fromList];
+  const sourceOrder = fromList.includes(active)
+    ? fromList
+    : [active, ...fromList];
   for (const entry of sourceOrder) {
     if (!entry || seen.has(entry)) continue;
     seen.add(entry);
@@ -129,9 +153,9 @@ function normalizeModels(
 // settings) can be stored here without touching this normalizer.
 function normalizeExtras(
   provider: ProviderKind,
-  extras: ModelPreset['extras'],
-): ModelPreset['extras'] {
-  if (provider !== 'openai') return extras;
+  extras: ModelPreset["extras"],
+): ModelPreset["extras"] {
+  if (provider !== "openai") return extras;
   const rawEffort = extras?.reasoningEffort;
   return {
     ...extras,
@@ -143,30 +167,30 @@ function normalizeExtras(
       : DEFAULT_REASONING_SUMMARY,
     agentPermissionMode: isAgentPermissionMode(extras?.agentPermissionMode)
       ? extras.agentPermissionMode
-      : 'default',
+      : "default",
   };
 }
 
 function isReasoningEffort(value: unknown): value is ReasoningEffort {
   return (
-    value === 'none' ||
-    value === 'minimal' ||
-    value === 'low' ||
-    value === 'medium' ||
-    value === 'high' ||
-    value === 'xhigh'
+    value === "none" ||
+    value === "minimal" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh"
   );
 }
 
 function isReasoningSummary(value: unknown): value is ReasoningSummary {
   return (
-    value === 'auto' ||
-    value === 'concise' ||
-    value === 'detailed' ||
-    value === 'none'
+    value === "auto" ||
+    value === "concise" ||
+    value === "detailed" ||
+    value === "none"
   );
 }
 
 function isAgentPermissionMode(value: unknown): value is AgentPermissionMode {
-  return value === 'default' || value === 'yolo';
+  return value === "default" || value === "yolo";
 }

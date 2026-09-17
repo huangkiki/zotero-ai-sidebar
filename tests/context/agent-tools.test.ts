@@ -248,7 +248,9 @@ describe("createZoteroAgentTools", () => {
       _internalReader: {
         _annotationManager: { _readOnly: false },
         setSelectedAnnotations() {
-          throw new Error("Permission denied to pass object to privileged code");
+          throw new Error(
+            "Permission denied to pass object to privileged code",
+          );
         },
       },
     };

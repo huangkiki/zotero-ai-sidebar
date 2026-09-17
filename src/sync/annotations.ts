@@ -15,10 +15,10 @@
 // model as chat threads. Deletions are NOT propagated (would need a
 // tombstone log) — known v1 limit, surfaced in the pull-result message.
 
-export type AnnotationType = 'highlight' | 'underline' | 'note' | 'ink';
+export type AnnotationType = "highlight" | "underline" | "note" | "ink";
 
 export interface PortableAnnotation {
-  libraryType: 'user' | 'group';
+  libraryType: "user" | "group";
   groupID?: number;
   parentItemKey: string; // attachment (PDF) key
   parentParentItemKey?: string; // paper item key — diagnostics only
@@ -63,7 +63,7 @@ interface ZoteroAttachmentLike {
 }
 
 interface ZoteroLibraryLike {
-  libraryType?: 'user' | 'group';
+  libraryType?: "user" | "group";
   groupID?: number;
 }
 
@@ -104,19 +104,21 @@ interface ZoteroGlobal {
 }
 
 const SUPPORTED_TYPES = new Set<AnnotationType>([
-  'highlight',
-  'underline',
-  'note',
-  'ink',
+  "highlight",
+  "underline",
+  "note",
+  "ink",
 ]);
 
 export async function exportAllAnnotations(): Promise<PortableAnnotation[]> {
   const Zotero = getZotero();
   const result: PortableAnnotation[] = [];
-  for (const { libraryID, libraryType, groupID } of enumerateLibraries(Zotero)) {
+  for (const { libraryID, libraryType, groupID } of enumerateLibraries(
+    Zotero,
+  )) {
     for (const attachment of await pdfAttachmentsIn(Zotero, libraryID)) {
       const parentKey = attachment.key;
-      if (typeof parentKey !== 'string' || parentKey.length === 0) continue;
+      if (typeof parentKey !== "string" || parentKey.length === 0) continue;
       const parentParentKey = attachment.parentItem?.key;
       const annotations = attachment.getAnnotations?.() ?? [];
       for (const annotation of annotations) {
@@ -193,7 +195,7 @@ export async function importAllAnnotations(
 function portableFromAnnotation(
   annotation: ZoteroAnnotationLike,
   parents: {
-    libraryType: 'user' | 'group';
+    libraryType: "user" | "group";
     groupID?: number;
     parentItemKey: string;
     parentParentItemKey?: string;
@@ -211,9 +213,9 @@ function portableFromAnnotation(
   const position = annotation.annotationPosition ?? null;
   const json: Record<string, unknown> = {
     type,
-    color: annotation.annotationColor ?? '',
-    pageLabel: annotation.annotationPageLabel ?? '',
-    sortIndex: annotation.annotationSortIndex ?? '',
+    color: annotation.annotationColor ?? "",
+    pageLabel: annotation.annotationPageLabel ?? "",
+    sortIndex: annotation.annotationSortIndex ?? "",
     position,
   };
   // Optional fields — only include when set, to keep the snapshot tight.
@@ -225,7 +227,7 @@ function portableFromAnnotation(
 
   const tags = (annotation.getTags?.() ?? [])
     .map((t) => t.tag)
-    .filter((t): t is string => typeof t === 'string' && t.length > 0);
+    .filter((t): t is string => typeof t === "string" && t.length > 0);
 
   const portable: PortableAnnotation = {
     libraryType: parents.libraryType,
@@ -245,17 +247,17 @@ function portableFromAnnotation(
 
 function* enumerateLibraries(Zotero: ZoteroGlobal): Iterable<{
   libraryID: number;
-  libraryType: 'user' | 'group';
+  libraryType: "user" | "group";
   groupID?: number;
 }> {
-  yield { libraryID: Zotero.Libraries.userLibraryID, libraryType: 'user' };
+  yield { libraryID: Zotero.Libraries.userLibraryID, libraryType: "user" };
   for (const group of Zotero.Groups.getAll() ?? []) {
-    if (typeof group.libraryID !== 'number' || typeof group.id !== 'number') {
+    if (typeof group.libraryID !== "number" || typeof group.id !== "number") {
       continue;
     }
     yield {
       libraryID: group.libraryID,
-      libraryType: 'group',
+      libraryType: "group",
       groupID: group.id,
     };
   }
@@ -271,7 +273,7 @@ function pdfAttachmentsIn(
       if (item.isPDFAttachment?.()) return true;
       return (
         item.isAttachment?.() === true &&
-        item.attachmentContentType === 'application/pdf'
+        item.attachmentContentType === "application/pdf"
       );
     });
   });
@@ -281,14 +283,14 @@ function resolveLibraryID(
   Zotero: ZoteroGlobal,
   candidate: PortableAnnotation,
 ): number | null {
-  if (candidate.libraryType === 'group') {
-    if (typeof candidate.groupID !== 'number') return null;
+  if (candidate.libraryType === "group") {
+    if (typeof candidate.groupID !== "number") return null;
     const group = Zotero.Groups.get(candidate.groupID);
-    if (!group || typeof group.libraryID !== 'number') return null;
+    if (!group || typeof group.libraryID !== "number") return null;
     return group.libraryID;
   }
   const userID = Zotero.Libraries.userLibraryID;
-  return typeof userID === 'number' ? userID : null;
+  return typeof userID === "number" ? userID : null;
 }
 
 function getZotero(): ZoteroGlobal {

@@ -46,17 +46,15 @@ describe("interface language", () => {
     expect(uiText("设置", "en-US")).toBe("Settings");
     expect(uiText("隐藏", "en-US")).toBe("Hide");
     expect(uiText("没有打开的对话", "en-US")).toBe("No chat is open");
-    expect(
-      uiText("选择已有对话，或新建一个对话后再输入。", "en-US"),
-    ).toBe("Select an existing chat, or create a new one before typing.");
+    expect(uiText("选择已有对话，或新建一个对话后再输入。", "en-US")).toBe(
+      "Select an existing chat, or create a new one before typing.",
+    );
     expect(uiText("批量译(3)", "en-US")).toBe("Translate all (3)");
     expect(uiText("复制MD", "en-US")).toBe("Copy Markdown");
     expect(uiText("字号", "en-US")).toBe("Font size");
     expect(uiText("13px 默认", "en-US")).toBe("13px default");
     expect(uiText("调试", "en-US")).toBe("Debug");
-    expect(uiText("🔖 全文重点", "en-US")).toBe(
-      "🔖 Highlight key passages",
-    );
+    expect(uiText("🔖 全文重点", "en-US")).toBe("🔖 Highlight key passages");
     expect(uiText("截图", "en-US")).toBe("Screenshot");
     expect(uiText("图片", "en-US")).toBe("Image");
     expect(uiText("Auto - 由模型决定", "en-US")).toBe(
@@ -178,7 +176,12 @@ describe("interface language", () => {
 
     const visible = [root.textContent ?? ""];
     for (const element of Array.from(root.querySelectorAll("*"))) {
-      for (const attribute of ["title", "tooltiptext", "placeholder", "aria-label"]) {
+      for (const attribute of [
+        "title",
+        "tooltiptext",
+        "placeholder",
+        "aria-label",
+      ]) {
         visible.push(element.getAttribute(attribute) ?? "");
       }
     }

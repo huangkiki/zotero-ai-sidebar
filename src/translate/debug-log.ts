@@ -14,9 +14,11 @@ export function logTranslateDebug(
   const prefix = `[${channel}] ${message}`;
   const payload = extra ? `${prefix} ${safeStringify(extra)}` : prefix;
   try {
-    const Z = (globalThis as unknown as {
-      Zotero?: { debug?: (s: string) => void };
-    }).Zotero;
+    const Z = (
+      globalThis as unknown as {
+        Zotero?: { debug?: (s: string) => void };
+      }
+    ).Zotero;
     Z?.debug?.(payload);
   } catch {
     /* ignore */
@@ -31,9 +33,15 @@ export function logTranslateDebug(
 
 function writeDebugFile(payload: string): void {
   try {
-    const Z = (globalThis as unknown as {
-      Zotero?: { File?: { putContentsAsync?: (path: string, data: string) => Promise<void> } };
-    }).Zotero;
+    const Z = (
+      globalThis as unknown as {
+        Zotero?: {
+          File?: {
+            putContentsAsync?: (path: string, data: string) => Promise<void>;
+          };
+        };
+      }
+    ).Zotero;
     const putContentsAsync = Z?.File?.putContentsAsync;
     if (typeof putContentsAsync !== "function") return;
     const state = debugState();
@@ -43,7 +51,9 @@ function writeDebugFile(payload: string): void {
     }
     state.writing = state.writing
       .catch(() => undefined)
-      .then(() => putContentsAsync(DEBUG_LOG_PATH, `${state.lines.join("\n")}\n`))
+      .then(() =>
+        putContentsAsync(DEBUG_LOG_PATH, `${state.lines.join("\n")}\n`),
+      )
       .catch(() => undefined);
   } catch {
     /* ignore */
@@ -62,6 +72,6 @@ function safeStringify(value: Record<string, unknown>): string {
   try {
     return JSON.stringify(value);
   } catch {
-    return "{\"error\":\"failed to stringify debug payload\"}";
+    return '{"error":"failed to stringify debug payload"}';
   }
 }

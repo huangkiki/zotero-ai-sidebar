@@ -1,5 +1,5 @@
-import React from 'react';
-import type { ModelPreset } from '../settings/types';
+import React from "react";
+import type { ModelPreset } from "../settings/types";
 
 interface Props {
   presets: ModelPreset[];
@@ -8,7 +8,12 @@ interface Props {
   onOpenSettings: () => void;
 }
 
-export function PresetSwitcher({ presets, selectedId, onSelect, onOpenSettings }: Props) {
+export function PresetSwitcher({
+  presets,
+  selectedId,
+  onSelect,
+  onOpenSettings,
+}: Props) {
   if (presets.length === 0) {
     return (
       <div className="preset-empty">
@@ -19,10 +24,13 @@ export function PresetSwitcher({ presets, selectedId, onSelect, onOpenSettings }
   }
   return (
     <div className="preset-switcher">
-      <select value={selectedId ?? ''} onChange={(e) => onSelect(e.target.value)}>
+      <select
+        value={selectedId ?? ""}
+        onChange={(e) => onSelect(e.target.value)}
+      >
         {presets.map((p) => (
           <option key={p.id} value={p.id}>
-            {p.label} ({p.provider} · {p.model || 'no model'})
+            {p.label} ({p.provider} · {p.model || "no model"})
           </option>
         ))}
       </select>

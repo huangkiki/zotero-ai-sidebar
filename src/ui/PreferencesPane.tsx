@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from 'react';
-import { loadPresets, savePresets, zoteroPrefs } from '../settings/storage';
+import React, { useEffect, useState } from "react";
+import { loadPresets, savePresets, zoteroPrefs } from "../settings/storage";
 import {
   newPreset,
   DEFAULT_BASE_URLS,
   type ModelPreset,
   type ProviderKind,
-} from '../settings/types';
+} from "../settings/types";
 
 interface Props {
   onDone: () => void;
@@ -37,14 +37,23 @@ export function PreferencesPane({ onDone }: Props) {
   const remove = (id: string) => persist(presets.filter((p) => p.id !== id));
 
   return (
-    <div className="prefs-pane" style={{ padding: 12, overflowY: 'auto', height: '100%' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+    <div
+      className="prefs-pane"
+      style={{ padding: 12, overflowY: "auto", height: "100%" }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
         <h3 style={{ margin: 0 }}>模型预设</h3>
         <button onClick={onDone}>完成</button>
       </div>
       <div className="add-buttons" style={{ marginTop: 12 }}>
-        <button onClick={() => add('anthropic')}>+ Anthropic</button>
-        <button onClick={() => add('openai')}>+ OpenAI 兼容</button>
+        <button onClick={() => add("anthropic")}>+ Anthropic</button>
+        <button onClick={() => add("openai")}>+ OpenAI 兼容</button>
       </div>
       <div className="preset-list">
         {presets.map((p) => (
@@ -57,7 +66,9 @@ export function PreferencesPane({ onDone }: Props) {
             onRemove={() => remove(p.id)}
           />
         ))}
-        {presets.length === 0 && <div className="empty">暂无预设。点击上方按钮添加。</div>}
+        {presets.length === 0 && (
+          <div className="empty">暂无预设。点击上方按钮添加。</div>
+        )}
       </div>
     </div>
   );
@@ -81,7 +92,7 @@ function PresetRow({
       <div className="preset-summary" onClick={onToggle}>
         <span className="preset-label">{preset.label}</span>
         <span className="preset-provider">{preset.provider}</span>
-        <span className="preset-model">{preset.model || '(no model)'}</span>
+        <span className="preset-model">{preset.model || "(no model)"}</span>
         <button
           onClick={(e) => {
             e.stopPropagation();
@@ -117,14 +128,20 @@ function PresetRow({
             <input
               value={preset.model}
               onChange={(e) => onUpdate({ model: e.target.value })}
-              placeholder={preset.provider === 'anthropic' ? 'claude-opus-4-7-…' : 'gpt-5.2'}
+              placeholder={
+                preset.provider === "anthropic"
+                  ? "claude-opus-4-7-…"
+                  : "gpt-5.2"
+              }
             />
           </Field>
           <Field label="Max tokens">
             <input
               type="number"
               value={preset.maxTokens}
-              onChange={(e) => onUpdate({ maxTokens: parseInt(e.target.value, 10) || 0 })}
+              onChange={(e) =>
+                onUpdate({ maxTokens: parseInt(e.target.value, 10) || 0 })
+              }
             />
           </Field>
         </div>
@@ -133,7 +150,13 @@ function PresetRow({
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
   return (
     <label className="prefs-field">
       <span>{label}</span>

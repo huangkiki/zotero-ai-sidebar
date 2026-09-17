@@ -1,15 +1,11 @@
-import type { PrefsStore } from '../settings/storage';
-import {
-  loadSyncAccount,
-  saveSyncAccount,
-  type SyncAccount,
-} from './account';
+import type { PrefsStore } from "../settings/storage";
+import { loadSyncAccount, saveSyncAccount, type SyncAccount } from "./account";
 import {
   applySyncSnapshot,
   buildSyncSnapshot,
   parseSyncSnapshot,
   type ApplySnapshotResult,
-} from './state';
+} from "./state";
 import {
   ensureFolder,
   getFile,
@@ -17,7 +13,7 @@ import {
   testAuth,
   type WebDavConfig,
   WebDavError,
-} from './webdav';
+} from "./webdav";
 
 // Sync orchestrator: glues account creds + WebDAV verbs + snapshot codec
 // into the three operations the preferences UI calls (test/push/pull).
@@ -27,7 +23,7 @@ import {
 // with a coherent snapshot or leave everything alone. Multiple files would
 // open up partial-pull windows where presets and chat history drift.
 
-const SYNC_FILE_NAME = 'state.json';
+const SYNC_FILE_NAME = "state.json";
 
 export interface SyncTestResult {
   ok: boolean;
@@ -51,13 +47,14 @@ export async function testSyncConnection(
   account: SyncAccount,
 ): Promise<SyncTestResult> {
   const config = toConfig(account);
-  if (!config) return { ok: false, message: '请先填写 WebDAV URL、用户名和密码' };
+  if (!config)
+    return { ok: false, message: "请先填写 WebDAV URL、用户名和密码" };
   try {
     await testAuth(config);
     await ensureFolder(config, account.remoteFolder);
-    return { ok: true, message: 'WebDAV 连接成功' };
+    return { ok: true, message: "WebDAV 连接成功" };
   } catch (err) {
-    return { ok: false, message: errorMessage('连接失败', err) };
+    return { ok: false, message: errorMessage("连接失败", err) };
   }
 }
 
@@ -67,21 +64,24 @@ export async function pushToCloud(
 ): Promise<SyncPushResult> {
   const config = toConfig(account);
   if (!config) {
-    return { ok: false, message: '请先填写 WebDAV 账号', bytes: 0 };
+    return { ok: false, message: "请先填写 WebDAV 账号", bytes: 0 };
   }
   try {
     const snapshot = await buildSyncSnapshot(prefs);
     const body = JSON.stringify(snapshot, null, 2);
     await ensureFolder(config, account.remoteFolder);
     await putFile(config, syncFilePath(account), body);
-    saveSyncAccount(prefs, { ...account, lastPushAt: new Date().toISOString() });
+    saveSyncAccount(prefs, {
+      ...account,
+      lastPushAt: new Date().toISOString(),
+    });
     return {
       ok: true,
       bytes: byteLength(body),
       message: `已上传 ${formatSize(byteLength(body))} 到 ${syncFilePath(account)}`,
     };
   } catch (err) {
-    return { ok: false, bytes: 0, message: errorMessage('上传失败', err) };
+    return { ok: false, bytes: 0, message: errorMessage("上传失败", err) };
   }
 }
 
@@ -90,7 +90,7 @@ export async function pullFromCloud(
   account: SyncAccount,
 ): Promise<SyncPullResult> {
   const config = toConfig(account);
-  if (!config) return { ok: false, message: '请先填写 WebDAV 账号' };
+  if (!config) return { ok: false, message: "请先填写 WebDAV 账号" };
   try {
     const result = await getFile(config, syncFilePath(account));
     if (!result.found) {
@@ -101,7 +101,10 @@ export async function pullFromCloud(
     }
     const snapshot = parseSyncSnapshot(result.body);
     const applied = await applySyncSnapshot(prefs, snapshot);
-    saveSyncAccount(prefs, { ...account, lastPullAt: new Date().toISOString() });
+    saveSyncAccount(prefs, {
+      ...account,
+      lastPullAt: new Date().toISOString(),
+    });
     return {
       ok: true,
       message: formatPullMessage(applied),
@@ -109,7 +112,7 @@ export async function pullFromCloud(
       remoteExportedAt: snapshot.exportedAt,
     };
   } catch (err) {
-    return { ok: false, message: errorMessage('下载失败', err) };
+    return { ok: false, message: errorMessage("下载失败", err) };
   }
 }
 
@@ -147,17 +150,17 @@ function formatPullMessage(applied: ApplySnapshotResult): string {
   ];
   if (threads.unresolved > 0 || annotations.unresolved > 0) {
     lines.push(
-      '提示：未匹配的条目通常是 Zotero 主同步还没把对应论文 / PDF 拉过来；等 Zotero 同步完成后再点一次”从云端下载”即可。',
+      "提示：未匹配的条目通常是 Zotero 主同步还没把对应论文 / PDF 拉过来；等 Zotero 同步完成后再点一次”从云端下载”即可。",
     );
   }
-  return lines.join('\n');
+  return lines.join("\n");
 }
 
 function byteLength(text: string): number {
   // Approximate: each char encodes to ≤ 4 UTF-8 bytes; for ASCII-heavy
   // sync payloads, `Blob` is overkill. TextEncoder is available in Zotero's
   // privileged context and gives the exact count.
-  if (typeof TextEncoder === 'function') {
+  if (typeof TextEncoder === "function") {
     return new TextEncoder().encode(text).length;
   }
   return text.length;

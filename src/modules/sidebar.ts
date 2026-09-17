@@ -3817,9 +3817,7 @@ async function runFullTextTranslationBatch(
       updateMessageBubble(mount, state, assistantIndex, assistant);
     }
 
-    assistant.content += uiText(
-      `\n\n共 ${paragraphs.length} 段，开始翻译。`,
-    );
+    assistant.content += uiText(`\n\n共 ${paragraphs.length} 段，开始翻译。`);
     updateMessageBubble(mount, state, assistantIndex, assistant);
 
     let skippedCached = 0;
@@ -8945,9 +8943,7 @@ function installReaderTranslateToolbar(
       translateBtn.type = "button";
       translateBtn.className = "zai-reader-full-translate-button";
       translateBtn.textContent = uiText("全文译");
-      translateBtn.title = uiText(
-        "一键全文逐段翻译，翻译参数在插件设置中配置",
-      );
+      translateBtn.title = uiText("一键全文逐段翻译，翻译参数在插件设置中配置");
       translateBtn.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();

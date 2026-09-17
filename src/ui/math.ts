@@ -106,7 +106,12 @@ type OpenerKind =
 function peekOpener(
   text: string,
   i: number,
-): { kind: OpenerKind; openLen: number; closeLen: number; display: boolean } | null {
+): {
+  kind: OpenerKind;
+  openLen: number;
+  closeLen: number;
+  display: boolean;
+} | null {
   if (text.startsWith("\\[", i)) {
     return { kind: "displayBracket", openLen: 2, closeLen: 2, display: true };
   }

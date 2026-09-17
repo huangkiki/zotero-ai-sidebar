@@ -1,4 +1,8 @@
-import type { AgentTool, Message, ToolExecutionResult } from "../providers/types";
+import type {
+  AgentTool,
+  Message,
+  ToolExecutionResult,
+} from "../providers/types";
 import type { ContextSource, ItemMetadata } from "./builder";
 import { formatAnnotations, formatRetrievedPassages } from "./message-format";
 import { createPaperTools } from "./paper-tools";
@@ -425,12 +429,16 @@ function createTextAnnotationNearSelectionTool(
           "zotero_add_text_annotation_to_selection requires a non-empty comment.",
         );
       }
-      const saved = await saveTextAnnotationNearSelection(draft, {
-        comment,
-        color: stringArg(parsed, "color") || undefined,
-        fontSize: numberArg(parsed, "fontSize") ?? undefined,
-        placement: textAnnotationPlacementArg(parsed),
-      }, options.getActiveReader?.());
+      const saved = await saveTextAnnotationNearSelection(
+        draft,
+        {
+          comment,
+          color: stringArg(parsed, "color") || undefined,
+          fontSize: numberArg(parsed, "fontSize") ?? undefined,
+          placement: textAnnotationPlacementArg(parsed),
+        },
+        options.getActiveReader?.(),
+      );
       return {
         output: [
           "[Saved Zotero PDF text annotation]",
@@ -771,7 +779,9 @@ function createPreviousContextTool(
       const end = numberArg(parsed, "end");
       const query = stringArg(parsed, "query")?.toLowerCase();
       const maxChars = clamp(
-        Math.floor(numberArg(parsed, "maxChars") ?? policy.retainedContextCharBudget),
+        Math.floor(
+          numberArg(parsed, "maxChars") ?? policy.retainedContextCharBudget,
+        ),
         1000,
         policy.retainedContextCharBudget * 4,
       );
@@ -780,7 +790,9 @@ function createPreviousContextTool(
           "chat_get_previous_context requires both start and end when filtering by range.",
         );
       }
-      const candidates = previousContextCandidates(options.previousMessages ?? []);
+      const candidates = previousContextCandidates(
+        options.previousMessages ?? [],
+      );
       const matches = candidates.filter((candidate) => {
         if (sourceKind && candidate.sourceKind !== sourceKind) return false;
         if (sourceID && candidate.sourceID !== sourceID) return false;
@@ -806,7 +818,10 @@ function createPreviousContextTool(
         };
       }
       const passages = selected.map((candidate) => candidate.passage);
-      const chars = passages.reduce((sum, passage) => sum + passage.text.length, 0);
+      const chars = passages.reduce(
+        (sum, passage) => sum + passage.text.length,
+        0,
+      );
       const source = selected[0];
       return {
         output: [
@@ -814,9 +829,13 @@ function createPreviousContextTool(
           ...selected.map((candidate, index) =>
             [
               `#${index + 1} turn ${candidate.turn}`,
-              candidate.sourceKind ? `Source kind: ${candidate.sourceKind}` : "",
+              candidate.sourceKind
+                ? `Source kind: ${candidate.sourceKind}`
+                : "",
               candidate.sourceID ? `Source ID: ${candidate.sourceID}` : "",
-              candidate.sourceTitle ? `Source title: ${candidate.sourceTitle}` : "",
+              candidate.sourceTitle
+                ? `Source title: ${candidate.sourceTitle}`
+                : "",
               candidate.sourceUrl ? `Source URL: ${candidate.sourceUrl}` : "",
               `Range: ${candidate.passage.start}-${candidate.passage.end}`,
               "",
@@ -843,11 +862,16 @@ function createPreviousContextTool(
   };
 }
 
-function previousContextCandidates(messages: Message[]): PreviousContextCandidate[] {
+function previousContextCandidates(
+  messages: Message[],
+): PreviousContextCandidate[] {
   const candidates: PreviousContextCandidate[] = [];
   const seen = new Set<string>();
   messages.forEach((message, index) => {
-    if (message.role !== "user" || !message.context?.retrievedPassages?.length) {
+    if (
+      message.role !== "user" ||
+      !message.context?.retrievedPassages?.length
+    ) {
       return;
     }
     for (const passage of message.context.retrievedPassages) {
@@ -1087,8 +1111,7 @@ export async function saveTextAnnotationNearSelection(
   // attachment: clear any stale read-only flag left by a previous failed save,
   // and select the new annotation so it's visually highlighted. Both are
   // strictly cosmetic — failures here MUST NOT mask the successful DB write.
-  const targetReader =
-    reader ?? findOpenReaderForAttachment(attachment.id);
+  const targetReader = reader ?? findOpenReaderForAttachment(attachment.id);
   if (targetReader) {
     nudgeReaderAfterSave(targetReader, attachment, key);
   }
@@ -1125,7 +1148,10 @@ async function runSaveFromJSON(
   // JSON. Every object in the call lives in the chrome compartment, so no
   // cross-compartment wrapping happens. This is the most robust path.
   const chromeSave = chromeWin?.Zotero?.Annotations?.saveFromJSON;
-  if (typeof chromeSave === "function" && typeof chromeWin?.JSON?.parse === "function") {
+  if (
+    typeof chromeSave === "function" &&
+    typeof chromeWin?.JSON?.parse === "function"
+  ) {
     try {
       const chromeJSON = chromeWin.JSON.parse(jsonString);
       const result = await chromeSave.call(
@@ -1146,12 +1172,16 @@ async function runSaveFromJSON(
 
   // Strategy B: addon-scope saveFromJSON with explicit Components.utils.cloneInto
   // into chrome. Use chrome window's Cu (more reliable than addon's globalThis).
-  const Cu = chromeWin?.Components?.utils ?? (globalThis as any).Components?.utils;
+  const Cu =
+    chromeWin?.Components?.utils ?? (globalThis as any).Components?.utils;
   if (Cu?.cloneInto && chromeWin) {
     try {
       const plain = JSON.parse(jsonString);
       const cloned = Cu.cloneInto(plain, chromeWin);
-      const result = await fallbackZ.Annotations.saveFromJSON(attachment, cloned);
+      const result = await fallbackZ.Annotations.saveFromJSON(
+        attachment,
+        cloned,
+      );
       debugAgentTool("text-annotation.save.B.cu-cloneInto.ok", {
         itemID: result?.id,
       });
@@ -1228,14 +1258,18 @@ function clearStaleReaderReadOnly(internalReader: any): void {
     if (typeof internalReader.setReadOnly === "function") {
       internalReader.setReadOnly(false);
     }
-  } catch {}
+  } catch {
+    // Continue with the annotation manager if the reader API is unavailable.
+  }
   try {
     if (typeof manager?.setReadOnly === "function") {
       manager.setReadOnly(false);
     } else if (manager && "_readOnly" in manager) {
       manager._readOnly = false;
     }
-  } catch {}
+  } catch {
+    // Read-only cleanup is best effort and must not interrupt annotation saving.
+  }
 }
 
 function attachmentLooksEditable(attachment: ZoteroAnnotationItem): boolean {
@@ -1264,7 +1298,9 @@ function clonePlainJSONForTargetScope<T>(value: T, targetScope?: unknown): T {
   if (typeof targetJSON?.parse === "function") {
     try {
       return targetJSON.parse(JSON.stringify(plain)) as T;
-    } catch {}
+    } catch {
+      // Fall back to cloneInto when parsing in the target scope is unavailable.
+    }
   }
   return cloneForTargetScope(plain, targetScope);
 }
@@ -1324,9 +1360,7 @@ function readerAttachmentIDForTool(reader: unknown): number | null {
 function findOpenReaderForAttachment(attachmentID: number): unknown | null {
   try {
     const Z = (globalThis as any).Zotero;
-    const readers = Array.isArray(Z?.Reader?._readers)
-      ? Z.Reader._readers
-      : [];
+    const readers = Array.isArray(Z?.Reader?._readers) ? Z.Reader._readers : [];
     return (
       readers.find(
         (reader: unknown) => readerAttachmentIDForTool(reader) === attachmentID,
@@ -1400,8 +1434,7 @@ function textAnnotationJSONFromSelection(
       patch.color || stringValue(base.color) || Z.Annotations.DEFAULT_COLOR,
     pageLabel: stringValue(base.pageLabel) || String(anchor.pageIndex + 1),
     sortIndex:
-      stringValue(base.sortIndex) ||
-      fallbackSortIndex(anchor.pageIndex, rect),
+      stringValue(base.sortIndex) || fallbackSortIndex(anchor.pageIndex, rect),
     position: {
       pageIndex: anchor.pageIndex,
       fontSize,
@@ -1414,7 +1447,9 @@ function textAnnotationJSONFromSelection(
 function textAnnotationAnchor(
   position: object,
 ): { pageIndex: number; rect: [number, number, number, number] } | null {
-  const pageIndex = numberValue((position as { pageIndex?: unknown }).pageIndex);
+  const pageIndex = numberValue(
+    (position as { pageIndex?: unknown }).pageIndex,
+  );
   const rects = (position as { rects?: unknown }).rects;
   if (pageIndex == null || !Array.isArray(rects)) return null;
   const usable = rects.flatMap((rect) => {
@@ -1565,11 +1600,15 @@ function componentsUtilsForClone(): { cloneInto?: Function } | null {
   try {
     const globalUtils = (globalThis as any).Components?.utils;
     if (globalUtils) return globalUtils;
-  } catch {}
+  } catch {
+    // Try the main window when sandbox access to Components is denied.
+  }
   try {
     const winUtils = (zoteroMainWindowForClone() as any)?.Components?.utils;
     if (winUtils) return winUtils;
-  } catch {}
+  } catch {
+    // Leave cloning unavailable when neither scope exposes Components.utils.
+  }
   return null;
 }
 
@@ -1595,7 +1634,9 @@ function debugAgentTool(topic: string, data: Record<string, unknown>): void {
     if (typeof Z?.debug === "function") {
       Z.debug(`[Zotero AI Sidebar] ${topic}: ${JSON.stringify(data)}`);
     }
-  } catch {}
+  } catch {
+    // Diagnostic logging must not interrupt annotation operations.
+  }
 }
 
 function errorMessage(err: unknown): string {

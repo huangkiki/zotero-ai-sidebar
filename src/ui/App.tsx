@@ -1,13 +1,13 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { ChatView } from './ChatView';
-import { PresetSwitcher } from './PresetSwitcher';
-import { ContextCard } from './ContextCard';
-import { PreferencesPane } from './PreferencesPane';
-import { loadPresets, zoteroPrefs } from '../settings/storage';
-import { getProvider } from '../providers/factory';
-import { buildContext, type ItemMetadata } from '../context/builder';
-import { zoteroContextSource } from '../context/zotero-source';
-import type { ModelPreset } from '../settings/types';
+import React, { useEffect, useState, useCallback } from "react";
+import { ChatView } from "./ChatView";
+import { PresetSwitcher } from "./PresetSwitcher";
+import { ContextCard } from "./ContextCard";
+import { PreferencesPane } from "./PreferencesPane";
+import { loadPresets, zoteroPrefs } from "../settings/storage";
+import { getProvider } from "../providers/factory";
+import { buildContext, type ItemMetadata } from "../context/builder";
+import { zoteroContextSource } from "../context/zotero-source";
+import type { ModelPreset } from "../settings/types";
 
 interface Props {
   itemID: number | null;
@@ -37,7 +37,10 @@ export function App({ itemID }: Props) {
       setItem(null);
       return;
     }
-    zoteroContextSource.getItem(itemID).then(setItem).catch(() => setItem(null));
+    zoteroContextSource
+      .getItem(itemID)
+      .then(setItem)
+      .catch(() => setItem(null));
   }, [itemID]);
 
   const preset = presets.find((p) => p.id === selectedId) ?? null;
@@ -61,7 +64,7 @@ export function App({ itemID }: Props) {
   }
 
   return (
-    <div className="zai-app" key={itemID ?? 'no-item'}>
+    <div className="zai-app" key={itemID ?? "no-item"}>
       <PresetSwitcher
         presets={presets}
         selectedId={selectedId}

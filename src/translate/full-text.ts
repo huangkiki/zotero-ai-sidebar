@@ -42,8 +42,7 @@ function isReferenceHeading(line: string): boolean {
   return (
     /^(?:references|bibliography|works cited|literature cited|cited references|references and notes)$/i.test(
       withoutNumber,
-    ) ||
-    /^(?:参考文献|参考资料|引用文献)$/.test(withoutNumber)
+    ) || /^(?:参考文献|参考资料|引用文献)$/.test(withoutNumber)
   );
 }
 
@@ -51,7 +50,9 @@ function splitLongParagraph(paragraph: string): string[] {
   if (paragraph.length <= FULL_TRANSLATE_MAX_PARAGRAPH_CHARS) {
     return [paragraph];
   }
-  const sentences = paragraph.match(/[^.!?。！？]+[.!?。！？]*/g) ?? [paragraph];
+  const sentences = paragraph.match(/[^.!?。！？]+[.!?。！？]*/g) ?? [
+    paragraph,
+  ];
   const chunks: string[] = [];
   let current = "";
   for (const sentence of sentences) {

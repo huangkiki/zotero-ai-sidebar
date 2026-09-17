@@ -1,10 +1,10 @@
-import { describe, expect, it } from 'vitest';
-import type { PrefsStore } from '../../src/settings/storage';
+import { describe, expect, it } from "vitest";
+import type { PrefsStore } from "../../src/settings/storage";
 import {
   DEFAULT_TOOL_SETTINGS,
   loadToolSettings,
   saveToolSettings,
-} from '../../src/settings/tool-settings';
+} from "../../src/settings/tool-settings";
 
 function memPrefs(): PrefsStore {
   const map = new Map<string, string>();
@@ -14,112 +14,112 @@ function memPrefs(): PrefsStore {
   };
 }
 
-describe('tool settings storage', () => {
-  it('returns defaults for missing or invalid values', () => {
+describe("tool settings storage", () => {
+  it("returns defaults for missing or invalid values", () => {
     expect(loadToolSettings(memPrefs())).toEqual(DEFAULT_TOOL_SETTINGS);
     const prefs = memPrefs();
-    prefs.set('extensions.zotero-ai-sidebar.toolSettings', '{broken');
+    prefs.set("extensions.zotero-ai-sidebar.toolSettings", "{broken");
     expect(loadToolSettings(prefs)).toEqual(DEFAULT_TOOL_SETTINGS);
   });
 
-  it('round trips configured web and arxiv MCP settings', () => {
+  it("round trips configured web and arxiv MCP settings", () => {
     const prefs = memPrefs();
     saveToolSettings(prefs, {
-      webSearchMode: 'live',
+      webSearchMode: "live",
       mcpServers: [],
-      annotationColorGuide: 'custom guide',
+      annotationColorGuide: "custom guide",
       arxivMcp: {
         enabled: true,
-        serverLabel: 'arxiv-search',
-        serverUrl: 'https://example.test/mcp',
-        allowedTools: ['search', 'fetch_pdf'],
-        requireApproval: 'always',
+        serverLabel: "arxiv-search",
+        serverUrl: "https://example.test/mcp",
+        allowedTools: ["search", "fetch_pdf"],
+        requireApproval: "always",
       },
     });
     expect(loadToolSettings(prefs)).toEqual({
-      webSearchMode: 'live',
+      webSearchMode: "live",
       mcpServers: [],
-      annotationColorGuide: 'custom guide',
+      annotationColorGuide: "custom guide",
       textAnnotationFontSize: DEFAULT_TOOL_SETTINGS.textAnnotationFontSize,
       arxivMcp: {
         enabled: true,
-        serverLabel: 'arxiv-search',
-        serverUrl: 'https://example.test/mcp',
-        allowedTools: ['search', 'fetch_pdf'],
-        requireApproval: 'always',
+        serverLabel: "arxiv-search",
+        serverUrl: "https://example.test/mcp",
+        allowedTools: ["search", "fetch_pdf"],
+        requireApproval: "always",
       },
     });
   });
 
-  it('normalizes malformed arxiv MCP values', () => {
+  it("normalizes malformed arxiv MCP values", () => {
     const prefs = memPrefs();
     prefs.set(
-      'extensions.zotero-ai-sidebar.toolSettings',
+      "extensions.zotero-ai-sidebar.toolSettings",
       JSON.stringify({
-        webSearchMode: 'bad',
+        webSearchMode: "bad",
         arxivMcp: {
           enabled: true,
-          serverLabel: ' arxiv search!* ',
+          serverLabel: " arxiv search!* ",
           serverUrl: 12,
-          allowedTools: ['search', 'search', '', 'read'],
-          requireApproval: 'bad',
+          allowedTools: ["search", "search", "", "read"],
+          requireApproval: "bad",
         },
       }),
     );
     expect(loadToolSettings(prefs)).toEqual({
-      webSearchMode: 'disabled',
+      webSearchMode: "disabled",
       mcpServers: [],
       annotationColorGuide: DEFAULT_TOOL_SETTINGS.annotationColorGuide,
       textAnnotationFontSize: DEFAULT_TOOL_SETTINGS.textAnnotationFontSize,
       arxivMcp: {
         enabled: true,
-        serverLabel: 'arxiv-search',
-        serverUrl: '',
-        allowedTools: ['search', 'read'],
-        requireApproval: 'never',
+        serverLabel: "arxiv-search",
+        serverUrl: "",
+        allowedTools: ["search", "read"],
+        requireApproval: "never",
       },
     });
   });
 
-  it('clamps textAnnotationFontSize to the 8–48 range and rounds non-integers', () => {
+  it("clamps textAnnotationFontSize to the 8–48 range and rounds non-integers", () => {
     const prefs = memPrefs();
     prefs.set(
-      'extensions.zotero-ai-sidebar.toolSettings',
+      "extensions.zotero-ai-sidebar.toolSettings",
       JSON.stringify({ textAnnotationFontSize: 99 }),
     );
     expect(loadToolSettings(prefs).textAnnotationFontSize).toBe(48);
     prefs.set(
-      'extensions.zotero-ai-sidebar.toolSettings',
+      "extensions.zotero-ai-sidebar.toolSettings",
       JSON.stringify({ textAnnotationFontSize: 4 }),
     );
     expect(loadToolSettings(prefs).textAnnotationFontSize).toBe(8);
     prefs.set(
-      'extensions.zotero-ai-sidebar.toolSettings',
+      "extensions.zotero-ai-sidebar.toolSettings",
       JSON.stringify({ textAnnotationFontSize: 16.7 }),
     );
     expect(loadToolSettings(prefs).textAnnotationFontSize).toBe(17);
     prefs.set(
-      'extensions.zotero-ai-sidebar.toolSettings',
-      JSON.stringify({ textAnnotationFontSize: 'oops' }),
+      "extensions.zotero-ai-sidebar.toolSettings",
+      JSON.stringify({ textAnnotationFontSize: "oops" }),
     );
     expect(loadToolSettings(prefs).textAnnotationFontSize).toBe(
       DEFAULT_TOOL_SETTINGS.textAnnotationFontSize,
     );
   });
 
-  it('round trips generic MCP server settings', () => {
+  it("round trips generic MCP server settings", () => {
     const prefs = memPrefs();
     saveToolSettings(prefs, {
-      webSearchMode: 'disabled',
+      webSearchMode: "disabled",
       annotationColorGuide: DEFAULT_TOOL_SETTINGS.annotationColorGuide,
       mcpServers: [
         {
-          id: 'papers',
+          id: "papers",
           enabled: true,
-          serverLabel: 'paper-tools',
-          serverUrl: 'https://example.test/mcp',
-          allowedTools: ['search', 'read_pdf'],
-          requireApproval: 'never',
+          serverLabel: "paper-tools",
+          serverUrl: "https://example.test/mcp",
+          allowedTools: ["search", "read_pdf"],
+          requireApproval: "never",
         },
       ],
       arxivMcp: DEFAULT_TOOL_SETTINGS.arxivMcp,
@@ -127,30 +127,30 @@ describe('tool settings storage', () => {
 
     expect(loadToolSettings(prefs).mcpServers).toEqual([
       {
-        id: 'papers',
+        id: "papers",
         enabled: true,
-        serverLabel: 'paper-tools',
-        serverUrl: 'https://example.test/mcp',
-        allowedTools: ['search', 'read_pdf'],
-        requireApproval: 'never',
+        serverLabel: "paper-tools",
+        serverUrl: "https://example.test/mcp",
+        allowedTools: ["search", "read_pdf"],
+        requireApproval: "never",
       },
     ]);
   });
 
-  it('normalizes configurable PDF annotation color guide', () => {
+  it("normalizes configurable PDF annotation color guide", () => {
     const prefs = memPrefs();
     saveToolSettings(prefs, {
       ...DEFAULT_TOOL_SETTINGS,
-      annotationColorGuide: 'Use #ffd400 for motivation.',
+      annotationColorGuide: "Use #ffd400 for motivation.",
     });
 
     expect(loadToolSettings(prefs).annotationColorGuide).toBe(
-      'Use #ffd400 for motivation.',
+      "Use #ffd400 for motivation.",
     );
 
     prefs.set(
-      'extensions.zotero-ai-sidebar.toolSettings',
-      JSON.stringify({ annotationColorGuide: '' }),
+      "extensions.zotero-ai-sidebar.toolSettings",
+      JSON.stringify({ annotationColorGuide: "" }),
     );
     expect(loadToolSettings(prefs).annotationColorGuide).toBe(
       DEFAULT_TOOL_SETTINGS.annotationColorGuide,

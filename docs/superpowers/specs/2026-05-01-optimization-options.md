@@ -12,15 +12,15 @@
 
 ### 1.1 与三个参考源的对齐情况
 
-| 参考项 | 现状 | 偏差/位置 |
-|---|---|---|
-| Codex 模型驱动工具循环 | OpenAI Responses 路径完整(`src/providers/openai.ts:82` `OpenAIProvider`,`maxToolIterations=100` 安全闸) | **Anthropic adapter 完全没有 tool loop**——`src/providers/anthropic.ts:11`,文件头注释自承 `_options.tools` 被忽略;切到 Claude preset 时全部 Zotero 工具(annotations / search_pdf / pdf_range / full_pdf / reader_pdf_text / annotate_passage)失效 |
-| Codex `needs_follow_up` 形状 / 无语义意图表 | `docs/HARNESS_ENGINEERING.md` 显式声明遵守 | ✓ |
-| Codex 上下文 ledger(不回放旧全文) | `src/context/message-format.ts:1-431` 实现 retain + ledger | ✓ |
-| Codex approval / YOLO 模式 | `agentPermissionMode: 'default' \| 'yolo'`;写工具 `requiresApproval` | **无 approval UI**——default 模式只能整体拒绝,没有"逐项询问"路径,等同于"全堵 / 全放"二档开关 |
-| Claudian `MessageRenderer` / `ThinkingBlockRenderer` / `ToolCallRenderer` / 锚定底滚动 | 全部塞在 `src/modules/sidebar.ts`(4081 行,30+ 个 `render*` 函数,5 个 `// ====` 分区) | 未拆模块,**无任何 sidebar 单测**(`tests/ui/store.test.ts` 仅 37 行覆盖纯 reducer) |
-| Zotero 写工具可见 trace + Markdown export | `message-format.ts` 实现 | ✓ |
-| Zotero 7/8/9 manifest 兼容 | `addon/manifest.json` `strict_min_version`/`strict_max_version` | ✓(commit `6b93da7` 已扩到 9) |
+| 参考项                                                                                 | 现状                                                                                                    | 偏差/位置                                                                                                                                                                                                                                        |
+| -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Codex 模型驱动工具循环                                                                 | OpenAI Responses 路径完整(`src/providers/openai.ts:82` `OpenAIProvider`,`maxToolIterations=100` 安全闸) | **Anthropic adapter 完全没有 tool loop**——`src/providers/anthropic.ts:11`,文件头注释自承 `_options.tools` 被忽略;切到 Claude preset 时全部 Zotero 工具(annotations / search_pdf / pdf_range / full_pdf / reader_pdf_text / annotate_passage)失效 |
+| Codex `needs_follow_up` 形状 / 无语义意图表                                            | `docs/HARNESS_ENGINEERING.md` 显式声明遵守                                                              | ✓                                                                                                                                                                                                                                                |
+| Codex 上下文 ledger(不回放旧全文)                                                      | `src/context/message-format.ts:1-431` 实现 retain + ledger                                              | ✓                                                                                                                                                                                                                                                |
+| Codex approval / YOLO 模式                                                             | `agentPermissionMode: 'default' \| 'yolo'`;写工具 `requiresApproval`                                    | **无 approval UI**——default 模式只能整体拒绝,没有"逐项询问"路径,等同于"全堵 / 全放"二档开关                                                                                                                                                      |
+| Claudian `MessageRenderer` / `ThinkingBlockRenderer` / `ToolCallRenderer` / 锚定底滚动 | 全部塞在 `src/modules/sidebar.ts`(4081 行,30+ 个 `render*` 函数,5 个 `// ====` 分区)                    | 未拆模块,**无任何 sidebar 单测**(`tests/ui/store.test.ts` 仅 37 行覆盖纯 reducer)                                                                                                                                                                |
+| Zotero 写工具可见 trace + Markdown export                                              | `message-format.ts` 实现                                                                                | ✓                                                                                                                                                                                                                                                |
+| Zotero 7/8/9 manifest 兼容                                                             | `addon/manifest.json` `strict_min_version`/`strict_max_version`                                         | ✓(commit `6b93da7` 已扩到 9)                                                                                                                                                                                                                     |
 
 ### 1.2 代码体积分布(`src/`,共 7744 行)
 
@@ -104,14 +104,14 @@ src/context/policy.ts           89
 
 按"投入产出比"主观排序,但**不当作结论**。每项给出痛点边界与代价量级,具体子方案在选定后再展开(维度 A 已展开,见 §4)。
 
-| 维度 | 痛点 | 可行性边界 | 代价量级 |
-|---|---|---|---|
-| **A. Provider 一致性** | Anthropic 路径无 tool loop,Claude 4.7 在工具使用上的优势在本插件里被阉割 | 必须改:Anthropic adapter 流式协议要扩出 `tool_use` 块、`tool_result` 回灌、续 stream | 中(~1 周量级) |
-| **B. UI 架构拆分** | `sidebar.ts` 4081 行单体,所有 Claudian renderer 升级都要改这一个文件;无单测 | 是纯重构;风险在不漏行为(键盘、滚动锁、草稿持久、流式增量) | 中-高 |
-| **C. 写工具 approval UI** | default 模式下写工具被结构化错误堵住;只有 YOLO 才能用 | 需要 UI(气泡/卡片) + 工具循环里的暂停态 | 中 |
-| **D. 跨条目能力** | 现仅 single-item 上下文;多论文比较 / collection 检索无工具入口 | 需新增 `zotero_search_library` / `zotero_get_items` 类工具,涉及检索层(Zotero search API 或外部 embedding) | 高 |
-| **E. 阅读体验抛光** | Markdown 渲染、代码块语法高亮、KaTeX、表格、tool trace 卡片视觉、思考块折叠交互 | 纯 UI,但点多;依赖 B 拆分以避免改 4000+ 行单文件 | 中(碎) |
-| **F. 鲁棒性 / 性能** | Anthropic prompt cache hit 率、流式抖动、Zotero 8/9 兼容点、错误重试 | 要先有指标 telemetry 才能谈 | 视诊断结果 |
+| 维度                      | 痛点                                                                            | 可行性边界                                                                                                | 代价量级      |
+| ------------------------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ------------- |
+| **A. Provider 一致性**    | Anthropic 路径无 tool loop,Claude 4.7 在工具使用上的优势在本插件里被阉割        | 必须改:Anthropic adapter 流式协议要扩出 `tool_use` 块、`tool_result` 回灌、续 stream                      | 中(~1 周量级) |
+| **B. UI 架构拆分**        | `sidebar.ts` 4081 行单体,所有 Claudian renderer 升级都要改这一个文件;无单测     | 是纯重构;风险在不漏行为(键盘、滚动锁、草稿持久、流式增量)                                                 | 中-高         |
+| **C. 写工具 approval UI** | default 模式下写工具被结构化错误堵住;只有 YOLO 才能用                           | 需要 UI(气泡/卡片) + 工具循环里的暂停态                                                                   | 中            |
+| **D. 跨条目能力**         | 现仅 single-item 上下文;多论文比较 / collection 检索无工具入口                  | 需新增 `zotero_search_library` / `zotero_get_items` 类工具,涉及检索层(Zotero search API 或外部 embedding) | 高            |
+| **E. 阅读体验抛光**       | Markdown 渲染、代码块语法高亮、KaTeX、表格、tool trace 卡片视觉、思考块折叠交互 | 纯 UI,但点多;依赖 B 拆分以避免改 4000+ 行单文件                                                           | 中(碎)        |
+| **F. 鲁棒性 / 性能**      | Anthropic prompt cache hit 率、流式抖动、Zotero 8/9 兼容点、错误重试            | 要先有指标 telemetry 才能谈                                                                               | 视诊断结果    |
 
 ### 3.1 一个高层结构性观察(供决策参考,非结论)
 
@@ -158,14 +158,14 @@ A 是能力天花板;B 解开 A/C/E 的实现路径(在 4000+ 行单文件里加
 
 ### 4.3 比较矩阵
 
-| 维度 | A1 复制 loop | A2 harness 顶层 loop | A3 共享 ToolExecutor |
-|---|---|---|---|
-| 改动量 | 小 | 大 | 中 |
-| 与 codex 形状对齐 | 反向 | 一致 | 部分 |
-| 加第三个 provider 的边际成本 | 高(写第三份 loop) | 低(写一个 turn 适配) | 中(写 loop,共享执行) |
-| 服务 C(approval) | 需各自再加 | 自然钩子 | 仍需各自加 |
-| 服务 B(拆分) | 中性 | 推动 sidebar 解耦 | 中性 |
-| 风险点 | 持续偿还 | 一次性重构,需保边界条件 | 中等;伪解法风险(看似共享,核心仍分散) |
+| 维度                         | A1 复制 loop      | A2 harness 顶层 loop    | A3 共享 ToolExecutor                 |
+| ---------------------------- | ----------------- | ----------------------- | ------------------------------------ |
+| 改动量                       | 小                | 大                      | 中                                   |
+| 与 codex 形状对齐            | 反向              | 一致                    | 部分                                 |
+| 加第三个 provider 的边际成本 | 高(写第三份 loop) | 低(写一个 turn 适配)    | 中(写 loop,共享执行)                 |
+| 服务 C(approval)             | 需各自再加        | 自然钩子                | 仍需各自加                           |
+| 服务 B(拆分)                 | 中性              | 推动 sidebar 解耦       | 中性                                 |
+| 风险点                       | 持续偿还          | 一次性重构,需保边界条件 | 中等;伪解法风险(看似共享,核心仍分散) |
 
 ### 4.4 待决策的子问题(选定路径后才需要回答)
 

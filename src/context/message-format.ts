@@ -243,10 +243,12 @@ export function formatContextLedger(messages: Message[]): string {
       `mode=${context.planMode ?? "unknown"}`,
     ];
     if (context.sourceKind) parts.push(`source_kind=${context.sourceKind}`);
-    if (context.sourceID) parts.push(`source_id=${JSON.stringify(context.sourceID)}`);
+    if (context.sourceID)
+      parts.push(`source_id=${JSON.stringify(context.sourceID)}`);
     if (context.sourceTitle)
       parts.push(`source_title=${JSON.stringify(context.sourceTitle)}`);
-    if (context.sourceUrl) parts.push(`source_url=${JSON.stringify(context.sourceUrl)}`);
+    if (context.sourceUrl)
+      parts.push(`source_url=${JSON.stringify(context.sourceUrl)}`);
     if (context.selectedText)
       parts.push(`selected_text_chars=${context.selectedText.length}`);
     if (context.fullTextChars) {

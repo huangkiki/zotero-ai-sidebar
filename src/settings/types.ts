@@ -1,7 +1,13 @@
-export type ProviderKind = 'anthropic' | 'openai' | 'codex';
-export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
-export type ReasoningSummary = 'auto' | 'concise' | 'detailed' | 'none';
-export type AgentPermissionMode = 'default' | 'yolo';
+export type ProviderKind = "anthropic" | "openai" | "codex";
+export type ReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh";
+export type ReasoningSummary = "auto" | "concise" | "detailed" | "none";
+export type AgentPermissionMode = "default" | "yolo";
 
 export interface ModelPreset {
   id: string;
@@ -29,65 +35,66 @@ export interface ModelPreset {
 }
 
 export const DEFAULT_BASE_URLS: Record<ProviderKind, string> = {
-  codex: '',
-  anthropic: '',
-  openai: '',
+  codex: "",
+  anthropic: "",
+  openai: "",
 };
 
 export const DEFAULT_MODELS: Record<ProviderKind, string> = {
-  codex: '',
-  anthropic: '',
-  openai: '',
+  codex: "",
+  anthropic: "",
+  openai: "",
 };
 
 export const MODEL_SUGGESTIONS: Record<ProviderKind, string[]> = {
   codex: [],
   anthropic: [],
-  openai: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2'],
+  openai: ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2"],
 };
 
-export const DEFAULT_REASONING_EFFORT: ReasoningEffort = 'xhigh';
-export const DEFAULT_REASONING_SUMMARY: ReasoningSummary = 'concise';
+export const DEFAULT_REASONING_EFFORT: ReasoningEffort = "xhigh";
+export const DEFAULT_REASONING_SUMMARY: ReasoningSummary = "concise";
 
 export const REASONING_EFFORT_OPTIONS: Array<[ReasoningEffort, string]> = [
-  ['low', 'Low - 快速，较少推理'],
-  ['medium', 'Medium - 默认平衡'],
-  ['high', 'High - 更强推理'],
-  ['xhigh', 'Extra high - 最强推理'],
+  ["low", "Low - 快速，较少推理"],
+  ["medium", "Medium - 默认平衡"],
+  ["high", "High - 更强推理"],
+  ["xhigh", "Extra high - 最强推理"],
 ];
 
 export const REASONING_SUMMARY_OPTIONS: Array<[ReasoningSummary, string]> = [
-  ['concise', 'Concise - 简短显示思考摘要'],
-  ['detailed', 'Detailed - 更详细的思考摘要'],
-  ['auto', 'Auto - 由模型决定'],
-  ['none', 'None - 不显示思考'],
+  ["concise", "Concise - 简短显示思考摘要"],
+  ["detailed", "Detailed - 更详细的思考摘要"],
+  ["auto", "Auto - 由模型决定"],
+  ["none", "None - 不显示思考"],
 ];
 
 export function newPreset(provider: ProviderKind): ModelPreset {
   const defaultModel = DEFAULT_MODELS[provider];
   return {
     id: crypto.randomUUID(),
-    label: provider === 'anthropic' ? 'Claude' : 'GPT',
+    label: provider === "anthropic" ? "Claude" : "GPT",
     provider,
-    apiKey: '',
+    apiKey: "",
     baseUrl: DEFAULT_BASE_URLS[provider],
     model: defaultModel,
     models: defaultModel ? [defaultModel] : [],
     maxTokens: 8192,
-    extras: provider === 'openai'
-      ? {
-          reasoningEffort: DEFAULT_REASONING_EFFORT,
-          reasoningSummary: DEFAULT_REASONING_SUMMARY,
-        }
-      : undefined,
+    extras:
+      provider === "openai"
+        ? {
+            reasoningEffort: DEFAULT_REASONING_EFFORT,
+            reasoningSummary: DEFAULT_REASONING_SUMMARY,
+          }
+        : undefined,
   };
 }
 
-export type TranslateThinking = 'low' | 'medium' | 'high' | 'xhigh';
-export type TranslateContextLevel = 'none' | 'paragraph' | 'page';
-export type TranslateOverlayPosition = 'above' | 'below';
-export type TranslateTriggerMode = 'single' | 'double';
-export type TranslateOverlaySize = 'compact' | 'adaptive';
+export type TranslateThinking = "low" | "medium" | "high" | "xhigh";
+export type TranslateContextLevel = "none" | "paragraph" | "page";
+export type TranslateOverlayPosition = "above" | "below";
+export type TranslateTriggerMode = "single" | "double";
+export type TranslateOverlaySize = "compact" | "adaptive";
 
 export interface TranslateSettings {
   enabled: boolean;
@@ -104,17 +111,17 @@ export interface TranslateSettings {
 
 export const DEFAULT_TRANSLATE_SETTINGS: TranslateSettings = {
   enabled: false,
-  presetId: '',
-  model: '',
-  thinking: 'low',
-  ctxLevel: 'none',
-  overlayPosition: 'above',
-  overlaySize: 'compact',
-  triggerMode: 'single',
-  prevSentenceKey: 'Shift+Enter',
-  nextSentenceKey: 'Enter',
+  presetId: "",
+  model: "",
+  thinking: "low",
+  ctxLevel: "none",
+  overlayPosition: "above",
+  overlaySize: "compact",
+  triggerMode: "single",
+  prevSentenceKey: "Shift+Enter",
+  nextSentenceKey: "Enter",
 };
 
 export function hasPresetAuth(preset: ModelPreset | null | undefined): boolean {
-  return !!preset && (preset.provider === 'codex' || !!preset.apiKey.trim());
+  return !!preset && (preset.provider === "codex" || !!preset.apiKey.trim());
 }

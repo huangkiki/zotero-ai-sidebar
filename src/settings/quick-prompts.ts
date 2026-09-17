@@ -1,10 +1,10 @@
-import type { PrefsStore } from './storage';
-import { currentUiLanguage } from './language';
+import type { PrefsStore } from "./storage";
+import { currentUiLanguage } from "./language";
 
 export type BuiltInPromptID =
-  | 'summary'
-  | 'fullTextHighlight'
-  | 'explainSelection';
+  | "summary"
+  | "fullTextHighlight"
+  | "explainSelection";
 
 export interface BuiltInPromptSettings {
   summary: string;
@@ -547,12 +547,12 @@ export const DEFAULT_FULL_TEXT_HIGHLIGHT_PROMPT = String.raw`# Zotero PDF 全文
 注意：不要在本任务中输出“是否值得精读”或“判决标签”，这些属于论文总结任务，不属于全文高亮任务。`;
 
 export const DEFAULT_EXPLAIN_SELECTION_PROMPT = [
-  '请解释当前 PDF 选区的文字。默认结合本轮已附带的附近上下文分析：先说明选区本身在说什么，再说明它在上下文中的作用，以及为什么值得关注。如果当前选区是在提出观点、给出论据/证据、定义概念、说明方法细节、承接/转折、限制条件或结论，请明确说出它属于哪一类；如果是观点或论据，必须说清楚这句话在论证链条里的作用。',
-  '',
-  '如果已附带的附近上下文仍不足，且当前模型可以调用 Zotero 工具，请继续用 zotero_search_pdf 或 zotero_read_pdf_range 读取更多相邻内容后再判断；避免基于孤立句子作过度推断。凡现有证据不足以支持的判断，请明确标注为“基于当前上下文尚不能确定”。',
-  '',
-  '在解释正文之后，另起一段，以 `建议注释：` 开头，下面用 `- ` 列出 1-3 条简短要点（每条 ≤ 80 字），可以直接贴到 PDF 上当注释。建议注释只能写当前选区和已核对上下文支持的内容。如果当前没有可用 PDF 选区，请提示我先选中文本，并省略 `建议注释：` 段。',
-].join('\n');
+  "请解释当前 PDF 选区的文字。默认结合本轮已附带的附近上下文分析：先说明选区本身在说什么，再说明它在上下文中的作用，以及为什么值得关注。如果当前选区是在提出观点、给出论据/证据、定义概念、说明方法细节、承接/转折、限制条件或结论，请明确说出它属于哪一类；如果是观点或论据，必须说清楚这句话在论证链条里的作用。",
+  "",
+  "如果已附带的附近上下文仍不足，且当前模型可以调用 Zotero 工具，请继续用 zotero_search_pdf 或 zotero_read_pdf_range 读取更多相邻内容后再判断；避免基于孤立句子作过度推断。凡现有证据不足以支持的判断，请明确标注为“基于当前上下文尚不能确定”。",
+  "",
+  "在解释正文之后，另起一段，以 `建议注释：` 开头，下面用 `- ` 列出 1-3 条简短要点（每条 ≤ 80 字），可以直接贴到 PDF 上当注释。建议注释只能写当前选区和已核对上下文支持的内容。如果当前没有可用 PDF 选区，请提示我先选中文本，并省略 `建议注释：` 段。",
+].join("\n");
 
 export const DEFAULT_SUMMARY_PROMPT_EN = String.raw`---
 name: paper-summary-review
@@ -639,12 +639,12 @@ When finished, report in English:
 Do not provide a “worth reading” verdict here; that belongs to the paper-summary task.`;
 
 export const DEFAULT_EXPLAIN_SELECTION_PROMPT_EN = [
-  'Explain the currently selected PDF text in clear, idiomatic English. Use the nearby context already attached to this turn: first explain what the selection says, then its role in the surrounding argument and why it matters. Identify whether it is a claim, evidence, definition, method detail, transition, condition, limitation, or conclusion. For claims and evidence, state its precise role in the reasoning chain.',
-  '',
-  'If the attached context is insufficient and Zotero tools are available, retrieve adjacent material with zotero_search_pdf or zotero_read_pdf_range before drawing a conclusion. Mark unsupported judgments explicitly as “This cannot be determined from the available context.”',
-  '',
-  'After the explanation, add a separate section beginning with `Suggested annotation:` followed by 1–3 concise bullet points (each no more than 80 words) suitable for saving directly to the PDF. Use only information supported by the selection and verified context. If no PDF text is selected, ask me to select text first and omit the Suggested annotation section.',
-].join('\n');
+  "Explain the currently selected PDF text in clear, idiomatic English. Use the nearby context already attached to this turn: first explain what the selection says, then its role in the surrounding argument and why it matters. Identify whether it is a claim, evidence, definition, method detail, transition, condition, limitation, or conclusion. For claims and evidence, state its precise role in the reasoning chain.",
+  "",
+  "If the attached context is insufficient and Zotero tools are available, retrieve adjacent material with zotero_search_pdf or zotero_read_pdf_range before drawing a conclusion. Mark unsupported judgments explicitly as “This cannot be determined from the available context.”",
+  "",
+  "After the explanation, add a separate section beginning with `Suggested annotation:` followed by 1–3 concise bullet points (each no more than 80 words) suitable for saving directly to the PDF. Use only information supported by the selection and verified context. If no PDF text is selected, ask me to select text first and omit the Suggested annotation section.",
+].join("\n");
 
 export const DEFAULT_QUICK_PROMPT_SETTINGS_EN: QuickPromptSettings = {
   builtIns: {
@@ -669,23 +669,27 @@ export const DEFAULT_QUICK_PROMPT_SETTINGS: QuickPromptSettings = {
   selectionQuestionAnnotationEnabled: true,
 };
 
-const KEY = 'extensions.zotero-ai-sidebar.quickPrompts';
+const KEY = "extensions.zotero-ai-sidebar.quickPrompts";
 const MAX_CUSTOM_BUTTONS = 12;
 const MAX_LABEL_CHARS = 32;
 const MAX_PROMPT_CHARS = 20_000;
 
-export function loadQuickPromptSettings(prefs: PrefsStore): QuickPromptSettings {
+export function loadQuickPromptSettings(
+  prefs: PrefsStore,
+): QuickPromptSettings {
   const raw = prefs.get(KEY);
   if (!raw) return currentQuickPromptDefaults();
   try {
-    return localizeBuiltInDefaults(normalizeQuickPromptSettings(JSON.parse(raw)));
+    return localizeBuiltInDefaults(
+      normalizeQuickPromptSettings(JSON.parse(raw)),
+    );
   } catch {
     return currentQuickPromptDefaults();
   }
 }
 
 export function currentQuickPromptDefaults(): QuickPromptSettings {
-  return currentUiLanguage() === 'en-US'
+  return currentUiLanguage() === "en-US"
     ? DEFAULT_QUICK_PROMPT_SETTINGS_EN
     : DEFAULT_QUICK_PROMPT_SETTINGS;
 }
@@ -695,14 +699,14 @@ function localizeBuiltInDefaults(
 ): QuickPromptSettings {
   const defaults = currentQuickPromptDefaults();
   const pairs: Array<[keyof BuiltInPromptSettings, string, string]> = [
-    ['summary', DEFAULT_SUMMARY_PROMPT, DEFAULT_SUMMARY_PROMPT_EN],
+    ["summary", DEFAULT_SUMMARY_PROMPT, DEFAULT_SUMMARY_PROMPT_EN],
     [
-      'fullTextHighlight',
+      "fullTextHighlight",
       DEFAULT_FULL_TEXT_HIGHLIGHT_PROMPT,
       DEFAULT_FULL_TEXT_HIGHLIGHT_PROMPT_EN,
     ],
     [
-      'explainSelection',
+      "explainSelection",
       DEFAULT_EXPLAIN_SELECTION_PROMPT,
       DEFAULT_EXPLAIN_SELECTION_PROMPT_EN,
     ],
@@ -723,13 +727,17 @@ export function saveQuickPromptSettings(
   prefs.set(KEY, JSON.stringify(normalizeQuickPromptSettings(settings)));
 }
 
-export function normalizeQuickPromptSettings(value: unknown): QuickPromptSettings {
-  const input = value && typeof value === 'object'
-    ? (value as Partial<QuickPromptSettings>)
-    : {};
-  const builtIns = input.builtIns && typeof input.builtIns === 'object'
-    ? (input.builtIns as Partial<BuiltInPromptSettings>)
-    : {};
+export function normalizeQuickPromptSettings(
+  value: unknown,
+): QuickPromptSettings {
+  const input =
+    value && typeof value === "object"
+      ? (value as Partial<QuickPromptSettings>)
+      : {};
+  const builtIns =
+    input.builtIns && typeof input.builtIns === "object"
+      ? (input.builtIns as Partial<BuiltInPromptSettings>)
+      : {};
   return {
     builtIns: {
       summary: promptValue(builtIns.summary, DEFAULT_SUMMARY_PROMPT),
@@ -758,7 +766,7 @@ function normalizeCustomButtons(value: unknown): CustomPromptButton[] {
   const seen = new Set<string>();
   const seenShortcuts = new Set<string>();
   for (const raw of value) {
-    if (!raw || typeof raw !== 'object') continue;
+    if (!raw || typeof raw !== "object") continue;
     const item = raw as Partial<CustomPromptButton>;
     const label = stringValue(item.label).slice(0, MAX_LABEL_CHARS);
     const prompt = stringValue(item.prompt).slice(0, MAX_PROMPT_CHARS);
@@ -773,10 +781,11 @@ function normalizeCustomButtons(value: unknown): CustomPromptButton[] {
 }
 
 function uniqueID(value: string, seen: Set<string>): string {
-  const base = value
-    .replace(/[^A-Za-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 48) || `prompt-${seen.size + 1}`;
+  const base =
+    value
+      .replace(/[^A-Za-z0-9_-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || `prompt-${seen.size + 1}`;
   let id = base;
   let suffix = 2;
   while (seen.has(id)) id = `${base}-${suffix++}`;
@@ -789,21 +798,18 @@ function promptValue(value: unknown, fallback: string): string {
   return prompt || fallback;
 }
 
-function uniqueShortcut(
-  value: unknown,
-  seenShortcuts: Set<string>,
-): string {
+function uniqueShortcut(value: unknown, seenShortcuts: Set<string>): string {
   const shortcut = normalizeShortcut(value);
-  if (!shortcut || seenShortcuts.has(shortcut)) return '';
+  if (!shortcut || seenShortcuts.has(shortcut)) return "";
   seenShortcuts.add(shortcut);
   return shortcut;
 }
 
 function normalizeShortcut(value: unknown): string {
   const shortcut = stringValue(value).toLowerCase();
-  return /^[a-z0-9]$/.test(shortcut) ? shortcut : '';
+  return /^[a-z0-9]$/.test(shortcut) ? shortcut : "";
 }
 
 function stringValue(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
+  return typeof value === "string" ? value.trim() : "";
 }

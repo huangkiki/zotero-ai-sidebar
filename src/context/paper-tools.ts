@@ -87,7 +87,8 @@ export function createPaperTools(policy: ContextPolicy): AgentTool[] {
           return errorResult("paper_fetch_arxiv_fulltext requires queryOrUrl.");
         }
         const entry = await resolveArxivEntry(queryOrUrl);
-        if (!entry) return errorResult(`No arXiv paper found for: ${queryOrUrl}`);
+        if (!entry)
+          return errorResult(`No arXiv paper found for: ${queryOrUrl}`);
         const fullText = await fetchArxivReadableText(entry.id);
         const sourceText = fullText || entry.summary;
         if (!sourceText) {
@@ -101,7 +102,12 @@ export function createPaperTools(policy: ContextPolicy): AgentTool[] {
         }
         const truncated = slice.end < sourceText.length;
         return {
-          output: formatFullTextResult(entry, slice, sourceText.length, !!fullText),
+          output: formatFullTextResult(
+            entry,
+            slice,
+            sourceText.length,
+            !!fullText,
+          ),
           summary: `读取 arXiv:${entry.id} ${slice.text.length}/${sourceText.length} 字`,
           context: {
             planMode: "remote_paper",
@@ -122,13 +128,18 @@ export function createPaperTools(policy: ContextPolicy): AgentTool[] {
   ];
 }
 
-async function resolveArxivEntry(queryOrUrl: string): Promise<ArxivEntry | null> {
+async function resolveArxivEntry(
+  queryOrUrl: string,
+): Promise<ArxivEntry | null> {
   const id = extractArxivID(queryOrUrl);
   const entries = await searchArxiv(id || queryOrUrl, 1);
   return entries[0] ?? null;
 }
 
-async function searchArxiv(queryOrUrl: string, maxResults: number): Promise<ArxivEntry[]> {
+async function searchArxiv(
+  queryOrUrl: string,
+  maxResults: number,
+): Promise<ArxivEntry[]> {
   const id = extractArxivID(queryOrUrl);
   const params = new URLSearchParams({
     start: "0",
@@ -147,7 +158,9 @@ async function searchArxiv(queryOrUrl: string, maxResults: number): Promise<Arxi
 
 async function fetchArxivReadableText(id: string): Promise<string> {
   try {
-    const html = await httpGetText(`${AR5IV_HTML_BASE}/${encodeURIComponent(id)}`);
+    const html = await httpGetText(
+      `${AR5IV_HTML_BASE}/${encodeURIComponent(id)}`,
+    );
     return htmlToText(html);
   } catch {
     return "";
@@ -213,7 +226,9 @@ function textOf(element: Element, tagName: string): string {
 function htmlToText(html: string): string {
   const doc = new DOMParser().parseFromString(html, "text/html");
   doc
-    .querySelectorAll("script, style, noscript, nav, header, footer, annotation-xml")
+    .querySelectorAll(
+      "script, style, noscript, nav, header, footer, annotation-xml",
+    )
     .forEach((node: Element) => node.remove());
   const body = doc.querySelector("article") ?? doc.body;
   return normalizeText(body?.textContent ?? "");
@@ -286,9 +301,13 @@ function remoteTextSlice(
 
 function extractArxivID(value: string): string {
   const normalized = value.trim();
-  const modern = normalized.match(/(?:arxiv\.org\/(?:abs|pdf|html)\/)?(\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?/i);
+  const modern = normalized.match(
+    /(?:arxiv\.org\/(?:abs|pdf|html)\/)?(\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?/i,
+  );
   if (modern) return modern[1];
-  const oldStyle = normalized.match(/(?:arxiv\.org\/(?:abs|pdf|html)\/)?([a-z-]+(?:\.[A-Z]{2})?\/\d{7})(?:v\d+)?(?:\.pdf)?/i);
+  const oldStyle = normalized.match(
+    /(?:arxiv\.org\/(?:abs|pdf|html)\/)?([a-z-]+(?:\.[A-Z]{2})?\/\d{7})(?:v\d+)?(?:\.pdf)?/i,
+  );
   return oldStyle?.[1] ?? "";
 }
 
@@ -313,7 +332,9 @@ function numberSchema(description: string): { [key: string]: unknown } {
 }
 
 function objectArgs(args: unknown): Record<string, unknown> {
-  return args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+  return args && typeof args === "object"
+    ? (args as Record<string, unknown>)
+    : {};
 }
 
 function stringArg(args: Record<string, unknown>, key: string): string {

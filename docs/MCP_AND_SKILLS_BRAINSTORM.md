@@ -28,24 +28,24 @@
 
 「Skill」一词在本插件上下文里有**两层含义**，分开处理：
 
-| 层 | 是什么 | 怎么用 |
-| --- | --- | --- |
-| **本地层** | 用户能在 UI 上点的 prompt 快捷方式（slash + 按钮），即现有 `/arxiv-search`、`/web-search`、「总结 / 全文重点 / 解释选区」 | 合并成单一 `PromptShortcut` 模型，统一编辑，统一渲染（[详见 7.4 UX 草稿](#74-promptshortcut-设置面板-ux-草稿concrete)） |
-| **服务端层** | Anthropic 官方 [Agent Skills](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview)（folders of instructions/scripts，Messages API 走 code execution tool） | 未来用一个独立配置项接入（skill_id 列表）；不要混进 PromptShortcut |
+| 层           | 是什么                                                                                                                                                                            | 怎么用                                                                                                                  |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| **本地层**   | 用户能在 UI 上点的 prompt 快捷方式（slash + 按钮），即现有 `/arxiv-search`、`/web-search`、「总结 / 全文重点 / 解释选区」                                                         | 合并成单一 `PromptShortcut` 模型，统一编辑，统一渲染（[详见 7.4 UX 草稿](#74-promptshortcut-设置面板-ux-草稿concrete)） |
+| **服务端层** | Anthropic 官方 [Agent Skills](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview)（folders of instructions/scripts，Messages API 走 code execution tool） | 未来用一个独立配置项接入（skill_id 列表）；不要混进 PromptShortcut                                                      |
 
 **严禁的第三层**：跑代码的本地 skill（LangChain 风格 agent / 意图路由）。CLAUDE.md 明确禁止。
 
 ### 最终优先级（[详见 7.3](#73-最终优先级迭代-4-收敛版)）
 
-| # | 项 | 类型 | 触达 | 优先级 |
-| --- | --- | --- | --- | --- |
-| **PR-1** | 写工具 shortcut 加 🔒 警示 | UI 补丁 | 全部用户 | ⭐⭐⭐ 立即可做、< 50 行 |
-| PR-5 | Anthropic 客户端工具循环 | provider 平权 | Anthropic 用户 | ⭐⭐⭐ 独立可做 |
-| PR-2/3/4 | PromptShortcut 重构 | 抽象统一 | 全部用户 | ⭐⭐ 顺序依赖 |
-| PR-6 | MCP UI 期望管理（私网 URL 警告 + 兼容性提示） | UX 诚实 | MCP 用户 | ⭐⭐ 小补丁 |
-| PR-7 | Semantic Scholar 内置 AgentTool | 工具扩展 | 关心引用图谱用户 | ⭐ 看需求 |
-| PR-8 | 清理 legacy `arxivMcp` 字段 | 卫生 | 无 | ⭐ 顺手做 |
-| ✗ | 嵌入式 MCP 客户端 | 重型 | < 5% 用户 | ❌ 撤回（[迭代 4](#反-3mcp-方案-b--嵌入式客户端是不是-over-engineering)） |
+| #        | 项                                            | 类型          | 触达             | 优先级                                                                    |
+| -------- | --------------------------------------------- | ------------- | ---------------- | ------------------------------------------------------------------------- |
+| **PR-1** | 写工具 shortcut 加 🔒 警示                    | UI 补丁       | 全部用户         | ⭐⭐⭐ 立即可做、< 50 行                                                  |
+| PR-5     | Anthropic 客户端工具循环                      | provider 平权 | Anthropic 用户   | ⭐⭐⭐ 独立可做                                                           |
+| PR-2/3/4 | PromptShortcut 重构                           | 抽象统一      | 全部用户         | ⭐⭐ 顺序依赖                                                             |
+| PR-6     | MCP UI 期望管理（私网 URL 警告 + 兼容性提示） | UX 诚实       | MCP 用户         | ⭐⭐ 小补丁                                                               |
+| PR-7     | Semantic Scholar 内置 AgentTool               | 工具扩展      | 关心引用图谱用户 | ⭐ 看需求                                                                 |
+| PR-8     | 清理 legacy `arxivMcp` 字段                   | 卫生          | 无               | ⭐ 顺手做                                                                 |
+| ✗        | 嵌入式 MCP 客户端                             | 重型          | < 5% 用户        | ❌ 撤回（[迭代 4](#反-3mcp-方案-b--嵌入式客户端是不是-over-engineering)） |
 
 **只能做一件事就做 PR-1**：写工具 shortcut 加 🔒 视觉警示。低风险，可见收益，不阻塞任何后续工作。完整 PR 列表见 [§九](#九执行清单迭代-5-收尾)。
 
@@ -59,17 +59,15 @@
 
 > 下面是完整推理过程（5 轮迭代，包含被推翻的中间结论）。如果你只关心结论，可以止于此处。
 
-
-
 ## 一、现状速查
 
-| 能力面 | 在哪 | 谁触发 | 谁执行 | 用户可编辑 |
-| --- | --- | --- | --- | --- |
-| 本地 AgentTool（`zotero_*`、`paper_*`） | `src/context/agent-tools.ts`、`paper-tools.ts` | 模型 | 插件 | 否 |
-| Hosted web_search | `src/providers/openai.ts:445` | 模型 | OpenAI 端 | 仅开关 + cached/live |
-| MCP server | 同上，`mcpServers` 数组 | 模型 | 远端 MCP server | 是（label/url/allowed_tools/approval） |
-| Slash command（`/arxiv-search`、`/web-search`） | `src/ui/slash-commands.ts` | 用户键入 | 仅做 prompt 展开 | 否（写死在代码里） |
-| Quick prompt（summary / full-text-highlight / explain-selection / 自定义） | `src/settings/quick-prompts.ts` | 用户点按钮 | 仅做 prompt 注入 | 是（首选项） |
+| 能力面                                                                     | 在哪                                           | 谁触发     | 谁执行           | 用户可编辑                             |
+| -------------------------------------------------------------------------- | ---------------------------------------------- | ---------- | ---------------- | -------------------------------------- |
+| 本地 AgentTool（`zotero_*`、`paper_*`）                                    | `src/context/agent-tools.ts`、`paper-tools.ts` | 模型       | 插件             | 否                                     |
+| Hosted web_search                                                          | `src/providers/openai.ts:445`                  | 模型       | OpenAI 端        | 仅开关 + cached/live                   |
+| MCP server                                                                 | 同上，`mcpServers` 数组                        | 模型       | 远端 MCP server  | 是（label/url/allowed_tools/approval） |
+| Slash command（`/arxiv-search`、`/web-search`）                            | `src/ui/slash-commands.ts`                     | 用户键入   | 仅做 prompt 展开 | 否（写死在代码里）                     |
+| Quick prompt（summary / full-text-highlight / explain-selection / 自定义） | `src/settings/quick-prompts.ts`                | 用户点按钮 | 仅做 prompt 注入 | 是（首选项）                           |
 
 关键观察：
 
@@ -102,10 +100,10 @@
 
 ### 两条 MCP 接入路径
 
-| 方案 | 谁说 MCP 协议 | 用户负担 | 插件代码量 | 适用 provider |
-| --- | --- | --- | --- | --- |
-| **A：OpenAI 托管 MCP**（当前实现） | OpenAI 服务器 ↔ 远端 MCP server | 高：自部署 + 公网 | 低（已写完） | 仅 OpenAI Responses 兼容 |
-| **B：插件内嵌 MCP 客户端**（未实现） | 插件 ↔ 本机/远端 MCP server，再把 MCP 工具重新登记成本地 `AgentTool` 给模型 | 低：装一个 npm/pip 包就够 | 中：要写 MCP client + 生命周期管理 | OpenAI、Anthropic 都行 |
+| 方案                                 | 谁说 MCP 协议                                                               | 用户负担                  | 插件代码量                         | 适用 provider            |
+| ------------------------------------ | --------------------------------------------------------------------------- | ------------------------- | ---------------------------------- | ------------------------ |
+| **A：OpenAI 托管 MCP**（当前实现）   | OpenAI 服务器 ↔ 远端 MCP server                                             | 高：自部署 + 公网         | 低（已写完）                       | 仅 OpenAI Responses 兼容 |
+| **B：插件内嵌 MCP 客户端**（未实现） | 插件 ↔ 本机/远端 MCP server，再把 MCP 工具重新登记成本地 `AgentTool` 给模型 | 低：装一个 npm/pip 包就够 | 中：要写 MCP client + 生命周期管理 | OpenAI、Anthropic 都行   |
 
 方案 B 的吸引力：
 
@@ -157,11 +155,11 @@
 
 注意：「skill」一词在不同上下文意思完全不同。先把三种含义分开。
 
-| 含义 | 例子 | 谁执行 |
-| --- | --- | --- |
-| (a) 用户层 prompt 快捷方式 | Claude Code slash command、Anthropic Skill、本插件 `/arxiv-search`、quick prompt 按钮 | 模型（只是塞 prompt 进去） |
-| (b) prompt + 工具序列的「配方」 | 本插件 `fullTextHighlight`：长 prompt 指挥模型先读 reader、再选句、再调 annotate | 模型自主调度 |
-| (c) 局部跑在 harness 里的代码 | LangChain agent、自定义 RAG 前置处理、本地意图路由 | 插件代码 |
+| 含义                            | 例子                                                                                  | 谁执行                     |
+| ------------------------------- | ------------------------------------------------------------------------------------- | -------------------------- |
+| (a) 用户层 prompt 快捷方式      | Claude Code slash command、Anthropic Skill、本插件 `/arxiv-search`、quick prompt 按钮 | 模型（只是塞 prompt 进去） |
+| (b) prompt + 工具序列的「配方」 | 本插件 `fullTextHighlight`：长 prompt 指挥模型先读 reader、再选句、再调 annotate      | 模型自主调度               |
+| (c) 局部跑在 harness 里的代码   | LangChain agent、自定义 RAG 前置处理、本地意图路由                                    | 插件代码                   |
 
 本项目 CLAUDE.md 明确禁止 (c)：「不要做本地关键词、正则或语义意图路由」。所以**本插件的 skill 概念只能是 (a) + (b)**。
 
@@ -178,28 +176,28 @@
 
 ```ts
 interface PromptShortcut {
-  id: string;                     // 持久化用，stable
-  label: string;                  // 按钮文字 / 设置面板标题
-  slash?: string;                 // 可选，例如 '/arxiv-search'
+  id: string; // 持久化用，stable
+  label: string; // 按钮文字 / 设置面板标题
+  slash?: string; // 可选，例如 '/arxiv-search'
   prompt: string | ((args: string) => string);
-                                   // 静态字符串或带 args 的展开
-  showButton: boolean;            // 在底栏显示按钮
-  builtIn: boolean;               // true 时 prompt 可被 reset 成默认值
-  hint?: 'writesAnnotations' | 'usesWebSearch' | null;
-                                   // 仅 UI 提示，不做执行约束
+  // 静态字符串或带 args 的展开
+  showButton: boolean; // 在底栏显示按钮
+  builtIn: boolean; // true 时 prompt 可被 reset 成默认值
+  hint?: "writesAnnotations" | "usesWebSearch" | null;
+  // 仅 UI 提示，不做执行约束
 }
 ```
 
 迁移映射（v0.2.x → v0.3.x）：
 
-| 现有 | 新 PromptShortcut | 备注 |
-| --- | --- | --- |
-| `quick-prompts.summary` | `{ id: 'summary', slash: '/summary', showButton: true, builtIn: true }` | 加 slash 是顺手的事 |
-| `quick-prompts.fullTextHighlight` | `{ id: 'full-highlight', slash: '/highlight', hint: 'writesAnnotations', ... }` | 写 PDF，UI 加锁标 |
-| `quick-prompts.explainSelection` | `{ id: 'explain', slash: '/explain', ... }` | |
-| `quick-prompts.customButtons[i]` | `{ ...item, builtIn: false, showButton: true }` | 自定义按钮自动迁移 |
-| `slash-commands.SLASH_COMMANDS[/arxiv-search]` | `{ id: 'arxiv-search', slash: '/arxiv-search', showButton: false, builtIn: true, prompt: <existing fn> }` | 不再硬编码在 ts |
-| `slash-commands.SLASH_COMMANDS[/web-search]` | `{ id: 'web-search', slash: '/web-search', hint: 'usesWebSearch', showButton: false, builtIn: true }` | UI 提示需要 web_search 已开启 |
+| 现有                                           | 新 PromptShortcut                                                                                         | 备注                          |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| `quick-prompts.summary`                        | `{ id: 'summary', slash: '/summary', showButton: true, builtIn: true }`                                   | 加 slash 是顺手的事           |
+| `quick-prompts.fullTextHighlight`              | `{ id: 'full-highlight', slash: '/highlight', hint: 'writesAnnotations', ... }`                           | 写 PDF，UI 加锁标             |
+| `quick-prompts.explainSelection`               | `{ id: 'explain', slash: '/explain', ... }`                                                               |                               |
+| `quick-prompts.customButtons[i]`               | `{ ...item, builtIn: false, showButton: true }`                                                           | 自定义按钮自动迁移            |
+| `slash-commands.SLASH_COMMANDS[/arxiv-search]` | `{ id: 'arxiv-search', slash: '/arxiv-search', showButton: false, builtIn: true, prompt: <existing fn> }` | 不再硬编码在 ts               |
+| `slash-commands.SLASH_COMMANDS[/web-search]`   | `{ id: 'web-search', slash: '/web-search', hint: 'usesWebSearch', showButton: false, builtIn: true }`     | UI 提示需要 web_search 已开启 |
 
 实施步骤草图：
 
@@ -346,8 +344,8 @@ async *streamWithTools(messages, system, preset, signal, options) {
 
 ```ts
 // src/settings/prompt-shortcuts.ts (新文件)
-const NEW_KEY = 'extensions.zotero-ai-sidebar.promptShortcuts';
-const OLD_KEY = 'extensions.zotero-ai-sidebar.quickPrompts';
+const NEW_KEY = "extensions.zotero-ai-sidebar.promptShortcuts";
+const OLD_KEY = "extensions.zotero-ai-sidebar.quickPrompts";
 
 export function loadPromptShortcuts(prefs: PrefsStore): PromptShortcut[] {
   const raw = prefs.get(NEW_KEY);
@@ -359,19 +357,44 @@ export function loadPromptShortcuts(prefs: PrefsStore): PromptShortcut[] {
     ? normalizeQuickPromptSettings(JSON.parse(legacyRaw))
     : DEFAULT_QUICK_PROMPT_SETTINGS;
   const shortcuts: PromptShortcut[] = [
-    builtIn('summary', '总结', '/summary', legacy.builtIns.summary),
-    builtIn('fullTextHighlight', '全文重点', '/highlight',
-            legacy.builtIns.fullTextHighlight, 'writesAnnotations'),
-    builtIn('explainSelection', '解释选区', '/explain',
-            legacy.builtIns.explainSelection),
+    builtIn("summary", "总结", "/summary", legacy.builtIns.summary),
+    builtIn(
+      "fullTextHighlight",
+      "全文重点",
+      "/highlight",
+      legacy.builtIns.fullTextHighlight,
+      "writesAnnotations",
+    ),
+    builtIn(
+      "explainSelection",
+      "解释选区",
+      "/explain",
+      legacy.builtIns.explainSelection,
+    ),
     ...legacy.customButtons.map((b) => ({
-      id: b.id, label: b.label, prompt: b.prompt,
-      showButton: true, builtIn: false, hint: null,
+      id: b.id,
+      label: b.label,
+      prompt: b.prompt,
+      showButton: true,
+      builtIn: false,
+      hint: null,
     })),
-    builtIn('arxiv-search', 'arXiv 搜索', '/arxiv-search',
-            ARXIV_SEARCH_PROMPT, null, /* showButton */ false),
-    builtIn('web-search', '联网搜索', '/web-search',
-            WEB_SEARCH_PROMPT, 'usesWebSearch', /* showButton */ false),
+    builtIn(
+      "arxiv-search",
+      "arXiv 搜索",
+      "/arxiv-search",
+      ARXIV_SEARCH_PROMPT,
+      null,
+      /* showButton */ false,
+    ),
+    builtIn(
+      "web-search",
+      "联网搜索",
+      "/web-search",
+      WEB_SEARCH_PROMPT,
+      "usesWebSearch",
+      /* showButton */ false,
+    ),
   ];
   prefs.set(NEW_KEY, JSON.stringify(shortcuts));
   // GOTCHA: 不要立即删除 OLD_KEY，保留一个版本作为 rollback 安全网
@@ -414,10 +437,10 @@ export function loadPromptShortcuts(prefs: PrefsStore): PromptShortcut[] {
 
 这意味着「skill」在 Anthropic 上下文里有两个层面：
 
-| 层面 | 谁实现 | 在本插件里的对应 |
-| --- | --- | --- |
-| **官方 Agent Skills**（Anthropic 服务端） | Anthropic + 用户上传 | 等价于 hosted MCP / hosted web_search：插件传 skill_id 进 request，服务端执行 |
-| **prompt 快捷方式**（本插件「skill」一词的本意） | 插件本地、纯 prompt | 即 PromptShortcut |
+| 层面                                             | 谁实现               | 在本插件里的对应                                                              |
+| ------------------------------------------------ | -------------------- | ----------------------------------------------------------------------------- |
+| **官方 Agent Skills**（Anthropic 服务端）        | Anthropic + 用户上传 | 等价于 hosted MCP / hosted web_search：插件传 skill_id 进 request，服务端执行 |
+| **prompt 快捷方式**（本插件「skill」一词的本意） | 插件本地、纯 prompt  | 即 PromptShortcut                                                             |
 
 所以本文之前的结论（「skill 就是 prompt 模板」）只适用于第二层。如果未来想接入第一层，UI 里要单独一行「Anthropic Agent Skills」配置（skill_id 列表），和 PromptShortcut 不混。优先级低于 Anthropic 工具循环 (#2)：先要有 tool loop，才轮得到 code execution + skills。
 
@@ -470,16 +493,16 @@ export function loadPromptShortcuts(prefs: PrefsStore): PromptShortcut[] {
 
 ### 7.3 最终优先级（迭代 4 收敛版）
 
-| # | 项 | 类型 | 改动量 | 受益面 | 反驳后是否保留 |
-| --- | --- | --- | --- | --- | --- |
-| 1a | **`fullTextHighlight` 等写工具加 🔒 警示**（一次性小补丁） | 痛点修复 | < 50 行 | 所有用户 | ✅ 优先做，独立于重构 |
-| 1b | **PromptShortcut 重构**（slash + quick prompt 合并） | 抽象统一 | ~400 行 + tests | 所有用户 | ✅ 保留，但不阻塞 |
-| 2 | **Anthropic 客户端工具循环**（不含 hosted tool） | 平权 | ~350 行 + tests | Anthropic 用户 | ✅ 保留 |
-| 3 | **学术服务做内置 AgentTool 而非 MCP**（如 paper_search_semantic_scholar） | 直连 API | ~150 行/服务 | 关心引用图谱的用户 | ✅ 替代了原 MCP 方案 B |
-| 4 | MCP Path A UI 期望管理 + approval UI | UX | ~150 行 | 极少数公网 MCP 用户 | ⚠️ 降级，仅做期望管理，不做 approval UI |
-| 5 | 删除 legacy `arxivMcp` 字段 | 清理 | -50 行 | 无 | ✅ 顺手做 |
-| ✗ | MCP Path B（嵌入 MCP 客户端） | 重型 | ~600+ 行 | < 5% 用户 | ❌ **撤回**，改为内置 AgentTool 路径（即 #3） |
-| 备 | Anthropic Agent Skills 接入（hosted） | 平权 | 中等 | Anthropic 用户 | 💡 待 #2 落地后再考虑 |
+| #   | 项                                                                        | 类型     | 改动量          | 受益面              | 反驳后是否保留                                |
+| --- | ------------------------------------------------------------------------- | -------- | --------------- | ------------------- | --------------------------------------------- |
+| 1a  | **`fullTextHighlight` 等写工具加 🔒 警示**（一次性小补丁）                | 痛点修复 | < 50 行         | 所有用户            | ✅ 优先做，独立于重构                         |
+| 1b  | **PromptShortcut 重构**（slash + quick prompt 合并）                      | 抽象统一 | ~400 行 + tests | 所有用户            | ✅ 保留，但不阻塞                             |
+| 2   | **Anthropic 客户端工具循环**（不含 hosted tool）                          | 平权     | ~350 行 + tests | Anthropic 用户      | ✅ 保留                                       |
+| 3   | **学术服务做内置 AgentTool 而非 MCP**（如 paper_search_semantic_scholar） | 直连 API | ~150 行/服务    | 关心引用图谱的用户  | ✅ 替代了原 MCP 方案 B                        |
+| 4   | MCP Path A UI 期望管理 + approval UI                                      | UX       | ~150 行         | 极少数公网 MCP 用户 | ⚠️ 降级，仅做期望管理，不做 approval UI       |
+| 5   | 删除 legacy `arxivMcp` 字段                                               | 清理     | -50 行          | 无                  | ✅ 顺手做                                     |
+| ✗   | MCP Path B（嵌入 MCP 客户端）                                             | 重型     | ~600+ 行        | < 5% 用户           | ❌ **撤回**，改为内置 AgentTool 路径（即 #3） |
+| 备  | Anthropic Agent Skills 接入（hosted）                                     | 平权     | 中等            | Anthropic 用户      | 💡 待 #2 落地后再考虑                         |
 
 ### 7.4 PromptShortcut 设置面板 UX 草稿（concrete）
 
@@ -567,8 +590,8 @@ PromptShortcut 设计里要补的字段：
 ```ts
 interface PromptShortcut {
   // ...上面的字段
-  requiresLocalTools?: boolean;   // 例如全文重点：要 zotero_* 工具循环
-  requiresWebSearch?: boolean;    // 例如 /web-search：要 webSearchMode != disabled
+  requiresLocalTools?: boolean; // 例如全文重点：要 zotero_* 工具循环
+  requiresWebSearch?: boolean; // 例如 /web-search：要 webSearchMode != disabled
 }
 ```
 
@@ -652,7 +675,7 @@ iteration 4 的 UX 草稿提到「导入 JSON / 导出 JSON」按钮，文档里
 ### 8.8 边界结论
 
 - PromptShortcut 字段补两条：`requiresLocalTools?: boolean` + `requiresWebSearch?: boolean`。它们是 UI 行为门控（区别于 hint 装饰）。
-- 迁移机制保留：导入有 normalize 防御；slash 唯一性校验；MAX_* 常量沿用。
+- 迁移机制保留：导入有 normalize 防御；slash 唯一性校验；MAX\_\* 常量沿用。
 - 多窗口、流式取消、Reader 缺失 PDF 这三类场景**不需要为了 PromptShortcut 改**，但需要在 PR 描述里记一笔，避免重构时回归。
 - MCP UI 加私网 URL 即时警告，把「30 秒超时」前移到「保存即时见到」。
 
@@ -660,16 +683,16 @@ iteration 4 的 UX 草稿提到「导入 JSON / 导出 JSON」按钮，文档里
 
 如果按 7.3 + 八节的 PromptShortcut 字段去做实现，最小补丁拆成 PR 大概是：
 
-| PR | 内容 | 大小 | 触达文件 |
-| --- | --- | --- | --- |
-| **PR-1** | `fullTextHighlight` 等写工具的 🔒 UI 警示 | < 50 行 | `src/modules/sidebar.ts`、`addon/content/sidebar.css` |
-| **PR-2** | 新建 `prompt-shortcuts.ts`（数据模型 + 默认值 + 迁移），不改 UI | ~250 行 + tests | `src/settings/prompt-shortcuts.ts`、`tests/settings/...` |
+| PR       | 内容                                                                                                           | 大小            | 触达文件                                                                      |
+| -------- | -------------------------------------------------------------------------------------------------------------- | --------------- | ----------------------------------------------------------------------------- |
+| **PR-1** | `fullTextHighlight` 等写工具的 🔒 UI 警示                                                                      | < 50 行         | `src/modules/sidebar.ts`、`addon/content/sidebar.css`                         |
+| **PR-2** | 新建 `prompt-shortcuts.ts`（数据模型 + 默认值 + 迁移），不改 UI                                                | ~250 行 + tests | `src/settings/prompt-shortcuts.ts`、`tests/settings/...`                      |
 | **PR-3** | UI 切换：底栏按钮和 slash 自动补全消费新数据；删除 `slash-commands.ts`，旧 quick-prompts 逻辑保留作为 fallback | ~200 行 + tests | `src/modules/sidebar.ts`、`src/ui/slash-commands.ts`（删）、preferences.xhtml |
-| **PR-4** | 偏好面板新 UX（7.4 草稿）；JSON 导入导出；slash 唯一性校验 | ~300 行 + tests | `src/hooks.ts`、`addon/content/preferences.xhtml` |
-| **PR-5** | Anthropic 客户端工具循环（不含 hosted） | ~350 行 + tests | `src/providers/anthropic.ts`、`src/providers/_tool-runtime.ts`（抽 helper） |
-| **PR-6** | MCP UI 期望管理：私网 URL 警告 + 兼容 base URL 提示 + `always` 红字 | ~80 行 | `src/hooks.ts`、preferences.xhtml |
-| **PR-7** | （可选）Semantic Scholar 内置 AgentTool | ~150 行 + tests | `src/context/paper-tools.ts`、`tests/context/...` |
-| **PR-8** | 清理 legacy `arxivMcp` | -50 行 | `src/settings/tool-settings.ts`、tests |
+| **PR-4** | 偏好面板新 UX（7.4 草稿）；JSON 导入导出；slash 唯一性校验                                                     | ~300 行 + tests | `src/hooks.ts`、`addon/content/preferences.xhtml`                             |
+| **PR-5** | Anthropic 客户端工具循环（不含 hosted）                                                                        | ~350 行 + tests | `src/providers/anthropic.ts`、`src/providers/_tool-runtime.ts`（抽 helper）   |
+| **PR-6** | MCP UI 期望管理：私网 URL 警告 + 兼容 base URL 提示 + `always` 红字                                            | ~80 行          | `src/hooks.ts`、preferences.xhtml                                             |
+| **PR-7** | （可选）Semantic Scholar 内置 AgentTool                                                                        | ~150 行 + tests | `src/context/paper-tools.ts`、`tests/context/...`                             |
+| **PR-8** | 清理 legacy `arxivMcp`                                                                                         | -50 行          | `src/settings/tool-settings.ts`、tests                                        |
 
 PR-1 是 stand-alone，不依赖任何重构，可以立即上。PR-5 也不依赖 PromptShortcut，可以并行。PR-2 → PR-3 → PR-4 是顺序依赖。
 

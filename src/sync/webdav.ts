@@ -26,9 +26,9 @@ export class WebDavError extends Error {
   status: number;
   url: string;
   bodySnippet: string;
-  constructor(message: string, status: number, url: string, bodySnippet = '') {
+  constructor(message: string, status: number, url: string, bodySnippet = "") {
     super(message);
-    this.name = 'WebDavError';
+    this.name = "WebDavError";
     this.status = status;
     this.url = url;
     this.bodySnippet = bodySnippet;
@@ -44,13 +44,13 @@ export async function ensureFolder(
   // MKCOL is idempotent only via 405 (already exists); 201 is the create
   // path. Anything else surfaces as a WebDavError so the UI can show it.
   const url = joinUrl(config.baseUrl, folderPath, true);
-  const response = await sendRequest(config, 'MKCOL', url);
+  const response = await sendRequest(config, "MKCOL", url);
   if (response.status === 201 || response.status === 405) return;
   // Some servers (NextCloud) return 301 if we forgot the trailing slash —
   // joinUrl always adds it for collections, so this branch shouldn't hit,
   // but handle it permissively anyway.
   if (response.status === 301 || response.status === 302) return;
-  throw await buildError(response, url, 'create folder');
+  throw await buildError(response, url, "create folder");
 }
 
 export async function putFile(
@@ -59,12 +59,12 @@ export async function putFile(
   body: string,
 ): Promise<void> {
   const url = joinUrl(config.baseUrl, filePath, false);
-  const response = await sendRequest(config, 'PUT', url, body, {
-    'Content-Type': 'application/json; charset=utf-8',
+  const response = await sendRequest(config, "PUT", url, body, {
+    "Content-Type": "application/json; charset=utf-8",
   });
   // 200/201/204 are all valid PUT outcomes per RFC 4918.
   if (response.status >= 200 && response.status < 300) return;
-  throw await buildError(response, url, 'upload file');
+  throw await buildError(response, url, "upload file");
 }
 
 export async function getFile(
@@ -72,42 +72,42 @@ export async function getFile(
   filePath: string,
 ): Promise<WebDavGetResult> {
   const url = joinUrl(config.baseUrl, filePath, false);
-  const response = await sendRequest(config, 'GET', url);
+  const response = await sendRequest(config, "GET", url);
   if (response.status === 404) {
-    return { found: false, body: '', lastModified: '' };
+    return { found: false, body: "", lastModified: "" };
   }
   if (response.status >= 200 && response.status < 300) {
     return {
       found: true,
       body: await response.text(),
-      lastModified: response.headers.get('Last-Modified') ?? '',
+      lastModified: response.headers.get("Last-Modified") ?? "",
     };
   }
-  throw await buildError(response, url, 'download file');
+  throw await buildError(response, url, "download file");
 }
 
 export async function testAuth(config: WebDavConfig): Promise<void> {
   // PROPFIND with Depth: 0 on the base URL is the standard "are these
   // credentials valid" probe. 207 (Multi-Status) is success; 401/403 are
   // auth failures we want to surface clearly.
-  const url = joinUrl(config.baseUrl, '', true);
-  const response = await sendRequest(config, 'PROPFIND', url, undefined, {
-    Depth: '0',
-    'Content-Type': 'application/xml; charset=utf-8',
+  const url = joinUrl(config.baseUrl, "", true);
+  const response = await sendRequest(config, "PROPFIND", url, undefined, {
+    Depth: "0",
+    "Content-Type": "application/xml; charset=utf-8",
   });
   if (response.status === 207 || response.status === 200) return;
-  throw await buildError(response, url, 'verify credentials');
+  throw await buildError(response, url, "verify credentials");
 }
 
 function joinUrl(base: string, path: string, isCollection: boolean): string {
-  const trimmedBase = base.replace(/\/+$/, '');
-  const trimmedPath = path.replace(/^\/+|\/+$/g, '');
+  const trimmedBase = base.replace(/\/+$/, "");
+  const trimmedPath = path.replace(/^\/+|\/+$/g, "");
   const joined = trimmedPath ? `${trimmedBase}/${trimmedPath}` : trimmedBase;
   // Collections (folders) MUST end in a slash for PROPFIND/MKCOL semantics.
   // Files MUST NOT — some servers route the trailing-slash form to a
   // directory listing instead of the file itself.
-  if (isCollection && !joined.endsWith('/')) return `${joined}/`;
-  if (!isCollection && joined.endsWith('/')) return joined.slice(0, -1);
+  if (isCollection && !joined.endsWith("/")) return `${joined}/`;
+  if (!isCollection && joined.endsWith("/")) return joined.slice(0, -1);
   return joined;
 }
 
@@ -142,9 +142,9 @@ function basicAuthHeader(username: string, password: string): string {
   // btoa exists in Zotero's privileged context (XPCOM/JSM globals); fall
   // back to a manual base64 only if a host without it ever runs the code.
   const encoded =
-    typeof btoa === 'function'
+    typeof btoa === "function"
       ? btoa(unescape(encodeURIComponent(raw)))
-      : Buffer.from(raw, 'utf-8').toString('base64');
+      : Buffer.from(raw, "utf-8").toString("base64");
   return `Basic ${encoded}`;
 }
 
@@ -153,22 +153,22 @@ async function buildError(
   url: string,
   operation: string,
 ): Promise<WebDavError> {
-  let snippet = '';
+  let snippet = "";
   try {
     const text = await response.text();
     snippet = text.slice(0, 280);
   } catch {
-    snippet = '';
+    snippet = "";
   }
   const reason =
     response.status === 401
-      ? '认证失败，请检查用户名/应用密码'
+      ? "认证失败，请检查用户名/应用密码"
       : response.status === 403
-        ? '权限不足，请检查 WebDAV 账号是否允许该路径'
+        ? "权限不足，请检查 WebDAV 账号是否允许该路径"
         : response.status === 404
-          ? '路径不存在'
+          ? "路径不存在"
           : response.status === 507
-            ? 'WebDAV 服务器存储空间不足'
+            ? "WebDAV 服务器存储空间不足"
             : `HTTP ${response.status}`;
   return new WebDavError(
     `${operation} 失败：${reason}`,

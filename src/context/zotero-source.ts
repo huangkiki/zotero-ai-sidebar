@@ -1,6 +1,6 @@
-import type { ContextSource, ItemMetadata } from './builder';
-import { DEFAULT_CONTEXT_POLICY } from './policy';
-import type { ItemAnnotation } from './types';
+import type { ContextSource, ItemMetadata } from "./builder";
+import { DEFAULT_CONTEXT_POLICY } from "./policy";
+import type { ItemAnnotation } from "./types";
 
 // Concrete `ContextSource` backed by Zotero's runtime APIs.
 //
@@ -48,7 +48,13 @@ interface ZoteroItem {
 interface ZoteroGlobal {
   Items: { getAsync(id: number): Promise<ZoteroItem | null> };
   Fulltext: { getItemCacheFile(item: ZoteroItem): { path: string } };
-  File: { getContentsAsync(path: string, charset?: string, maxLength?: number): Promise<string> };
+  File: {
+    getContentsAsync(
+      path: string,
+      charset?: string,
+      maxLength?: number,
+    ): Promise<string>;
+  };
 }
 
 function getZ(): ZoteroGlobal {
@@ -61,10 +67,12 @@ export const zoteroContextSource: ContextSource = {
     const item = await Z.Items.getAsync(itemID);
     if (!item) return null;
     const meta: ItemMetadata = {
-      title: item.getField('title') || '',
-      authors: item.getCreators().map((c) => [c.firstName, c.lastName].filter(Boolean).join(' ')),
-      year: parseYear(item.getField('date')),
-      abstract: item.getField('abstractNote') || undefined,
+      title: item.getField("title") || "",
+      authors: item
+        .getCreators()
+        .map((c) => [c.firstName, c.lastName].filter(Boolean).join(" ")),
+      year: parseYear(item.getField("date")),
+      abstract: item.getField("abstractNote") || undefined,
       tags: item.getTags().map((t) => t.tag),
     };
     return meta;
@@ -77,22 +85,24 @@ export const zoteroContextSource: ContextSource = {
   async getFullText(itemID) {
     const Z = getZ();
     const parent = await Z.Items.getAsync(itemID);
-    if (!parent) return '';
+    if (!parent) return "";
 
     const attachmentItems = parent.isAttachment?.()
       ? [parent]
-      : await Promise.all(parent.getAttachments().map((id) => Z.Items.getAsync(id)));
+      : await Promise.all(
+          parent.getAttachments().map((id) => Z.Items.getAsync(id)),
+        );
 
     // WHY first-PDF-wins: papers commonly have one PDF + a few supplemental
     // PDFs; sending the first one matches user expectation. If we ever need
     // multi-PDF fan-out, that's a new tool, not a change here.
     for (const att of attachmentItems) {
-      if (att?.attachmentContentType === 'application/pdf') {
+      if (att?.attachmentContentType === "application/pdf") {
         const content = await readFulltextCache(Z, att);
         if (content) return content;
       }
     }
-    return '';
+    return "";
   },
 
   // INVARIANT: `getAnnotations(false)` excludes trashed annotations — we
@@ -105,7 +115,7 @@ export const zoteroContextSource: ContextSource = {
     const Z = getZ();
     const attachments = await getPdfAttachments(Z, itemID);
     const annotations = attachments.flatMap((attachment) =>
-      typeof attachment.getAnnotations === 'function'
+      typeof attachment.getAnnotations === "function"
         ? attachment.getAnnotations(false).map(annotationFromZoteroItem)
         : [],
     );
@@ -124,17 +134,20 @@ async function getPdfAttachments(
 
   const attachmentItems = parent.isAttachment?.()
     ? [parent]
-    : await Promise.all(parent.getAttachments().map((id) => Z.Items.getAsync(id)));
+    : await Promise.all(
+        parent.getAttachments().map((id) => Z.Items.getAsync(id)),
+      );
 
   return attachmentItems.filter(
-    (att): att is ZoteroItem => att?.attachmentContentType === 'application/pdf',
+    (att): att is ZoteroItem =>
+      att?.attachmentContentType === "application/pdf",
   );
 }
 
 function annotationFromZoteroItem(item: ZoteroItem): ItemAnnotation {
   return {
-    type: item.annotationType || 'annotation',
-    text: item.annotationText || '',
+    type: item.annotationType || "annotation",
+    text: item.annotationText || "",
     comment: item.annotationComment || undefined,
     pageLabel: item.annotationPageLabel || undefined,
     color: item.annotationColor || undefined,
@@ -147,16 +160,19 @@ function annotationFromZoteroItem(item: ZoteroItem): ItemAnnotation {
 // catch and return '' so callers can treat both "no PDF" and "no cache"
 // uniformly. INVARIANT: `maxLength` here caps bytes read from disk — keeps
 // 50MB scientific PDFs from pinning memory in JS land.
-async function readFulltextCache(Z: ZoteroGlobal, item: ZoteroItem): Promise<string> {
+async function readFulltextCache(
+  Z: ZoteroGlobal,
+  item: ZoteroItem,
+): Promise<string> {
   try {
     const cachePath = Z.Fulltext.getItemCacheFile(item).path;
     return await Z.File.getContentsAsync(
       cachePath,
-      'utf-8',
+      "utf-8",
       DEFAULT_CONTEXT_POLICY.fullTextCacheReadCharLimit,
     );
   } catch {
-    return '';
+    return "";
   }
 }
 

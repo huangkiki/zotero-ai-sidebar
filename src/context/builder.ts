@@ -1,4 +1,4 @@
-import type { ItemAnnotation } from './types';
+import type { ItemAnnotation } from "./types";
 
 // Legacy context builder.
 //
@@ -36,11 +36,11 @@ export interface BuiltContext {
 }
 
 const SYSTEM_BASE =
-  'You are a research assistant helping the user understand academic papers. ' +
-  'Cite the paper when answering questions about its content. Be precise and concise. ' +
-  'For math, write LaTeX inside $...$ (inline) or $$...$$ (display). ' +
-  'Do NOT wrap math formulas in backticks (`) — backticks are for code, the chat ' +
-  'and note renderers typeset math automatically when it appears in plain text.';
+  "You are a research assistant helping the user understand academic papers. " +
+  "Cite the paper when answering questions about its content. Be precise and concise. " +
+  "For math, write LaTeX inside $...$ (inline) or $$...$$ (display). " +
+  "Do NOT wrap math formulas in backticks (`) — backticks are for code, the chat " +
+  "and note renderers typeset math automatically when it appears in plain text.";
 
 export async function buildContext(
   source: ContextSource,
@@ -53,7 +53,7 @@ export async function buildContext(
   if (!item) return { systemPrompt: SYSTEM_BASE, pdfText: null };
 
   const meta = formatMetadata(item);
-  const pdfText = pdfTokenBudget > 0 ? await source.getFullText(itemID) : '';
+  const pdfText = pdfTokenBudget > 0 ? await source.getFullText(itemID) : "";
   const truncated = truncate(pdfText, pdfTokenBudget);
 
   return {
@@ -64,11 +64,11 @@ export async function buildContext(
 
 function formatMetadata(item: ItemMetadata): string {
   const lines: string[] = [`Title: ${item.title}`];
-  if (item.authors.length) lines.push(`Authors: ${item.authors.join(', ')}`);
+  if (item.authors.length) lines.push(`Authors: ${item.authors.join(", ")}`);
   if (item.year) lines.push(`Year: ${item.year}`);
-  if (item.tags.length) lines.push(`Tags: ${item.tags.join(', ')}`);
+  if (item.tags.length) lines.push(`Tags: ${item.tags.join(", ")}`);
   if (item.abstract) lines.push(`Abstract: ${item.abstract}`);
-  return lines.join('\n');
+  return lines.join("\n");
 }
 
 function truncate(text: string, tokenBudget: number): string {

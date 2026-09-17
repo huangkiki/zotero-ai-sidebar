@@ -1,9 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   exportAllAnnotations,
   importAllAnnotations,
   type PortableAnnotation,
-} from '../../src/sync/annotations';
+} from "../../src/sync/annotations";
 
 interface MockAnnotation {
   key: string;
@@ -30,23 +30,28 @@ interface MockAttachment {
   getAnnotations?: () => MockAnnotation[];
 }
 
-let savedJsonCalls: Array<{ attachmentKey: string; json: Record<string, unknown> }>;
+let savedJsonCalls: Array<{
+  attachmentKey: string;
+  json: Record<string, unknown>;
+}>;
 let storedAnnotations: Map<string, MockAnnotation[]>; // attachmentKey → annotations
 
-function makeAnnotation(overrides: Partial<MockAnnotation> = {}): MockAnnotation {
+function makeAnnotation(
+  overrides: Partial<MockAnnotation> = {},
+): MockAnnotation {
   return {
-    key: 'ANN00001',
-    dateModified: '2026-05-02T10:00:00Z',
+    key: "ANN00001",
+    dateModified: "2026-05-02T10:00:00Z",
     parentID: 1,
-    parentItem: { key: 'PDF12345', parentItem: { key: 'PAPER001' } },
-    annotationType: 'highlight',
-    annotationText: 'an important sentence',
-    annotationComment: 'why it matters',
-    annotationColor: '#ffd400',
-    annotationPageLabel: '7',
-    annotationSortIndex: '00007|000123|00000',
+    parentItem: { key: "PDF12345", parentItem: { key: "PAPER001" } },
+    annotationType: "highlight",
+    annotationText: "an important sentence",
+    annotationComment: "why it matters",
+    annotationColor: "#ffd400",
+    annotationPageLabel: "7",
+    annotationSortIndex: "00007|000123|00000",
     annotationPosition: '{"pageIndex":6,"rects":[[0,0,10,10]]}',
-    getTags: () => [{ tag: 'core' }],
+    getTags: () => [{ tag: "core" }],
     ...overrides,
   };
 }
@@ -55,14 +60,14 @@ beforeEach(() => {
   savedJsonCalls = [];
   storedAnnotations = new Map([
     [
-      'PDF12345',
+      "PDF12345",
       [
         makeAnnotation(),
         makeAnnotation({
-          key: 'ANN00002',
-          annotationText: 'second highlight',
-          annotationSortIndex: '00007|000200|00000',
-          dateModified: '2026-05-02T11:00:00Z',
+          key: "ANN00002",
+          annotationText: "second highlight",
+          annotationSortIndex: "00007|000200|00000",
+          dateModified: "2026-05-02T11:00:00Z",
         }),
       ],
     ],
@@ -70,17 +75,17 @@ beforeEach(() => {
 
   const attachmentByKey: Record<string, MockAttachment> = {
     PDF12345: {
-      key: 'PDF12345',
+      key: "PDF12345",
       libraryID: 1,
-      parentItem: { key: 'PAPER001' },
-      attachmentContentType: 'application/pdf',
+      parentItem: { key: "PAPER001" },
+      attachmentContentType: "application/pdf",
       isPDFAttachment: () => true,
       isAttachment: () => true,
-      getAnnotations: () => storedAnnotations.get('PDF12345') ?? [],
+      getAnnotations: () => storedAnnotations.get("PDF12345") ?? [],
     },
   };
 
-  vi.stubGlobal('Zotero', {
+  vi.stubGlobal("Zotero", {
     Items: {
       getAll: (libraryID: number) =>
         libraryID === 1 ? Object.values(attachmentByKey) : [],
@@ -92,7 +97,7 @@ beforeEach(() => {
     Libraries: {
       userLibraryID: 1,
       get: (libraryID: number) =>
-        libraryID === 1 ? { libraryType: 'user', id: 1 } : undefined,
+        libraryID === 1 ? { libraryType: "user", id: 1 } : undefined,
     },
     Groups: {
       getAll: () => [],
@@ -113,9 +118,9 @@ beforeEach(() => {
           makeAnnotation({
             key: incomingKey,
             dateModified: String(json.dateModified ?? new Date().toISOString()),
-            annotationText: typeof json.text === 'string' ? json.text : '',
+            annotationText: typeof json.text === "string" ? json.text : "",
             annotationComment:
-              typeof json.comment === 'string' ? json.comment : '',
+              typeof json.comment === "string" ? json.comment : "",
           }),
         );
         storedAnnotations.set(attachment.key, next);
@@ -125,31 +130,33 @@ beforeEach(() => {
   });
 });
 
-describe('annotation export/import', () => {
-  it('exports highlights from the user library with portable parent keys', async () => {
+describe("annotation export/import", () => {
+  it("exports highlights from the user library with portable parent keys", async () => {
     const exported = await exportAllAnnotations();
     expect(exported).toHaveLength(2);
     expect(exported[0]).toMatchObject({
-      libraryType: 'user',
-      parentItemKey: 'PDF12345',
-      parentParentItemKey: 'PAPER001',
-      key: 'ANN00001',
-      type: 'highlight',
+      libraryType: "user",
+      parentItemKey: "PDF12345",
+      parentParentItemKey: "PAPER001",
+      key: "ANN00001",
+      type: "highlight",
     });
-    expect(exported[0].json.text).toBe('an important sentence');
-    expect(exported[0].tags).toEqual(['core']);
+    expect(exported[0].json.text).toBe("an important sentence");
+    expect(exported[0].tags).toEqual(["core"]);
   });
 
-  it('awaits Zotero.Items.getAll before filtering PDF attachments', async () => {
-    const zotero = (globalThis as unknown as {
-      Zotero: {
-        Items: {
-          getAll: (
-            libraryID: number,
-          ) => MockAttachment[] | Promise<MockAttachment[]>;
+  it("awaits Zotero.Items.getAll before filtering PDF attachments", async () => {
+    const zotero = (
+      globalThis as unknown as {
+        Zotero: {
+          Items: {
+            getAll: (
+              libraryID: number,
+            ) => MockAttachment[] | Promise<MockAttachment[]>;
+          };
         };
-      };
-    }).Zotero;
+      }
+    ).Zotero;
     const getAll = zotero.Items.getAll;
     zotero.Items.getAll = async (libraryID: number) => getAll(libraryID);
 
@@ -158,40 +165,40 @@ describe('annotation export/import', () => {
     expect(exported).toHaveLength(2);
   });
 
-  it('skips unsupported types like image annotations', async () => {
-    storedAnnotations.set('PDF12345', [
-      makeAnnotation({ key: 'IMGANN', annotationType: 'image' }),
+  it("skips unsupported types like image annotations", async () => {
+    storedAnnotations.set("PDF12345", [
+      makeAnnotation({ key: "IMGANN", annotationType: "image" }),
     ]);
     const exported = await exportAllAnnotations();
     expect(exported).toEqual([]);
   });
 
-  it('imports new annotations and counts unresolved when PDF is missing', async () => {
+  it("imports new annotations and counts unresolved when PDF is missing", async () => {
     const portable: PortableAnnotation[] = [
       {
-        libraryType: 'user',
-        parentItemKey: 'PDF12345',
-        key: 'NEWANN1',
-        dateModified: '2026-05-02T20:00:00Z',
-        type: 'highlight',
+        libraryType: "user",
+        parentItemKey: "PDF12345",
+        key: "NEWANN1",
+        dateModified: "2026-05-02T20:00:00Z",
+        type: "highlight",
         json: {
-          type: 'highlight',
-          color: '#ffd400',
-          pageLabel: '1',
-          sortIndex: '00001|000001|00000',
+          type: "highlight",
+          color: "#ffd400",
+          pageLabel: "1",
+          sortIndex: "00001|000001|00000",
           position: '{"pageIndex":0,"rects":[[0,0,10,10]]}',
-          text: 'cloud incoming',
-          comment: 'from cloud',
+          text: "cloud incoming",
+          comment: "from cloud",
         },
-        tags: ['cloud'],
+        tags: ["cloud"],
       },
       {
-        libraryType: 'user',
-        parentItemKey: 'PDF_NOT_LOCAL',
-        key: 'ORPHAN1',
-        dateModified: '2026-05-02T20:00:00Z',
-        type: 'highlight',
-        json: { type: 'highlight' },
+        libraryType: "user",
+        parentItemKey: "PDF_NOT_LOCAL",
+        key: "ORPHAN1",
+        dateModified: "2026-05-02T20:00:00Z",
+        type: "highlight",
+        json: { type: "highlight" },
         tags: [],
       },
     ];
@@ -199,21 +206,21 @@ describe('annotation export/import', () => {
     expect(result.imported).toBe(1);
     expect(result.unresolved).toBe(1);
     expect(savedJsonCalls).toHaveLength(1);
-    expect(savedJsonCalls[0].attachmentKey).toBe('PDF12345');
-    expect(savedJsonCalls[0].json.key).toBe('NEWANN1');
-    expect(savedJsonCalls[0].json.tags).toEqual([{ tag: 'cloud' }]);
+    expect(savedJsonCalls[0].attachmentKey).toBe("PDF12345");
+    expect(savedJsonCalls[0].json.key).toBe("NEWANN1");
+    expect(savedJsonCalls[0].json.tags).toEqual([{ tag: "cloud" }]);
   });
 
-  it('skips when local annotation has equal-or-newer dateModified', async () => {
+  it("skips when local annotation has equal-or-newer dateModified", async () => {
     const portable: PortableAnnotation[] = [
       {
-        libraryType: 'user',
-        parentItemKey: 'PDF12345',
-        key: 'ANN00001',
+        libraryType: "user",
+        parentItemKey: "PDF12345",
+        key: "ANN00001",
         // Equal to the local copy; last-write-wins treats this as no-op.
-        dateModified: '2026-05-02T10:00:00Z',
-        type: 'highlight',
-        json: { type: 'highlight', text: 'older payload' },
+        dateModified: "2026-05-02T10:00:00Z",
+        type: "highlight",
+        json: { type: "highlight", text: "older payload" },
         tags: [],
       },
     ];
