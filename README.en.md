@@ -16,11 +16,27 @@ Connect through **local Codex sign-in with ChatGPT**, the **OpenAI Responses API
 2. In Zotero, open **Tools → Plugins**, click the gear icon, then choose **Install Plugin From File…**.
 3. Select the downloaded `.xpi` file and complete installation.
 4. After updating an older version, fully quit and reopen Zotero. On macOS, use **⌘Q**.
-5. Open **设置** (Settings) in the sidebar and configure a connection under **账号与模型** (Accounts and Models).
+5. Open **设置** (Settings) in the sidebar. In a build with language switching, select **English** under **界面语言** (Interface language), then configure a connection under **Accounts and models**. See [Interface language](#interface-language) for availability.
 
 The manifest declares compatibility with **Zotero 7.0 through 10.0.2**. Recent adaptation targets Zotero 10.0.2 on macOS; this declaration does not mean every version and operating system has been tested.
 
 Install the latest `.xpi` over the existing plugin to update. There is no need to uninstall first. `Source code (zip)` is for development and cannot be installed as a plugin. This repository's release workflow does not currently publish a usable automatic update manifest; use the installation packages on Releases.
+
+## Interface language
+
+**One plugin, two interface languages.** The same `zotero-ai-sidebar.xpi` supports Chinese and English in builds containing the language-switching update; there are no separate language editions.
+
+**Release availability:** v0.3.3 does not include the language switch. The update is on `master`. Until a newer Release includes it, use a successful `master` build from [GitHub Actions](https://github.com/huangkiki/zotero-ai-sidebar/actions/workflows/ci.yml): download its **build-result** artifact (GitHub sign-in required), extract the ZIP, and install the `.xpi` inside. Alternatively, [build from source](#development-and-releases). A source ZIP or an artifact ZIP cannot be installed directly in Zotero.
+
+The initial interface language is Chinese, independently of Zotero's language. To switch:
+
+1. Open **设置** (Settings) in the sidebar, or open Zotero's settings and select **AI 对话**.
+2. Find **界面语言** (Interface language) at the top and select **English**.
+3. The plugin interface refreshes immediately and remembers your selection. To switch back, choose **Chinese** in the same setting.
+
+Built-in interface labels and unmodified built-in quick prompts follow the selected language. Existing paper content, chat messages, notes, and custom prompts are preserved. The translation feature still targets Simplified Chinese; changing the interface language does not change its translation direction.
+
+The instructions below use English interface labels. Existing screenshots show the Chinese interface.
 
 ## Choose a connection
 
@@ -36,9 +52,9 @@ This option reuses **ChatGPT sign-in in Codex**. Being signed in to ChatGPT in a
 
 1. Install ChatGPT/Codex desktop or [Codex CLI](https://learn.chatgpt.com/docs/auth).
 2. If needed, run `codex login` in a terminal and complete sign-in. Check the result with `codex login status`.
-3. In the plugin's Accounts and Models settings, click **检测本地 ChatGPT 登录** (Detect local ChatGPT login).
-4. Once models are found, click **保存账号配置** (Save account configuration).
-5. Select **本地 ChatGPT（Codex）** and a discovered model in the sidebar.
+3. In the plugin's Accounts and Models settings, click **Detect local ChatGPT sign-in**.
+4. Once models are found, click **Save account settings**.
+5. Select **Local ChatGPT (Codex)** and a discovered model in the sidebar.
 
 On macOS, the plugin looks for Codex in the ChatGPT/Codex application bundles, Homebrew locations, and `PATH`. Codex manages the credentials. The plugin communicates with the official [Codex App Server](https://learn.chatgpt.com/docs/app-server) over local standard input/output; it does not read browser cookies or copy ChatGPT login tokens into Zotero preferences.
 
@@ -53,7 +69,7 @@ Under Accounts and Models, click **+ OpenAI** or **+ Anthropic**, then enter:
 - **Models**: model IDs offered by that service. You can save multiple models and switch between them.
 - **Max tokens**: output length configuration. The OpenAI connection test checks whether the service accepts this parameter.
 
-Click **保存账号配置** (Save account configuration). New or changed configurations are checked before saving. If the check fails, use the status message to review the address, model, key, and API compatibility. OpenAI-compatible services must support streaming Responses and function calling for the full workflow.
+Click **Save account settings**. New or changed configurations are checked before saving. If the check fails, use the status message to review the address, model, key, and API compatibility. OpenAI-compatible services must support streaming Responses and function calling for the full workflow.
 
 ## Read a paper
 
@@ -68,24 +84,24 @@ When needed, the model uses Zotero tools to retrieve PDF text. Tool activity app
 
 ### Sidebar actions
 
-The labels below match the current interface.
+The labels below match the English interface.
 
-| Button      | Purpose                                                                   | Requirements                                                                          |
-| ----------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| 总结论文    | Send a summary prompt; the model retrieves source text as needed          | Select a model; automatic PDF retrieval requires tool support                         |
-| 🔖 全文重点 | Identify key passages and write PDF highlights and comments through tools | OpenAI or local ChatGPT; the current paper's PDF must be open in Reader; YOLO enabled |
-| 解释选区    | Explain selected text and optionally suggest an annotation                | Select text in the PDF first; check that the sidebar shows a selection indicator      |
-| 全文译      | Translate the paper in segments and save results in its conversation      | Configure a translation account and model                                             |
-| 点译        | Click PDF passages to see translations in the conversation                | Enable point translation and configure its account and model                          |
-| 重译        | Run full-text translation again                                           | Sends new model requests                                                              |
-| 截图 / 图片 | Attach a screenshot or image to a question                                | A model that supports image input                                                     |
-| 打开笔记    | View and organize notes for the current paper                             | A conversation associated with a Zotero item                                          |
+| Button                    | Purpose                                                                   | Requirements                                                                          |
+| ------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Summarize paper           | Send a summary prompt; the model retrieves source text as needed          | Select a model; automatic PDF retrieval requires tool support                         |
+| 🔖 Highlight key passages | Identify key passages and write PDF highlights and comments through tools | OpenAI or local ChatGPT; the current paper's PDF must be open in Reader; YOLO enabled |
+| Explain selection         | Explain selected text and optionally suggest an annotation                | Select text in the PDF first; check that the sidebar shows a selection indicator      |
+| Translate all             | Translate the paper in segments and save results in its conversation      | Configure a translation account and model                                             |
+| Click to translate        | Click PDF passages to see translations in the conversation                | Enable point translation and configure its account and model                          |
+| Translate again           | Run full-text translation again                                           | Sends new model requests                                                              |
+| Screenshot / Image        | Attach a screenshot or image to a question                                | A model that supports image input                                                     |
+| Open note                 | View and organize notes for the current paper                             | A conversation associated with a Zotero item                                          |
 
 **YOLO controls model-initiated writes.** Normal mode blocks tools requiring approval. When YOLO is enabled, the model can write requested highlights, annotations, and notes without per-operation confirmation. Reading a paper and ordinary questions do not require YOLO.
 
 ### Translation and notes
 
-Translation is designed for **English to Simplified Chinese**. Under **逐段翻译设置** (Paragraph Translation Settings), select an OpenAI or local ChatGPT account and model. This can differ from the model selected for chat.
+Translation is designed for **English to Simplified Chinese**. Under **Paragraph translation**, select an OpenAI or local ChatGPT account and model. This can differ from the model selected for chat.
 
 ![Paragraph translation example](docs/assets/zotero-real-translation.png)
 
@@ -98,7 +114,7 @@ Point translation tries to reuse the full-text translation cache. Missing or inv
 1. In **Tools → Plugins**, verify that the latest plugin is installed and enabled. Local ChatGPT gained Zotero tool integration in v0.3.3.
 2. After updating, fully quit and restart Zotero. Open the PDF and check that the sidebar title matches the paper.
 3. Test in a new conversation and look for PDF retrieval tool activity. Restarting is a diagnostic step, not a confirmed fix.
-4. If the problem persists, open an [issue](https://github.com/huangkiki/zotero-ai-sidebar/issues) with the plugin version, Zotero version, operating system, connection method, and tool activity or error screenshots. The sidebar's **调试** (Debug) toggle can help with diagnosis.
+4. If the problem persists, open an [issue](https://github.com/huangkiki/zotero-ai-sidebar/issues) with the plugin version, Zotero version, operating system, connection method, and tool activity or error screenshots. The sidebar's **Debug** toggle can help with diagnosis.
 
 Reports affecting local ChatGPT are still under investigation. Scanned PDFs or attachments without extractable text may also lack usable source text. The plugin does not provide built-in OCR. Retrieval has size and range limits; it does not guarantee complete extraction from every PDF.
 
@@ -136,7 +152,7 @@ npm test
 npm run build
 ```
 
-The package is generated at `.scaffold/build/zotero-ai-sidebar.xpi`. Run `npm run lint:check` for formatting and static checks. The repository still has pre-existing formatting issues, so passing functional tests does not imply a passing lint check.
+The package is generated at `.scaffold/build/zotero-ai-sidebar.xpi`. Run `npm run lint:check` for formatting and static checks.
 
 **Pushing code does not update a Release.** Update and commit the versions in `package.json` and `package-lock.json`, then run from a clean working tree:
 

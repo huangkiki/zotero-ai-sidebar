@@ -22,6 +22,16 @@
 
 更新时重新安装最新 `.xpi`，无需先卸载。`Source code (zip)` 是开发源码，不能作为插件安装。本仓库的发布流程暂不提供可用的自动更新清单，请以 Releases 中的安装包为准。
 
+## 界面语言
+
+**一个安装包，支持中英文切换。** 包含语言切换功能的 `zotero-ai-sidebar.xpi` 同时提供中文和英文 UI，无需分别安装两个版本。
+
+**发布状态：v0.3.3 尚不包含语言切换。** 该功能已合并到 `master`。在包含此功能的新版 Release 发布前，可到 [GitHub Actions](https://github.com/huangkiki/zotero-ai-sidebar/actions/workflows/ci.yml) 下载成功的 `master` 构建中的 **build-result**（需登录 GitHub），解压后安装其中的 `.xpi`；也可按下方开发说明自行构建。不能直接安装源码 ZIP 或构建产物 ZIP。
+
+初始界面默认为中文，不随 Zotero 的语言自动切换。在侧栏点击 **设置**（或打开 Zotero 设置中的 **AI 对话**），在顶部 **界面语言** 中选择 **English**，界面会立即刷新并保存选择。切回中文时，在同一选项中选择 **Chinese**。
+
+内置界面文字和未修改的内置快捷提示词会随语言切换；已有论文内容、聊天消息、笔记和自定义提示词保持原样。翻译功能仍以简体中文为目标语言，切换 UI 不改变翻译方向。英文操作说明见 [English README](README.en.md)。
+
 ## 选择接入方式
 
 | 接入方式              | 登录或配置                                   | Zotero 文献读取 / 注释工具                | 需要了解的限制                                               |
@@ -133,7 +143,7 @@ npm test
 npm run build
 ```
 
-安装包生成在 `.scaffold/build/zotero-ai-sidebar.xpi`。格式和静态检查命令为 `npm run lint:check`；当前仓库仍有历史格式问题，功能测试通过不代表该检查通过。
+安装包生成在 `.scaffold/build/zotero-ai-sidebar.xpi`。格式和静态检查命令为 `npm run lint:check`。
 
 **推送代码不会自动更新 Release。** 修改并提交 `package.json` 与 `package-lock.json` 的版本后，在干净工作区中运行：
 
