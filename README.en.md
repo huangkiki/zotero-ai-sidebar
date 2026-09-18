@@ -16,7 +16,7 @@ Connect through **local Codex sign-in with ChatGPT**, the **OpenAI Responses API
 2. In Zotero, open **Tools → Plugins**, click the gear icon, then choose **Install Plugin From File…**.
 3. Select the downloaded `.xpi` file and complete installation.
 4. After updating an older version, fully quit and reopen Zotero. On macOS, use **⌘Q**.
-5. Open **设置** (Settings) in the sidebar. In a build with language switching, select **English** under **界面语言** (Interface language), then configure a connection under **Accounts and models**. See [Interface language](#interface-language) for availability.
+5. Open **设置** (Settings) in the sidebar. Select **English** under **界面语言** (Interface language), then configure a connection under **Accounts and models**. See [Interface language](#interface-language) for availability.
 
 The manifest declares compatibility with **Zotero 7.0 through 10.0.2**. Recent adaptation targets Zotero 10.0.2 on macOS; this declaration does not mean every version and operating system has been tested.
 
@@ -24,9 +24,9 @@ Install the latest `.xpi` over the existing plugin to update. There is no need t
 
 ## Interface language
 
-**One plugin, two interface languages.** The same `zotero-ai-sidebar.xpi` supports Chinese and English in builds containing the language-switching update; there are no separate language editions.
+**One plugin, two interface languages.** The same `zotero-ai-sidebar.xpi` supports Chinese and English; there are no separate language editions.
 
-**Release availability:** v0.3.3 does not include the language switch. The update is on `master`. Until a newer Release includes it, use a successful `master` build from [GitHub Actions](https://github.com/huangkiki/zotero-ai-sidebar/actions/workflows/ci.yml): download its **build-result** artifact (GitHub sign-in required), extract the ZIP, and install the `.xpi` inside. Alternatively, [build from source](#development-and-releases). A source ZIP or an artifact ZIP cannot be installed directly in Zotero.
+**Release availability:** Language switching is included in [v0.3.4](https://github.com/huangkiki/zotero-ai-sidebar/releases/tag/v0.3.4) and later. Download `zotero-ai-sidebar.xpi` from Releases; v0.3.3 does not include this feature.
 
 The initial interface language is Chinese, independently of Zotero's language. To switch:
 

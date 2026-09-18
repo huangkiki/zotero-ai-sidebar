@@ -24,9 +24,9 @@
 
 ## 界面语言
 
-**一个安装包，支持中英文切换。** 包含语言切换功能的 `zotero-ai-sidebar.xpi` 同时提供中文和英文 UI，无需分别安装两个版本。
+**一个安装包，支持中英文切换。** `zotero-ai-sidebar.xpi` 同时提供中文和英文 UI，无需分别安装两个版本。
 
-**发布状态：v0.3.3 尚不包含语言切换。** 该功能已合并到 `master`。在包含此功能的新版 Release 发布前，可到 [GitHub Actions](https://github.com/huangkiki/zotero-ai-sidebar/actions/workflows/ci.yml) 下载成功的 `master` 构建中的 **build-result**（需登录 GitHub），解压后安装其中的 `.xpi`；也可按下方开发说明自行构建。不能直接安装源码 ZIP 或构建产物 ZIP。
+**发布状态：中英文切换已包含在 [v0.3.4](https://github.com/huangkiki/zotero-ai-sidebar/releases/tag/v0.3.4) 及后续版本中。** 在 Releases 下载 `zotero-ai-sidebar.xpi` 即可；v0.3.3 不包含此功能。
 
 初始界面默认为中文，不随 Zotero 的语言自动切换。在侧栏点击 **设置**（或打开 Zotero 设置中的 **AI 对话**），在顶部 **界面语言** 中选择 **English**，界面会立即刷新并保存选择。切回中文时，在同一选项中选择 **Chinese**。
 
