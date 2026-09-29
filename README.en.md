@@ -22,6 +22,12 @@ The manifest declares compatibility with **Zotero 7.0 through 10.0.2**. Recent a
 
 Install the latest `.xpi` over the existing plugin to update. There is no need to uninstall first. `Source code (zip)` is for development and cannot be installed as a plugin. This repository's release workflow does not currently publish a usable automatic update manifest; use the installation packages on Releases.
 
+## External Reader MCP bridge
+
+[v0.3.5](https://github.com/huangkiki/zotero-ai-sidebar/releases/tag/v0.3.5) adds a local MCP bridge for external clients to read the current PDF, locate passages, navigate pages, and save highlights with comments. It is disabled by default and operates only on the selected PDF in Zotero's main window.
+
+In Zotero's Config Editor, set `extensions.zotero-ai-sidebar.readerBridge.enabled` to `true`, fully quit and restart Zotero, then open a PDF. See the [Reader MCP setup](docs/HARNESS_ENGINEERING.md#external-reader-mcp-bridge-opt-in) for client connection instructions. Highlighting requires the calling client to obtain user authorization and supply an exact passage from the current PDF.
+
 ## Interface language
 
 **One plugin, two interface languages.** The same `zotero-ai-sidebar.xpi` supports Chinese and English; there are no separate language editions.

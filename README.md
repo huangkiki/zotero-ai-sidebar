@@ -22,6 +22,12 @@
 
 更新时重新安装最新 `.xpi`，无需先卸载。`Source code (zip)` 是开发源码，不能作为插件安装。本仓库的发布流程暂不提供可用的自动更新清单，请以 Releases 中的安装包为准。
 
+## 外部阅读器 MCP 接口
+
+[v0.3.5](https://github.com/huangkiki/zotero-ai-sidebar/releases/tag/v0.3.5) 新增本机 MCP 接口，供外部客户端读取当前 PDF、定位原文、翻页和写入带批注的高亮。接口默认关闭，只操作 Zotero 主窗口当前选中的 PDF。
+
+在 Zotero 的配置编辑器中，将 `extensions.zotero-ai-sidebar.readerBridge.enabled` 设为 `true`，完全退出并重启 Zotero，再打开 PDF。客户端连接方法见 [Reader MCP 配置说明](docs/HARNESS_ENGINEERING.md#external-reader-mcp-bridge-opt-in)。高亮需要调用客户端取得用户授权，并使用当前 PDF 的准确原文。
+
 ## 界面语言
 
 **一个安装包，支持中英文切换。** `zotero-ai-sidebar.xpi` 同时提供中文和英文 UI，无需分别安装两个版本。

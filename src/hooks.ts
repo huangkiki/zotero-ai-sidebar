@@ -1,4 +1,8 @@
 import { detectCodex, stopCodexSessions } from "./providers/codex";
+import {
+  start as startReaderBridge,
+  stop as stopReaderBridge,
+} from "./reader-bridge";
 import { observeLocalizedUi, refreshLocalizedUi, uiText } from "./i18n";
 import { hasPresetAuth } from "./settings/types";
 import { initLocale } from "./utils/locale";
@@ -112,6 +116,13 @@ async function onStartup() {
   registerSidebar();
   await registerPreferences();
 
+  // External clients are opt-in; the standalone overlay explicitly starts it.
+  if (
+    Zotero.Prefs.get("extensions.zotero-ai-sidebar.readerBridge.enabled", true)
+  ) {
+    await startReaderBridge().catch((error) => Zotero.logError(error));
+  }
+
   addon.data.initialized = true;
 }
 
@@ -133,6 +144,7 @@ async function onMainWindowUnload(win: Window): Promise<void> {
 }
 
 function onShutdown(): void {
+  stopReaderBridge();
   stopCodexSessions();
   unregisterPreferences();
   ztoolkit.unregisterAll();

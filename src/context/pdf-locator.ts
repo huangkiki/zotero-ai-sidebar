@@ -56,6 +56,7 @@ export interface PdfPageContent {
 
 export interface PdfLocator {
   attachmentID: number;
+  pageCount: number;
   getFullText(): Promise<string>;
   extractTextFromPosition(position: unknown): Promise<string>;
   getPageContent(pageIndex: number): Promise<PdfPageContent | null>;
@@ -262,6 +263,7 @@ export async function createPdfLocator(reader: unknown): Promise<PdfLocator> {
 
   return {
     attachmentID,
+    pageCount: source.pageCount,
     async getFullText() {
       const pages: string[] = [];
       for (let pageIndex = 0; pageIndex < source.pageCount; pageIndex++) {

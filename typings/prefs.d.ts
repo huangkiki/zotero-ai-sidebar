@@ -11,6 +11,7 @@ declare namespace _ZoteroTypes {
       "input": string;
       "translateSettings": string;
       "translateCache": string;
+      "readerBridge.enabled": boolean;
     };
   }
 }

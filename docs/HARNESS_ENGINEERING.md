@@ -33,6 +33,56 @@ mode and run only in `yolo` mode. Read tools remain available without YOLO.
 
 ## Local Context Tools
 
+### External Reader MCP bridge (opt-in)
+
+`src/reader-bridge` exposes five narrow tools over authenticated, stateless
+Streamable HTTP at `/zai/reader-mcp` on Zotero's existing loopback server:
+`zotero_reader_state`, `zotero_read_page`, `zotero_find_passage`,
+`zotero_navigate`, and `zotero_highlight`. They operate only on the active PDF
+tab in the main Zotero window. Other tools require its current attachment key;
+switching tabs during an asynchronous operation invalidates the request.
+
+In v0.3.5 and later releases or source builds, set the boolean preference
+`extensions.zotero-ai-sidebar.readerBridge.enabled` to `true` in Zotero's
+Config Editor, then fully quit and restart Zotero. The default is `false`.
+Set it back to `false` and restart to disable the bridge. This opt-in is
+independent of the sidebar's internal YOLO setting.
+
+For a newer installed Sidebar version, build with
+`node scripts/build-reader-bridge.mjs`, then run
+`python3 scripts/overlay-reader-bridge.py ORIGINAL.xpi OUTPUT.xpi` to create
+an opt-in overlay that preserves the original bundle, manifest, and version.
+Keep the original XPI for rollback. This helper does not install or restart Zotero.
+
+The per-launch bearer token is stored in the profile's
+`zai-reader-bridge/connection.json` (0600 inside a 0700 directory). Origin
+headers, foreign Host headers and unauthenticated requests are rejected.
+The token grants current-PDF access, so do not publish the connection file.
+Use `node scripts/reader-mcp-client.mjs --profile PROFILE --stdio` with an MCP
+client, or substitute a tool name and JSON arguments for a single local call.
+
+The client requires Node.js 22 or later. Clone or download this repository to
+obtain `scripts/reader-mcp-client.mjs`; it uses only Node built-ins. Configure
+your MCP client's stdio server with command `node` and arguments
+`["/absolute/path/to/scripts/reader-mcp-client.mjs", "--profile",
+"/absolute/path/to/zotero/profile", "--stdio"]`. Use the Zotero **profile**
+directory, not its library data directory. A read-only connection check is:
+
+```bash
+node scripts/reader-mcp-client.mjs --profile /path/to/zotero/profile zotero_reader_state '{}'
+```
+
+Highlights require `approved: true`, attesting explicit user authorization in
+the calling client, plus a physical page number and an exact normalized Reader
+text match. The caller remains responsible for obtaining that authorization;
+this is not an independent approval dialog. No arbitrary JavaScript execution,
+library-wide search, remote model request or existing-annotation deletion is
+exposed. Identical highlights are reused, and writes appear as native Reader
+annotations with a local debug trace. Page navigation returns a request receipt;
+call `zotero_reader_state` afterwards to verify the displayed page.
+
+### Internal chat tools
+
 - `none`: attach no new Zotero/PDF context.
 - `metadata_only`: rely on title, authors, year, tags, and abstract already
   available in the system prompt.
